@@ -456,10 +456,13 @@ List of Parameters
 |                            | to shrink the        | <= 1           |                   |
 |                            | initial dt           |                |                   |
 +----------------------------+----------------------+----------------+-------------------+
-| **erf.change_max**         | factor by which      | Real >= 1      | 1.1               |
-|                            | dt can grow          |                |                   |
-|                            | in subsequent        |                |                   |
-|                            | steps                |                |                   |
+| **erf.dt_max**             | maximum adaptive     | Real > 0       | 1e9               |
+|                            | timestep             |                |                   |  
+|                            | alllowed by time     |                |                   |
+|                            | stepping             |                |                   |
++----------------------------+----------------------+----------------+-------------------+
+| **erf.dt_max_initial**     | maximum initial      | Real > 0       | 1.0               |
+|                            | timestep             |                |                   |
 +----------------------------+----------------------+----------------+-------------------+
 
 Notes
