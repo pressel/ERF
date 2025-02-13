@@ -380,6 +380,7 @@ ERF::ERF_shared ()
         amrex::Print() << "MAKING EB GEOMETRY " << std::endl;
         eb_ eb(geom[lev], terrain_fab, stretched_dz_d[lev], solverChoice.anelastic[lev]);
         // MakeEBGeometry();
+
     }
 }
 
