@@ -351,8 +351,6 @@ struct SolverChoice {
 
         pp.query("Ave_Plane", ave_plane);
 
-        pp.query("mp_clouds", do_cloud);
-        pp.query("mp_precip", do_precip);
         pp.query("use_moist_background", use_moist_background);
 
         // Use numerical diffusion?
@@ -722,8 +720,6 @@ struct SolverChoice {
 
     int ave_plane {2};
     // Microphysics params
-    bool do_cloud {true};
-    bool do_precip {true};
     bool use_moist_background {false};
     int RhoQv_comp {-1};
     int RhoQc_comp {-1};
