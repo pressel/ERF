@@ -24,6 +24,7 @@ ComputeDiffusivityMYNN25 (const MultiFab& xvel,
                           const int RhoQc_comp,
                           const int RhoQr_comp)
 {
+
     const bool use_terrain = (z_phys_nd != nullptr);
     const bool use_most    = (most != nullptr);
 
