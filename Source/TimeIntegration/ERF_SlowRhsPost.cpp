@@ -274,7 +274,7 @@ void erf_slow_rhs_post (int level, int finest_level,
 
         const Array4<Real const>& mu_turb = l_use_turb ? eddyDiffs->const_array(mfi) : Array4<const Real>{};
 
-        const Array4<const Real>& z_nd         = l_use_terrain    ? z_phys_nd->const_array(mfi) : Array4<const Real>{};
+        const Array4<const Real>& z_nd         = z_phys_nd->const_array(mfi);
         const Array4<const Real>& detJ_new_arr = l_moving_terrain ? detJ_new->const_array(mfi)    : Array4<const Real>{};
 
         // Map factors
