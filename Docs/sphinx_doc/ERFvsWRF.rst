@@ -57,6 +57,7 @@ wrfinput files).
 
 Key Differences
 --------------------
+ERF provides **performance portability** on different computing architectures **including GPUs from all major vendors** (Nvidia, AMD, and Intel).
 
 **Vertical Coordinates**: Unlike WRF, ERF uses a height-based vertical coordinate, with vertical grid stretching permitted.
 
