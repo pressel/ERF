@@ -7,6 +7,7 @@
 #include "ERF_DataStruct.H"
 #include "ERF_InputSoundingData.H"
 #include "ERF_TurbPertStruct.H"
+#include "ERF_EB.H"
 
 /**
  * Function for computing the buoyancy term to be used in the evolution

@@ -1,9 +1,13 @@
 #include <AMReX_MultiFab.H>
 #include <AMReX_ArrayLim.H>
+#include <AMReX_EB_Slopes_K.H>
+#include "AMReX_BCRec.H"
 
+#include "ERF.H"
 #include "ERF_SrcHeaders.H"
 #include "ERF_DataStruct.H"
 #include "ERF_Utils.H"
+#include "ERF_EB.H"
 
 using namespace amrex;
 
@@ -70,8 +74,8 @@ compute_gradp (const MultiFab& p,
     const bool l_use_terrain_fitted_coords = (solverChoice.mesh_type != MeshType::ConstantDz);
 
     const Box domain = geom.Domain();
-    const int klo = domain.smallEnd(2);
-    const int khi = domain.bigEnd(2);
+    const int domain_klo = domain.smallEnd(2);
+    const int domain_khi = domain.bigEnd(2);
 
     const GpuArray<Real, AMREX_SPACEDIM> dxInv = geom.InvCellSizeArray();
 
@@ -85,10 +89,10 @@ compute_gradp (const MultiFab& p,
         Box tbz = mfi.nodaltilebox(2);
 
         // We don't compute gpz on the bottom or top domain boundary
-        if (tbz.smallEnd(2) == klo) {
+        if (tbz.smallEnd(2) == domain_klo) {
             tbz.growLo(2,-1);
         }
-        if (tbz.bigEnd(2) == khi+1) {
+        if (tbz.bigEnd(2) == domain_khi+1) {
             tbz.growHi(2,-1);
         }
 
@@ -112,12 +116,12 @@ compute_gradp (const MultiFab& p,
 
                 Real dz_phys_hi, dz_phys_lo;
                 Real gpz_lo, gpz_hi;
-                if (k==klo) {
+                if (k==domain_klo) {
                     dz_phys_hi = z_cc_arr(i  ,j,k+1) -   z_cc_arr(i  ,j,k  );
                     dz_phys_lo = z_cc_arr(i-1,j,k+1) -   z_cc_arr(i-1,j,k  );
                     gpz_hi  = (p_arr(i  ,j,k+1) - p_arr(i  ,j,k  )) / dz_phys_hi;
                     gpz_lo  = (p_arr(i-1,j,k+1) - p_arr(i-1,j,k  )) / dz_phys_lo;
-                } else if (k==khi) {
+                } else if (k==domain_khi) {
                     dz_phys_hi = z_cc_arr(i  ,j,k  ) -   z_cc_arr(i  ,j,k-1);
                     dz_phys_lo = z_cc_arr(i-1,j,k  ) -   z_cc_arr(i-1,j,k-1);
                     gpz_hi  = (p_arr(i  ,j,k  ) - p_arr(i  ,j,k-1)) / dz_phys_hi;
@@ -144,12 +148,12 @@ compute_gradp (const MultiFab& p,
 
                 Real dz_phys_hi, dz_phys_lo;
                 Real gpz_lo, gpz_hi;
-                if (k==klo) {
+                if (k==domain_klo) {
                     dz_phys_hi = z_cc_arr(i,j  ,k+1) -   z_cc_arr(i,j  ,k  );
                     dz_phys_lo = z_cc_arr(i,j-1,k+1) -   z_cc_arr(i,j-1,k  );
                     gpz_hi  = (p_arr(i,j  ,k+1) - p_arr(i,j  ,k  )) / dz_phys_hi;
                     gpz_lo  = (p_arr(i,j-1,k+1) - p_arr(i,j-1,k  )) / dz_phys_lo;
-                } else if (k==khi) {
+                } else if (k==domain_khi) {
                     dz_phys_hi = z_cc_arr(i,j  ,k  ) -   z_cc_arr(i,j  ,k-1);
                     dz_phys_lo = z_cc_arr(i,j-1,k  ) -   z_cc_arr(i,j-1,k-1);
                     gpz_hi  = (p_arr(i,j  ,k  ) - p_arr(i,j  ,k-1)) / dz_phys_hi;
@@ -164,8 +168,8 @@ compute_gradp (const MultiFab& p,
                 gpy -= gpy_metric;
             } // l_use_terrain_fitted_coords
 
-            gpy_arr(i,j,k) = gpy;
-        });
+                gpy_arr(i,j,k) = gpy;
+            });
 
         ParallelFor(tbz, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
         {
