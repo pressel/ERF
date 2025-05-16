@@ -15,11 +15,7 @@ using namespace amrex;
 /**
  * Function for computing the slow RHS for the evolution equations for the density, potential temperature and momentum.
  *
- * @param[in]  level level of resolution
- * @param[in]  nrk   which RK stage
- * @param[in]  dt    slow time step
  * @param[in]  S_data current solution
- * @param[in]  S_prim primitive variables (i.e. conserved variables divided by density)
  * @param[in]  xvel x-component of velocity
  * @param[in]  yvel y-component of velocity
  * @param[in] xmom_src source terms for x-momentum
@@ -32,15 +28,10 @@ using namespace amrex;
  * @param[in] dptr_v_geos  custom geostrophic wind profile
  * @param[in] dptr_wbar_sub  subsidence source term
  * @param[in] d_rayleigh_ptrs_at_lev  Vector of {strength of Rayleigh damping, reference value for xvel/yvel/zvel/theta} used to define Rayleigh damping
- * @param[in] n_qstate number of moisture components
  */
 
-void make_mom_sources (int level,
-                       int /*nrk*/,
-                       Real /*dt*/,
-                       Real time,
+void make_mom_sources (Real time,
                        const Vector<MultiFab>& S_data,
-                       const  MultiFab & S_prim,
                        std::unique_ptr<MultiFab>& z_phys_nd,
                        std::unique_ptr<MultiFab>& z_phys_cc,
                        const  MultiFab & xvel,
@@ -63,7 +54,6 @@ void make_mom_sources (int level,
                        const Vector<Real*> d_rayleigh_ptrs_at_lev,
                        const Vector<Real*> d_sponge_ptrs_at_lev,
                        InputSoundingData& input_sounding_data,
-                       int n_qstate,
                        bool is_slow_step)
 {
     BL_PROFILE_REGION("erf_make_mom_sources()");
@@ -85,16 +75,17 @@ void make_mom_sources (int level,
 
     // *****************************************************************************
     // Define source term for all three components of momenta from
-    //    1. buoyancy           for (zmom)
-    //    2. Coriolis forcing   for (xmom,ymom,zmom)
-    //    3. Rayleigh damping   for (xmom,ymom,zmom)
-    //    4. Constant / height-dependent geostrophic forcing
-    //    5. subsidence
-    //    6. nudging towards input sounding data
-    //    7. numerical diffusion for (xmom,ymom,zmom)
-    //    8. sponge
-    //    9. Forest canopy
-    //   10. Immersed Forcing
+    //    1. Coriolis forcing   for (xmom,ymom,zmom)
+    //    2. Rayleigh damping   for (xmom,ymom,zmom)
+    //    3. Constant / height-dependent geostrophic forcing
+    //    4. subsidence
+    //    5. nudging towards input sounding data
+    //    6. numerical diffusion for (xmom,ymom,zmom)
+    //    7. sponge
+    //    8. Forest canopy
+    //    9. Immersed Forcing
+    // *****************************************************************************
+    // NOTE: buoyancy is now computed in a separate routine - it should not appear here
     // *****************************************************************************
     //const bool l_use_ndiff       = solverChoice.use_num_diff;
 
@@ -211,14 +202,6 @@ void make_mom_sources (int level,
         {
             dptr_v_plane(k-v_offset) = dptr_v[k];
         });
-    }
-
-    // *****************************************************************************
-    // 1. Create the BUOYANCY forcing term in the z-direction
-    // *****************************************************************************
-    if (is_slow_step) {
-        make_buoyancy(S_data, S_prim, zmom_src, geom, solverChoice, base_state,
-                    n_qstate, solverChoice.anelastic[level]);
     }
 
     // *****************************************************************************

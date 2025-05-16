@@ -36,8 +36,6 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
         Real* dptr_u_geos = solverChoice.have_geo_wind_profile ? d_u_geos[level].data(): nullptr;
         Real* dptr_v_geos = solverChoice.have_geo_wind_profile ? d_v_geos[level].data(): nullptr;
 
-        int n_qstate = micro->Get_Qstate_Size();
-
         // Canopy data for mom sources
         MultiFab* forest_drag = nullptr;
         if (solverChoice.do_forest_drag) { forest_drag = m_forest_drag[level]->get_drag_field(); }
@@ -157,7 +155,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
 
             if (fast_step == 0) {
                 // If this is the first substep we pass in S_old as the previous step's solution
-                make_mom_sources(level, nrk, dtau, old_substep_time, S_old, S_prim,
+                make_mom_sources(old_substep_time, S_old,
                                 z_phys_nd[level], z_phys_cc[level],
                                 xvel_new, yvel_new, zvel_new,
                                 xmom_src, ymom_src, zmom_src,
@@ -166,7 +164,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 mapfac[level],
                                 dptr_u_geos, dptr_v_geos, dptr_wbar_sub,
                                 d_rayleigh_ptrs_at_lev, d_sponge_ptrs_at_lev,
-                                input_sounding_data, n_qstate, false);
+                                input_sounding_data, false);
 
                 erf_fast_rhs_MT(fast_step, nrk, level, finest_level,
                                 S_slow_rhs, S_old, S_stage, S_prim, pi_stage, fast_coeffs,
@@ -181,7 +179,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 fr_as_crse, fr_as_fine, l_use_moisture, l_reflux, l_implicit_substepping);
             } else {
                 // If this is not the first substep we pass in S_data as the previous step's solution
-                make_mom_sources(level, nrk, dtau, old_substep_time, S_data, S_prim,
+                make_mom_sources(old_substep_time, S_data,
                                 z_phys_nd[level], z_phys_cc[level],
                                 xvel_new, yvel_new, zvel_new,
                                 xmom_src, ymom_src, zmom_src,
@@ -190,7 +188,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 mapfac[level],
                                 dptr_u_geos, dptr_v_geos, dptr_wbar_sub,
                                 d_rayleigh_ptrs_at_lev, d_sponge_ptrs_at_lev,
-                                input_sounding_data, n_qstate, false);
+                                input_sounding_data, false);
 
                 erf_fast_rhs_MT(fast_step, nrk, level, finest_level,
                                 S_slow_rhs, S_data, S_stage, S_prim, pi_stage, fast_coeffs,
@@ -214,7 +212,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
 
                 // If this is the first substep we pass in S_old as the previous step's solution
                 //    and S_data is the new-time solution to be defined here
-                make_mom_sources(level, nrk, dtau, old_substep_time, S_old, S_prim,
+                make_mom_sources(old_substep_time, S_old,
                                 z_phys_nd[level], z_phys_cc[level],
                                 xvel_new, yvel_new, zvel_new,
                                 xmom_src, ymom_src, zmom_src,
@@ -223,7 +221,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 mapfac[level],
                                 dptr_u_geos, dptr_v_geos, dptr_wbar_sub,
                                 d_rayleigh_ptrs_at_lev, d_sponge_ptrs_at_lev,
-                                input_sounding_data, n_qstate, false);
+                                input_sounding_data, false);
 
                 erf_fast_rhs_T(fast_step, nrk, level, finest_level,
                                S_slow_rhs, S_old, S_stage, S_prim, pi_stage, fast_coeffs,
@@ -236,7 +234,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
             } else {
                 // If this is not the first substep we pass in S_data as both the previous step's solution
                 //    and as the new-time solution to be defined here
-                make_mom_sources(level, nrk, dtau, old_substep_time, S_data, S_prim,
+                make_mom_sources(old_substep_time, S_data,
                                 z_phys_nd[level], z_phys_cc[level],
                                 xvel_new, yvel_new, zvel_new,
                                 xmom_src, ymom_src, zmom_src,
@@ -245,7 +243,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 mapfac[level],
                                 dptr_u_geos, dptr_v_geos, dptr_wbar_sub,
                                 d_rayleigh_ptrs_at_lev, d_sponge_ptrs_at_lev,
-                                input_sounding_data, n_qstate, false);
+                                input_sounding_data, false);
 
                 erf_fast_rhs_T(fast_step, nrk, level, finest_level,
                                S_slow_rhs, S_data, S_stage, S_prim, pi_stage, fast_coeffs,
@@ -265,7 +263,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
 
                 // If this is the first substep we pass in S_old as the previous step's solution
                 //    and S_data is the new-time solution to be defined here
-                make_mom_sources(level, nrk, dtau, old_substep_time, S_old, S_prim,
+                make_mom_sources(old_substep_time, S_old,
                                 z_phys_nd[level], z_phys_cc[level],
                                 xvel_new, yvel_new, zvel_new,
                                 xmom_src, ymom_src, zmom_src,
@@ -274,7 +272,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 mapfac[level],
                                 dptr_u_geos, dptr_v_geos, dptr_wbar_sub,
                                 d_rayleigh_ptrs_at_lev, d_sponge_ptrs_at_lev,
-                                input_sounding_data, n_qstate, false);
+                                input_sounding_data, false);
 
                 erf_fast_rhs_N(fast_step, nrk, level, finest_level,
                                S_slow_rhs, S_old, S_stage, S_prim, pi_stage, fast_coeffs,
@@ -286,7 +284,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
             } else {
                 // If this is not the first substep we pass in S_data as both the previous step's solution
                 //    and as the new-time solution to be defined here
-                make_mom_sources(level, nrk, dtau, old_substep_time, S_data, S_prim,
+                make_mom_sources(old_substep_time, S_data,
                                 z_phys_nd[level], z_phys_cc[level],
                                 xvel_new, yvel_new, zvel_new,
                                 xmom_src, ymom_src, zmom_src,
@@ -295,7 +293,7 @@ auto fast_rhs_fun = [&](int fast_step, int /*n_sub*/, int nrk,
                                 mapfac[level],
                                 dptr_u_geos, dptr_v_geos, dptr_wbar_sub,
                                 d_rayleigh_ptrs_at_lev, d_sponge_ptrs_at_lev,
-                                input_sounding_data, n_qstate, false);
+                                input_sounding_data, false);
 
                 erf_fast_rhs_N(fast_step, nrk, level, finest_level,
                                S_slow_rhs, S_data, S_stage, S_prim, pi_stage, fast_coeffs,
