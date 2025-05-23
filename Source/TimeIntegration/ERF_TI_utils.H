@@ -45,6 +45,27 @@
     };
 
 /**
+ *  Define the total water content in each cell
+ */
+    auto make_qt = [&](const MultiFab& cons_state, MultiFab& qt)
+    {
+        BL_PROFILE("make_qt()");
+
+        int n_qstate_moist = micro->Get_Qstate_Moist_Size();
+
+        // All moisture models are guaranteed to have RhoQ1_comp
+        MultiFab::Copy(qt, cons_state, RhoQ1_comp, 0, 1, 1);
+
+        // Sum up each component
+        for (int n(1); n<n_qstate_moist; ++n) {
+            MultiFab::Add(qt, cons_state, RhoQ1_comp+n, 0, 1, 1);
+        }
+
+        // Divide out the dry density
+        MultiFab::Divide(qt, cons_state, Rho_comp, 0, 1, 1);
+    };
+
+/**
  *  This routine is called after the scalars are updated for each RK stage
  */
     auto apply_bcs = [&](Vector<MultiFab>& S_data,
