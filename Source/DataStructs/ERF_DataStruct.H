@@ -17,6 +17,19 @@
 #include <ERF_TurbStruct.H>
 #include <ERF_TurbPertStruct.H>
 
+enum MapFacType {
+//  This version assumes isotropic
+    m_x, u_x, v_x, num,
+    m_y = 0, u_y = 1, v_y = 2
+//  This version allows for non-isotropic
+//  m_x, u_x, v_x,
+//  m_y, u_y, v_y, num
+};
+
+enum TauType {
+    tau11, tau22, tau33, tau12, tau13, tau23, tau21, tau31, tau32
+};
+
 AMREX_ENUM(InitType,
     None, Input_Sounding, NCFile, WRFInput, Metgrid, Uniform
 );
@@ -46,7 +59,7 @@ AMREX_ENUM(MoistureModelType,
 );
 
 AMREX_ENUM(MoistureType,
-    SAM, SAM_NoIce, SAM_NoPrecip_NoIce, Kessler, Kessler_NoRain, SatAdj, Morrison, None
+    SAM, SAM_NoIce, SAM_NoPrecip_NoIce, Kessler, Kessler_NoRain, SatAdj, Morrison, Morrison_NoIce, None
 );
 
 AMREX_ENUM(WindFarmType,
@@ -61,8 +74,8 @@ AMREX_ENUM(LandSurfaceType,
     SLM, MM5, None, NOAH
 );
 
-AMREX_ENUM(PerturbationType,
-    Source, Direct, None
+AMREX_ENUM(RadiationType,
+    None, RRTMGP
 );
 
 enum struct Coord {
@@ -85,7 +98,7 @@ enum Sponge {
 
 struct SolverChoice {
   public:
-    void init_params(int max_level, std::string pp_prefix)
+    void init_params (int max_level, std::string pp_prefix)
     {
         amrex::ParmParse pp(pp_prefix);
 
@@ -124,31 +137,22 @@ struct SolverChoice {
             amrex::Abort("The input moisture_type is deprecated.  Set moisture_model instead.");
         }
         pp.query_enum_case_insensitive("moisture_model",moisture_type);
-        if (moisture_type == MoistureType::SAM) {
+        if ( (moisture_type == MoistureType::Morrison      ) ||
+             (moisture_type == MoistureType::SAM           ) ||
+             (moisture_type == MoistureType::Morrison_NoIce) ||
+             (moisture_type == MoistureType::SAM_NoIce     ) ) {
             RhoQv_comp = RhoQ1_comp;
             RhoQc_comp = RhoQ2_comp;
             RhoQr_comp = RhoQ4_comp;
-        } else if (moisture_type == MoistureType::SAM_NoIce) {
+        } else if ( (moisture_type == MoistureType::SAM_NoPrecip_NoIce) ||
+                    (moisture_type == MoistureType::Kessler_NoRain) ||
+                    (moisture_type == MoistureType::SatAdj) ) {
             RhoQv_comp = RhoQ1_comp;
             RhoQc_comp = RhoQ2_comp;
-            RhoQr_comp = RhoQ4_comp;
-        } else if (moisture_type == MoistureType::SAM_NoPrecip_NoIce) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
-        } else if (moisture_type == MoistureType::Morrison) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
-            RhoQr_comp = RhoQ4_comp;
         } else if (moisture_type == MoistureType::Kessler) {
             RhoQv_comp = RhoQ1_comp;
             RhoQc_comp = RhoQ2_comp;
             RhoQr_comp = RhoQ3_comp;
-        } else if (moisture_type == MoistureType::Kessler_NoRain) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
-        } else if (moisture_type == MoistureType::SatAdj) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
         }
 
         // TODO: should we set default for dry??
@@ -159,6 +163,7 @@ struct SolverChoice {
                 moisture_type == MoistureType::SAM_NoIce          ||
                 moisture_type == MoistureType::SAM_NoPrecip_NoIce ||
                 moisture_type == MoistureType::Morrison ||
+                moisture_type == MoistureType::Morrison_NoIce ||
                 moisture_type == MoistureType::SatAdj)
             {
                 buoyancy_type = 1; // uses Rhoprime
@@ -173,6 +178,18 @@ struct SolverChoice {
         // What type of land surface model to use
         lsm_type = LandSurfaceType::None; // Default
         pp.query_enum_case_insensitive("land_surface_model",lsm_type);
+
+        // What type of radiation model to use
+        rad_type = RadiationType::None; // Default
+        pp.query_enum_case_insensitive("radiation_model", rad_type);
+
+        // Verify that radiation model cannot be RRTMGP if ERF was not compiled with RRTMGP
+#ifndef ERF_USE_RRTMGP
+        if (rad_type == RadiationType::RRTMGP)
+        {
+            amrex::Abort("ERF was not compiled with RRTMGP enabled!");
+        }
+#endif
 
         // Is the terrain none, static or moving?
         std::string terrain_type_temp = "";
@@ -327,7 +344,7 @@ struct SolverChoice {
         // Include Coriolis forcing?
         pp.query("use_coriolis", use_coriolis);
         pp.query("has_lat_lon", has_lat_lon);
-        if (has_lat_lon) { pp.query("variable_coriolis", variable_coriolis); }
+        pp.query("variable_coriolis", variable_coriolis);
 
         // Include Rayleigh damping (separate flags for each variable)
         pp.query("rayleigh_damp_U", rayleigh_damp_U);
@@ -336,15 +353,16 @@ struct SolverChoice {
         pp.query("rayleigh_damp_T", rayleigh_damp_T);
         pp.query("rayleigh_dampcoef", rayleigh_dampcoef);
         pp.query("rayleigh_zdamp", rayleigh_zdamp);
+        pp.query("rayleigh_damp_substep", rayleigh_damp_substep); // apply Rayleigh damping source terms in substep only
 
-        // Flag to do explicit MOST formulation
-        pp.query("use_explicit_most",use_explicit_most);
+        // flags for whether to apply other source terms in substep only
+        pp.query("immersed_forcing_substep", immersed_forcing_substep); // apply Rayleigh damping source terms in substep only
+        pp.query("forest_substep", forest_substep); // apply Rayleigh damping source terms in substep only
 
         // Flag to do MOST rotations with terrain
-        pp.query("use_rotate_most",use_rotate_most);
-        if (use_rotate_most) {
+        pp.query("use_rotate_surface_flux",use_rotate_surface_flux);
+        if (use_rotate_surface_flux) {
             AMREX_ASSERT_WITH_MESSAGE(terrain_type != TerrainType::None,"MOST stress rotations are only valid with terrain!");
-            AMREX_ASSERT_WITH_MESSAGE(use_explicit_most, "MOST Stress rotations are only valid with explicit MOST!");
         }
 
         // Which external forcings?
@@ -464,7 +482,7 @@ struct SolverChoice {
         check_params(max_level);
     }
 
-    void check_params(int max_level)
+    void check_params (int max_level)
     {
         // Warn for PBL models and moisture - these may not yet be compatible
         for (int lev = 0; lev <= max_level; lev++) {
@@ -507,7 +525,7 @@ struct SolverChoice {
         }
     }
 
-    void display(int max_level, std::string pp_prefix)
+    void display (int max_level, std::string pp_prefix)
     {
         amrex::Print() << "SOLVER CHOICE: " << std::endl;
         amrex::Print() << "force_stage1_single_substep : "  << force_stage1_single_substep << std::endl;
@@ -533,6 +551,8 @@ struct SolverChoice {
             amrex::Print() << "Moisture Model: SAM No Precip No Ice" << std::endl;
         } else if (moisture_type == MoistureType::Morrison) {
             amrex::Print() << "Moisture Model: Morrison" << std::endl;
+        } else if (moisture_type == MoistureType::Morrison_NoIce) {
+            amrex::Print() << "Moisture Model: Morrison_NoIce" << std::endl;
         } else if (moisture_type == MoistureType::Kessler) {
             amrex::Print() << "Moisture Model: Kessler" << std::endl;
         } else if (moisture_type == MoistureType::Kessler_NoRain) {
@@ -583,6 +603,12 @@ struct SolverChoice {
             } else if (coupling_type == CouplingType::OneWay) {
                 amrex::Print() << "    One-way" << std::endl;
             }
+        }
+
+        if (rad_type == RadiationType::RRTMGP) {
+            amrex::Print() << "Radiation Model: RRTMGP" << std::endl;
+        } else {
+            amrex::Print() << "Radiation Model: None" << std::endl;
         }
 
         amrex::Print() << "Buoyancy_type               : " << buoyancy_type << std::endl;
@@ -704,6 +730,11 @@ struct SolverChoice {
     amrex::Real rayleigh_dampcoef      = 0.2; // inverse time scale [1/s]
     amrex::Real rayleigh_zdamp         = 500.0; // damping layer depth [m]
     amrex::Real rayleigh_ztop;
+    bool        rayleigh_damp_substep  = false; // use Rayleigh on substep only?
+
+    // Specify whether to apply other various source terms on substep only
+    bool        immersed_forcing_substep  = false;
+    bool        forest_substep            = false;
 
     // This defaults to true but can be set to false for moving terrain cases only
     bool        use_lagged_delta_rt    = true;
@@ -739,11 +770,8 @@ struct SolverChoice {
     //    the time-varying data provided in input sounding files?
     bool nudging_from_input_sounding = false;
 
-    // User specified MOST BC type
-    bool use_explicit_most = false;
-
     // MOST stress rotations
-    bool use_rotate_most = false;
+    bool use_rotate_surface_flux = false;
 
     // User wishes to output time averaged velocity fields
     bool time_avg_vel = false;
@@ -766,6 +794,7 @@ struct SolverChoice {
     WindFarmType windfarm_type;
     WindFarmLocType windfarm_loc_type;
     LandSurfaceType lsm_type;
+    RadiationType rad_type;
 
     ABLDriverType abl_driver_type;
     amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> abl_pressure_grad;
@@ -777,6 +806,7 @@ struct SolverChoice {
     bool variable_coriolis{false};
 
     int ave_plane {2};
+
     // Microphysics params
     bool use_moist_background {false};
     int RhoQv_comp {-1};

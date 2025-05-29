@@ -38,7 +38,7 @@ void ERFPhysBCFunct_cons::operator() (MultiFab& mf, MultiFab& xvel, MultiFab& yv
     //    those directly inside the lateral and vertical calls.
     //
     if (do_fb) {
-        mf.FillBoundary(m_geom.periodicity());
+        mf.FillBoundary(icomp,ncomp,m_geom.periodicity());
     }
 
 #ifdef AMREX_USE_OMP
@@ -285,6 +285,8 @@ void ERFPhysBCFunct_w::operator() (MultiFab& mf, MultiFab& xvel, MultiFab& yvel,
             if (zbx.bigEnd(2)   > domain.bigEnd(2))   zbx.setBig(2,domain.bigEnd(2)+1);
 
             Array4<const Real> z_nd_arr;
+            const Array4<const Real>& mf_u = m_mapfac_u->const_array(mfi);
+            const Array4<const Real>& mf_v = m_mapfac_v->const_array(mfi);
 
             if (m_z_phys_nd)
             {
@@ -304,13 +306,13 @@ void ERFPhysBCFunct_w::operator() (MultiFab& mf, MultiFab& xvel, MultiFab& yvel,
                 {
                     if (!gdomainz.contains(zbx))
                     {
-                        impose_lateral_zvel_bcs(velz_arr,velx_arr,vely_arr,zbx,domain,z_nd_arr,
-                                                dxInv,m_terrain_type,bccomp_w);
+                        impose_lateral_zvel_bcs(velz_arr,velx_arr,vely_arr,zbx,domain,
+                                                mf_u,mf_v,z_nd_arr,dxInv,m_terrain_type,bccomp_w);
                     }
                 }
 
-                impose_vertical_zvel_bcs(velz_arr,velx_arr,vely_arr,zbx,domain,z_nd_arr,dxInv,
-                                         bccomp_u, bccomp_v, bccomp_w, m_terrain_type);
+                impose_vertical_zvel_bcs(velz_arr,velx_arr,vely_arr,zbx,domain,mf_u,mf_v,
+                                         z_nd_arr,dxInv,bccomp_u, bccomp_v, bccomp_w, m_terrain_type);
             }
         } // MFIter
     } // OpenMP
@@ -356,13 +358,20 @@ void ERFPhysBCFunct_base::operator() (MultiFab& mf, int /*icomp*/, int ncomp, In
             Box cbx1 = bx; cbx1.grow(IntVect(nghost[0],nghost[1],0));
             Box cbx2 = bx; cbx2.grow(nghost);
 
+            Array4<const Real> z_nd_arr;
+
+            if (m_z_phys_nd)
+            {
+                z_nd_arr = m_z_phys_nd->const_array(mfi);
+            }
+
             if (!gdomain.contains(cbx2))
             {
                 const Array4<Real> base_arr = mf.array(mfi);
 
                 impose_lateral_basestate_bcs(base_arr,cbx1,domain,ncomp,nghost);
                 if (!m_moving_terrain) { // TODO: I don't know why the CI test fails if this is called
-                   impose_vertical_basestate_bcs(base_arr,cbx2,domain,ncomp,nghost);
+                    impose_vertical_basestate_bcs(base_arr,z_nd_arr,cbx2,domain,ncomp,nghost);
                 }
             }
 
