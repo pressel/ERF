@@ -1,5 +1,5 @@
 #include "ERF_SurfaceLayer.H"
-
+#include "ERF_EOS.H"
 using namespace amrex;
 
 /**
@@ -220,6 +220,8 @@ SurfaceLayer::impose_SurfaceLayer_bcs (const int& lev,
                                        const MultiFab* z_phys)
 {
     if (flux_type == FluxCalcType::MOENG) {
+        // print some text here letting us know we are calling this routine
+        amrex::Print() << "Using moeng fluxes for surface layer bcs." << std::endl;
         moeng_flux flux_comp;
         compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
                                  xheat_flux, yheat_flux, zheat_flux,
@@ -227,18 +229,33 @@ SurfaceLayer::impose_SurfaceLayer_bcs (const int& lev,
                                  z_phys, flux_comp);
     } else if (flux_type == FluxCalcType::DONELAN) {
         donelan_flux flux_comp;
+        // print some text here letting us know we are calling this routine
+        amrex::Print() << "Using donelan fluxes for surface layer bcs." << std::endl;
         compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
                                  xheat_flux, yheat_flux, zheat_flux,
                                  xqv_flux, yqv_flux, zqv_flux,
                                  z_phys, flux_comp);
     } else if (flux_type == FluxCalcType::ROTATE) {
         rotate_flux flux_comp;
+        // print some text here letting us know we are calling this routine
+        amrex::Print() << "Using rotated fluxes for surface layer bcs." << std::endl;
         compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
                                  xheat_flux, yheat_flux, zheat_flux,
                                  xqv_flux, yqv_flux, zqv_flux,
                                  z_phys, flux_comp);
-    } else {
+    } else if (flux_type == FluxCalcType::DRAG_COEFF) {
+        // print some text here letting us know we are calling this routine
+        amrex::Print() << "Using drag coefficient fluxes for surface layer bcs." << std::endl;
+        drag_coeff_flux flux_comp(custom_cd, custom_ch, custom_cq, p_cd, t_cd);
+        compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
+                                xheat_flux, yheat_flux, zheat_flux,
+                                xqv_flux, yqv_flux, zqv_flux,
+                                z_phys, flux_comp);
+}
+    else {
         custom_flux flux_comp;
+        // print some text here letting us know we are calling this routine
+        amrex::Print() << "Using custom fluxes for surface layer bcs." << std::endl;
         compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
                                  xheat_flux, yheat_flux, zheat_flux,
                                  xqv_flux, yqv_flux, zqv_flux,
@@ -357,7 +374,7 @@ SurfaceLayer::compute_SurfaceLayer_bcs (const int& lev,
         // Rho*Qv flux
         //============================================================================
         // TODO: Generalize MOST q flux
-        if ((flux_type == FluxCalcType::CUSTOM) && use_moisture) {
+        if ((flux_type == FluxCalcType::CUSTOM) || (flux_type == FluxCalcType::DRAG_COEFF) && use_moisture) {
             ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
             {
                 Real Qflux = flux_comp.compute_q_flux(i, j, k,

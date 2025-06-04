@@ -5,6 +5,8 @@
 #include <ERF_IndexDefines.H>
 #include <ERF_MOSTRoughness.H>
 #include <ERF_Wstar.H>
+#include <ERF_EOS.H>
+#include <ERF_MicrophysicsUtils.H>
 
 /**
  * Structure of plain old data relevant to MOST BCs
@@ -1850,4 +1852,122 @@ struct rotate_flux
 private:
     const amrex::Real eps = 1e-15;
 };
+
+
+/**
+ * Drag coefficient flux formulation
+ */
+struct drag_coeff_flux
+{
+    drag_coeff_flux (amrex::Real cd, amrex::Real ch, amrex::Real cq, amrex::Real ps, amrex::Real ts) 
+        : drag_cd(cd), drag_ch(ch), drag_cq(cq), p_cd(ps), t_cd(ts)
+    {}
+
+    AMREX_GPU_DEVICE
+    AMREX_FORCE_INLINE
+    amrex::Real
+    compute_u_flux (const int& i,
+                    const int& j,
+                    const int& k,
+                    const amrex::Array4<const amrex::Real>& cons_arr,
+                    const amrex::Array4<const amrex::Real>& velx_arr,
+                    const amrex::Array4<const amrex::Real>& vely_arr,
+                    const amrex::Array4<const amrex::Real>& umm_arr,
+                    const amrex::Array4<const amrex::Real>& um_arr,
+                    const amrex::Array4<const amrex::Real>& u_star_arr) const
+    {
+        // Calculate momentum flux using Cd
+        amrex::Real velx = velx_arr(i,j,k);
+        amrex::Real vely = 0.25 * (vely_arr(i,j,k) + vely_arr(i,j+1,k) + 
+                                    vely_arr(i-1,j,k) + vely_arr(i-1,j+1,k));
+        amrex::Real wsp = std::sqrt(velx*velx + vely*vely);
+        amrex::Real rho = 0.5 * (cons_arr(i-1,j,k,Rho_comp) + cons_arr(i,j,k,Rho_comp));
+        
+        // Return x-momentum flux: -rho * Cd * |U| * u
+        return -rho * drag_cd * wsp * velx;
+    }
+
+    AMREX_GPU_DEVICE
+    AMREX_FORCE_INLINE
+    amrex::Real
+    compute_v_flux (const int& i,
+                    const int& j,
+                    const int& k,
+                    const amrex::Array4<const amrex::Real>& cons_arr,
+                    const amrex::Array4<const amrex::Real>& velx_arr,
+                    const amrex::Array4<const amrex::Real>& vely_arr,
+                    const amrex::Array4<const amrex::Real>& umm_arr,
+                    const amrex::Array4<const amrex::Real>& vm_arr,
+                    const amrex::Array4<const amrex::Real>& u_star_arr) const
+    {
+        // Calculate momentum flux using Cd
+        amrex::Real vely = vely_arr(i,j,k);
+        amrex::Real velx = 0.25 * (velx_arr(i,j,k) + velx_arr(i+1,j,k) + 
+                                    velx_arr(i,j-1,k) + velx_arr(i+1,j-1,k));
+        amrex::Real wsp = std::sqrt(velx*velx + vely*vely);
+        amrex::Real rho = 0.5 * (cons_arr(i,j-1,k,Rho_comp) + cons_arr(i,j,k,Rho_comp));
+        
+        // Return y-momentum flux: -rho * Cd * |U| * v
+        return -rho * drag_cd * wsp * vely;
+    }
+
+    AMREX_GPU_DEVICE
+    AMREX_FORCE_INLINE
+    amrex::Real
+    compute_t_flux (const int& i,
+                   const int& j,
+                   const int& k,
+                   const amrex::Array4<const amrex::Real>& cons_arr,
+                   const amrex::Array4<const amrex::Real>& velx_arr,
+                   const amrex::Array4<const amrex::Real>& vely_arr,
+                   const amrex::Array4<const amrex::Real>& umm_arr,
+                   const amrex::Array4<const amrex::Real>& tm_arr, 
+                   const amrex::Array4<const amrex::Real>& u_star_arr,
+                   const amrex::Array4<const amrex::Real>& t_star_arr,
+                   const amrex::Array4<const amrex::Real>& t_surf_arr) const
+    {
+        // Calculate temperature flux using Ch
+        amrex::Real wsp = umm_arr(i,j,k);
+        amrex::Real theta_diff = tm_arr(i,j,k) - t_surf_arr(i,j,k);
+        amrex::Real rho = cons_arr(i,j,k,Rho_comp);
+        
+        // Return the temperature flux
+        return -rho * drag_ch * wsp * theta_diff; 
+    }
+
+    AMREX_GPU_DEVICE
+    AMREX_FORCE_INLINE
+    amrex::Real
+    compute_q_flux (const int& i,
+                   const int& j,
+                   const int& k,
+                   const amrex::Array4<const amrex::Real>& cons_arr,
+                   const amrex::Array4<const amrex::Real>& velx_arr,
+                   const amrex::Array4<const amrex::Real>& vely_arr,
+                   const amrex::Array4<const amrex::Real>& umm_arr,
+                   const amrex::Array4<const amrex::Real>& qm_arr,
+                   const amrex::Array4<const amrex::Real>& u_star_arr,
+                   const amrex::Array4<const amrex::Real>& q_star_arr,
+                   const amrex::Array4<const amrex::Real>& t_surf_arr) const
+    {
+        // Calculate moisture flux using Cq
+        amrex::Real wsp = umm_arr(i,j,k);
+        amrex::Real rho = cons_arr(i,j,k,Rho_comp);
+        amrex::Real qv = cons_arr(i,j,k,RhoQ1_comp)/rho; 
+        amrex::Real qv_sfc;
+        erf_qsatw(t_cd, p_cd * 0.01, qv_sfc);
+        amrex::Real qv_diff = qv - qv_sfc;
+
+        // Return the moisture flux
+        return -rho * drag_cq * wsp * qv_diff;
+    }
+
+private:
+    amrex::Real drag_cd;  // Momentum drag coefficient
+    amrex::Real drag_ch;  // Heat drag coefficient
+    amrex::Real drag_cq;  // Moisture drag coefficient
+    amrex::Real p_cd;  // Surface pressure, used for moisture flux calculation
+    amrex::Real t_cd;  // Surface temperature, used for moisture flux calculation
+};
+
 #endif

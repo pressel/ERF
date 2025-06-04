@@ -60,6 +60,12 @@ public:
             std::string flux_string_in;
             std::string flux_string{"moeng"};
             auto read_flux = pp.query("surface_layer.flux_type", flux_string_in);
+            // print flux_string_in to see what the user specified
+            if (flux_string_in.empty()) {
+                amrex::Print() << "Using default flux type: moeng" << std::endl;
+            } else {
+                amrex::Print() << "Using user specified flux type: " << flux_string_in << std::endl;
+            }
             if (read_flux) { flux_string = amrex::toLower(flux_string_in); }
             if (flux_string == "donelan") {
                 flux_type = FluxCalcType::DONELAN;
@@ -67,6 +73,8 @@ public:
                 flux_type = FluxCalcType::MOENG;
             } else if (flux_string == "custom") {
                 flux_type = FluxCalcType::CUSTOM;
+            } else if (flux_string == "drag_coeff") {
+                flux_type = FluxCalcType::DRAG_COEFF;
             } else {
                 amrex::Abort("Undefined MOST flux type!");
             }
@@ -128,6 +136,20 @@ public:
                 } else {
                     theta_type = ThetaCalcType::ADIABATIC;
                 }
+            }
+        }
+
+        if (flux_type == FluxCalcType::DRAG_COEFF) {
+            pp.query("most.custom_cd", custom_cd);
+            pp.query("most.custom_ch", custom_ch);
+            pp.query("most.custom_cq", custom_cq);
+            pp.query("most_p_surf", p_cd);
+            pp.query("most_t_surf", t_cd);
+            amrex::Print() << "Using specified drag coefficients: Cd = " << custom_cd 
+                        << ", Ch = " << custom_ch << ", Cq = " << custom_cq << std::endl;
+            // check if the drag coefficnets are positive if not abort
+            if (custom_cd < 0 || custom_ch < 0 || custom_cq < 0) {
+                amrex::Abort("Custom drag coefficients must be positive!");
             }
         }
 
@@ -502,7 +524,8 @@ public:
         MOENG = 0,      ///< Moeng functional form
         DONELAN,        ///< Donelan functional form
         CUSTOM,         ///< Custom constant flux functional form
-        ROTATE          ///< Terrain rotation flux functional form
+        ROTATE,         ///< Terrain rotation flux functional form
+        DRAG_COEFF      ///< Fixed aerodynamic drag coefficient
     };
 
     enum struct ThetaCalcType {
@@ -545,6 +568,11 @@ private:
     amrex::Real custom_ustar{0};
     amrex::Real custom_tstar{0};
     amrex::Real custom_qstar{0};
+    amrex::Real custom_cd{0.0};  // Momentum drag coefficient
+    amrex::Real custom_ch{0.0};  // Sensible heat drag coefficient 
+    amrex::Real custom_cq{0.0};  // Water vapor drag coefficient
+    amrex::Real t_cd = 300.0; // Surface temperature [K] 
+    amrex::Real p_cd = 1e5; // Surface pressure [Pa]
     amrex::Real cnk_a{0.0185};
     bool        cnk_visc{false};
     amrex::Real depth{30.0};
