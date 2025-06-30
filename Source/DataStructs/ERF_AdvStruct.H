@@ -93,7 +93,13 @@ struct AdvChoice {
              (dycore_horiz_adv_string == "Centered_4th") ||
              (dycore_horiz_adv_string == "Upwind_5th"  ) ||
              (dycore_horiz_adv_string == "Blended_5th6th") ||
-             (dycore_horiz_adv_string == "Centered_6th") )
+             (dycore_horiz_adv_string == "Centered_6th") ||
+             (dycore_horiz_adv_string == "WENO3"       ) ||
+             (dycore_horiz_adv_string == "WENOZ3"      ) || 
+             (dycore_horiz_adv_string == "WENO5"       ) || 
+             (dycore_horiz_adv_string == "WENOZ5"      ) || 
+             (dycore_horiz_adv_string == "WENO7"       ) ||
+             (dycore_horiz_adv_string == "WENOZ7"      ))   
         {
             dycore_horiz_adv_type = adv_type_convert_string_to_advtype(dycore_horiz_adv_string);
         }
@@ -104,7 +110,13 @@ struct AdvChoice {
              (dycore_vert_adv_string == "Centered_4th") ||
              (dycore_vert_adv_string == "Upwind_5th"  ) ||
              (dycore_vert_adv_string == "Blended_5th6th") ||
-             (dycore_vert_adv_string == "Centered_6th") )
+             (dycore_vert_adv_string == "Centered_6th") ||
+             (dycore_vert_adv_string == "WENO3"       ) || 
+             (dycore_vert_adv_string == "WENOZ3"      ) ||
+             (dycore_vert_adv_string == "WENO5"       ) ||
+             (dycore_vert_adv_string == "WENOZ5"      ) || 
+             (dycore_vert_adv_string == "WENO7"       ) ||
+             (dycore_vert_adv_string == "WENOZ7"      ))
         {
             dycore_vert_adv_type = adv_type_convert_string_to_advtype(dycore_vert_adv_string);
         }
