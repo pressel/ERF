@@ -483,7 +483,7 @@ AdvectionSrcForMomVert (const amrex::Box& bxx, const amrex::Box& bxy, const amre
                                                                     mf_my, mf_uy_inv, mf_vy_inv,
                                                                     upw_frac_h, upw_frac_v,
                                                                     vert_adv_type, lo_z_face, hi_z_face);
-                                                                    
+
     } else if (vert_adv_type == AdvType::Weno_3) {
         AdvectionSrcForMomWrapper<InterpType_H,WENO3,UPWINDALL>(bxx, bxy, bxz,
                                                                 rho_u_rhs, rho_v_rhs, rho_w_rhs,

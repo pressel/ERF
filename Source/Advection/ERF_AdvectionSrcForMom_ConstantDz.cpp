@@ -262,7 +262,7 @@ AdvectionSrcForMom_ConstantDz (const Box& bxx, const Box& bxy, const Box& bxz,
                                                 mf_mx, mf_ux_inv, mf_vx_inv,
                                                 mf_my, mf_uy_inv, mf_vy_inv,
                                                 horiz_upw_frac, vert_upw_frac,
-                                                vert_adv_type, lo_z_face, hi_z_face);        
+                                                vert_adv_type, lo_z_face, hi_z_face);
         } else {
             AMREX_ASSERT_WITH_MESSAGE(false, "Unknown advection scheme!");
         }
