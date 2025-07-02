@@ -378,6 +378,7 @@ struct AdvChoice {
             (dycore_vert_adv_type == AdvType::Weno_7Z);
 
         // Check embedded boundary incompatibility
+        amrex::ignore_unused(use_embedded_boundary, using_weno_momentum);
         AMREX_ASSERT_WITH_MESSAGE(!using_weno_momentum || !use_embedded_boundary,
             "WENO momentum advection schemes are not yet implemented for embedded boundaries. "
             "Please use traditional momentum advection schemes when using embedded boundaries:\n"
