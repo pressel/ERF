@@ -112,9 +112,9 @@ unresolved scales and no extra equation for TKE is solved.
 Enhanced Smagorinsky Model with Moist Stratification
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The standard Smagorinsky model uses a fixed relationship between mixing length and grid scale (:math:`\ell = \Delta`). 
-For atmospheric applications involving moisture, this can be inappropriate in stably stratified regions where buoyancy effects 
-significantly suppress turbulent mixing. ERF includes an enhanced Smagorinsky formulation that accounts for moist atmospheric 
+The standard Smagorinsky model uses a fixed relationship between mixing length and grid scale (:math:`\ell = \Delta`).
+For atmospheric applications involving moisture, this can be inappropriate in stably stratified regions where buoyancy effects
+significantly suppress turbulent mixing. ERF includes an enhanced Smagorinsky formulation that accounts for moist atmospheric
 stratification effects while maintaining computational efficiency.
 
 The enhanced model modifies the mixing length based on local atmospheric stability:
@@ -125,7 +125,7 @@ The enhanced model modifies the mixing length based on local atmospheric stabili
    \min\left(\Delta, \sqrt{\frac{u_c^2}{N^2_{eff}}}\right) & \text{if } N^2_{eff} > 0
    \end{cases}
 
-where :math:`u_c = |\tilde{S}| \Delta` is a characteristic velocity scale based on the local strain rate magnitude, 
+where :math:`u_c = |\tilde{S}| \Delta` is a characteristic velocity scale based on the local strain rate magnitude,
 and :math:`N^2_{eff}` is the effective moist Brunt-Väisälä frequency.
 
 **Moist Stratification Parameter**
@@ -173,7 +173,7 @@ This formulation creates an effective Richardson number criterion where turbulen
 .. math::
    Ri_{eff} = \frac{N^2_{eff}}{|\tilde{S}|^2}
 
-When :math:`Ri_{eff} > 1`, stratification dominates and mixing is suppressed. When :math:`Ri_{eff} < 1`, 
+When :math:`Ri_{eff} > 1`, stratification dominates and mixing is suppressed. When :math:`Ri_{eff} < 1`,
 shear dominates and mixing approaches standard Smagorinsky behavior.
 
 **Implementation Control**
@@ -185,7 +185,7 @@ The enhanced moist Smagorinsky formulation can be controlled via the input param
     erf.use_smag_stratification = true   # Enhanced moist Smagorinsky (default)
     erf.use_smag_stratification = false  # Standard Smagorinsky
 
-When disabled, the model reverts to the standard Smagorinsky formulation with :math:`\ell_m = \Delta`, 
+When disabled, the model reverts to the standard Smagorinsky formulation with :math:`\ell_m = \Delta`,
 providing backwards compatibility and enabling direct comparison between approaches.
 
 Deardorff Model

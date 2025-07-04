@@ -48,14 +48,14 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
     {
         Real Cs = turbChoice.Cs;
         bool smag2d = turbChoice.smag2d;
-        
+
         // Define variables that need to be captured in the lambda
         Real l_abs_g = const_grav;
         Real l_inv_theta0 = 1.0 / turbChoice.theta_ref;  // or whatever reference theta you use
         bool l_use_moisture = moisture_indices.qv > 0;
         int l_rho_qv_comp = moisture_indices.qv ;
-        bool l_use_smag_stratification = turbChoice.use_smag_stratification; 
-        
+        bool l_use_smag_stratification = turbChoice.use_smag_stratification;
+
     #ifdef _OPENMP
     #pragma omp parallel if (Gpu::notInLaunchRegion())
     #endif
@@ -90,7 +90,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 } else {
                     SmnSmn = ComputeSmnSmn(i,j,k,tau11,tau22,tau33,tau12,tau13,tau23);
                 }
-                
+
                 // =====================================================================
                 // GRID SCALE CALCULATION (unchanged)
                 // =====================================================================
@@ -100,21 +100,21 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 if (use_terrain) {
                     dzInv /= Compute_h_zeta_AtCellCenter(i,j,k, cellSizeInv, z_nd_arr);
                 }
-                
+
                 // =====================================================================
                 // MIXING LENGTH CALCULATION: STANDARD vs ENHANCED
                 // =====================================================================
                 Real mixing_length;
-                
+
                 if (l_use_smag_stratification) {
                     // ENHANCED SMAGORINSKY: Our moist stratification approach
                     Real stratification = ComputeStratificationForSmagorinsky(
-                        i, j, k, cell_data, dzInv, l_abs_g, l_inv_theta0, 
+                        i, j, k, cell_data, dzInv, l_abs_g, l_inv_theta0,
                         l_use_moisture, l_rho_qv_comp, moisture_indices);
-                    
+
                     Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
                     Real Delta = std::cbrt(cellVolMsf);
-                    
+
                     // Stability-limited mixing length
                     mixing_length = Delta;
                     if (stratification > 1e-10) {
@@ -122,30 +122,30 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                         if (strain_rate_magnitude > 1e-10) {
                             Real velocity_scale = strain_rate_magnitude * Delta;
                             Real buoyancy_length = std::sqrt(velocity_scale * velocity_scale / stratification);
-                            
+
                             mixing_length = amrex::min(Delta, buoyancy_length);
                             mixing_length = amrex::max(mixing_length, 0.001 * Delta);
                         }
                     }
-                    
+
                 } else {
                     // STANDARD SMAGORINSKY: Grid-scale mixing length only
                     Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
                     mixing_length = std::cbrt(cellVolMsf);  // Always use grid scale
                 }
-                
+
                 // =====================================================================
                 // EDDY VISCOSITY CALCULATION (same for both approaches)
                 // =====================================================================
                 Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
                 mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
-                
+
                 if (smag2d) {
                     mu_turb(i, j, k, EddyDiff::Mom_v) = 0.0;
                 } else {
                     mu_turb(i, j, k, EddyDiff::Mom_v) = mu_turb(i, j, k, EddyDiff::Mom_h);
                 }
-                    
+
                 // =====================================================================
                 // HEAT FLUX CALCULATION (unchanged)
                 // =====================================================================
@@ -590,11 +590,11 @@ void ComputeTurbulentViscosity (const MultiFab& xvel , const MultiFab& yvel,
         impose_phys_bcs = true;
 
         // Create moisture indices struct once here
-        MoistureComponentIndices moisture_indices(solverChoice.RhoQv_comp, 
-                                                solverChoice.RhoQc_comp, 
+        MoistureComponentIndices moisture_indices(solverChoice.RhoQv_comp,
+                                                solverChoice.RhoQc_comp,
                                                 solverChoice.RhoQi_comp,
-                                                solverChoice.RhoQr_comp, 
-                                                solverChoice.RhoQs_comp, 
+                                                solverChoice.RhoQr_comp,
+                                                solverChoice.RhoQs_comp,
                                                 solverChoice.RhoQg_comp);
 
         ComputeTurbulentViscosityLES(Tau_lev,
