@@ -137,22 +137,28 @@ struct SolverChoice {
             amrex::Abort("The input moisture_type is deprecated.  Set moisture_model instead.");
         }
         pp.query_enum_case_insensitive("moisture_model",moisture_type);
-        if ( (moisture_type == MoistureType::Morrison      ) ||
-             (moisture_type == MoistureType::SAM           ) ||
-             (moisture_type == MoistureType::Morrison_NoIce) ||
-             (moisture_type == MoistureType::SAM_NoIce     ) ) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
-            RhoQr_comp = RhoQ4_comp;
+        if ( (moisture_type == MoistureType::Morrison) ||
+             (moisture_type == MoistureType::SAM) ) {
+            RhoQv_comp = RhoQ1_comp;  // water vapor
+            RhoQc_comp = RhoQ2_comp;  // cloud water
+            RhoQi_comp = RhoQ3_comp;  // ice
+            RhoQr_comp = RhoQ4_comp;  // rain
+            RhoQs_comp = RhoQ5_comp;  // snow
+            RhoQg_comp = RhoQ6_comp;  // graupel
+        } else if ( (moisture_type == MoistureType::Morrison_NoIce) ||
+                    (moisture_type == MoistureType::SAM_NoIce) ) {
+            RhoQv_comp = RhoQ1_comp;  // water vapor
+            RhoQc_comp = RhoQ2_comp;  // cloud water
+            RhoQr_comp = RhoQ4_comp;  // rain
         } else if ( (moisture_type == MoistureType::SAM_NoPrecip_NoIce) ||
                     (moisture_type == MoistureType::Kessler_NoRain) ||
                     (moisture_type == MoistureType::SatAdj) ) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
+            RhoQv_comp = RhoQ1_comp;  // water vapor
+            RhoQc_comp = RhoQ2_comp;  // cloud water
         } else if (moisture_type == MoistureType::Kessler) {
-            RhoQv_comp = RhoQ1_comp;
-            RhoQc_comp = RhoQ2_comp;
-            RhoQr_comp = RhoQ3_comp;
+            RhoQv_comp = RhoQ1_comp;  // water vapor
+            RhoQc_comp = RhoQ2_comp;  // cloud water
+            RhoQr_comp = RhoQ3_comp;  // rain
         }
 
         // TODO: should we set default for dry??
