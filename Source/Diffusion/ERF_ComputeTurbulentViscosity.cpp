@@ -82,7 +82,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
             ParallelFor(bxcc, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
                 // =====================================================================
-                // STRAIN RATE CALCULATION (unchanged)
+                // STRAIN RATE CALCULATION
                 // =====================================================================
                 Real SmnSmn;
                 if (smag2d) {
@@ -92,7 +92,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 }
 
                 // =====================================================================
-                // GRID SCALE CALCULATION (unchanged)
+                // GRID SCALE CALCULATION
                 // =====================================================================
                 Real dxInv = cellSizeInv[0];
                 Real dyInv = cellSizeInv[1];
@@ -102,7 +102,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 }
 
                 // =====================================================================
-                // MIXING LENGTH CALCULATION: STANDARD vs ENHANCED
+                // MIXING LENGTH CALCULATION: STANDARD vs ADJUSTED
                 // =====================================================================
                 Real mixing_length;
 
@@ -147,7 +147,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 }
 
                 // =====================================================================
-                // HEAT FLUX CALCULATION (unchanged)
+                // HEAT FLUX CALCULATION
                 // =====================================================================
                 Real dtheta_dz = 0.5 * ( cell_data(i,j,k+1,RhoTheta_comp)/cell_data(i,j,k+1,Rho_comp)
                                     - cell_data(i,j,k-1,RhoTheta_comp)/cell_data(i,j,k-1,Rho_comp) )*dzInv;
