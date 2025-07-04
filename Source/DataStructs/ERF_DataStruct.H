@@ -822,6 +822,9 @@ struct SolverChoice {
     // if Kessler, then it will be set to RhoQ3
     // if     SAM, then it will be set to RhoQ4
     int RhoQr_comp {-1};
+    int RhoQi_comp {-1};
+    int RhoQs_comp {-1};
+    int RhoQg_comp {-1};
 
     std::string windfarm_loc_table, windfarm_spec_table, windfarm_spec_table_extra;
     std::string windfarm_blade_table, windfarm_airfoil_tables;

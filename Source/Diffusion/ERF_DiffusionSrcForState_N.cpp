@@ -189,7 +189,7 @@ DiffusionSrcForState_N (const Box& bx, const Box& domain,
             } else {
                 zflux(i,j,k) = -rhoAlpha * (cell_prim(i, j, k, prim_index) - cell_prim(i, j, k-1, prim_index)) * dz_inv;
             }
-
+            
             if (qty_index == RhoTheta_comp) {
                 if (!SurfLayer_on_zlo) {
                     hfx_z(i,j,k) = zflux(i,j,k);
