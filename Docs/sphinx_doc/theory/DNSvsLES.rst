@@ -173,8 +173,9 @@ This formulation creates an effective Richardson number criterion where turbulen
 .. math::
    Ri_{eff} = \frac{N^2_{eff}}{|\tilde{S}|^2}
 
-When :math:`Ri_{eff} > 1`, stratification dominates and mixing is suppressed. When :math:`Ri_{eff} < 1`,
-shear dominates and mixing approaches standard Smagorinsky behavior.
+When :math:`Ri_{eff} > 1`, stratification dominates and mixing is suppressed.
+When :math:`0 < Ri_{eff} < 1`, shear dominates and mixing approaches standard Smagorinsky behavior.
+When :math:`Ri_{eff} \leq 0`, stratification is unstable and the standard Smagorinsky behavior is exactly recovered, regardless of moisture.
 
 **Implementation Control**
 
