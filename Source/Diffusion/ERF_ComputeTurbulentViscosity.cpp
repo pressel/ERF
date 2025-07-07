@@ -102,11 +102,15 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 }
 
                 Real Delta;
+                Real DeltaH;
                 if (isotropic) {
                     Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
                     Delta = std::cbrt(cellVolMsf);
-                } else {
+                    DeltaH = Delta;
+                } else { // separate horizontal/vertical length scales
+                    // If using enhanced Smagorinsky, dz is the more meaningful grid scale
                     Delta = 1.0 / dzInv;
+                    DeltaH = std::sqrt(1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0)));
                 }
 
                 // =====================================================================
