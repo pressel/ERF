@@ -108,6 +108,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     Delta = std::cbrt(cellVolMsf);
                     DeltaH = Delta;
                 } else { // separate horizontal/vertical length scales
+                    // Typically, dx and dy >> dz
                     // If using enhanced Smagorinsky, dz is the more meaningful grid scale
                     Delta = 1.0 / dzInv;
                     DeltaH = std::sqrt(1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0)));
@@ -137,21 +138,28 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                         }
                     }
 
-                } else {
+                } else if (!smag2d) {
                     // STANDARD SMAGORINSKY: Grid-scale mixing length only
                     mixing_length = Delta;  // Always use grid scale
                 }
 
                 // =====================================================================
-                // EDDY VISCOSITY CALCULATION (same for both approaches)
+                // EDDY VISCOSITY CALCULATION (same for standard/enhanced)
                 // =====================================================================
-                Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
-                mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
-
-                if (smag2d) {
-                    mu_turb(i, j, k, EddyDiff::Mom_v) = 0.0;
-                } else {
+                if (isotropic) {
+                    Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
+                    mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
                     mu_turb(i, j, k, EddyDiff::Mom_v) = mu_turb(i, j, k, EddyDiff::Mom_h);
+
+                } else { // anisotropic or smag2d
+                    Real CsDeltaHSqr = Cs * Cs * DeltaH * DeltaH;
+                    mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaHSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
+                    if (smag2d) {
+                        mu_turb(i, j, k, EddyDiff::Mom_v) = 0.0;
+                    } else {
+                        Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
+                        mu_turb(i, j, k, EddyDiff::Mom_v) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
+                    }
                 }
 
                 // =====================================================================
