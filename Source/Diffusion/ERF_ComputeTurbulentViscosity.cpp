@@ -101,6 +101,14 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     dzInv /= Compute_h_zeta_AtCellCenter(i,j,k, cellSizeInv, z_nd_arr);
                 }
 
+                Real Delta;
+                if (isotropic) {
+                    Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
+                    Delta = std::cbrt(cellVolMsf);
+                } else {
+                    Delta = 1.0 / dzInv;
+                }
+
                 // =====================================================================
                 // MIXING LENGTH CALCULATION: STANDARD vs ADJUSTED
                 // =====================================================================
@@ -111,9 +119,6 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     Real stratification = ComputeStratificationForSmagorinsky(
                         i, j, k, cell_data, dzInv, l_abs_g, l_inv_theta0,
                         l_use_moisture, l_rho_qv_comp, moisture_indices);
-
-                    Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
-                    Real Delta = std::cbrt(cellVolMsf);
 
                     // Stability-limited mixing length
                     mixing_length = Delta;
@@ -130,8 +135,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
 
                 } else {
                     // STANDARD SMAGORINSKY: Grid-scale mixing length only
-                    Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
-                    mixing_length = std::cbrt(cellVolMsf);  // Always use grid scale
+                    mixing_length = Delta;  // Always use grid scale
                 }
 
                 // =====================================================================
