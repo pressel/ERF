@@ -138,7 +138,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                         }
                     }
 
-                } else if (!smag2d) {
+                } else {
                     // STANDARD SMAGORINSKY: Grid-scale mixing length only
                     mixing_length = Delta;  // Always use grid scale
                 }
@@ -146,8 +146,9 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 // =====================================================================
                 // EDDY VISCOSITY CALCULATION (same for standard/enhanced)
                 // =====================================================================
+                Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
+
                 if (isotropic) {
-                    Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
                     mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
                     mu_turb(i, j, k, EddyDiff::Mom_v) = mu_turb(i, j, k, EddyDiff::Mom_h);
 
@@ -157,7 +158,6 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     if (smag2d) {
                         mu_turb(i, j, k, EddyDiff::Mom_v) = 0.0;
                     } else {
-                        Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
                         mu_turb(i, j, k, EddyDiff::Mom_v) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
                     }
                 }
