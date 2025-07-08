@@ -604,21 +604,12 @@ void ComputeTurbulentViscosity (const MultiFab& xvel , const MultiFab& yvel,
 
     if (turbChoice.les_type != LESType::None) {
         impose_phys_bcs = true;
-
-        // Create moisture indices struct once here
-        MoistureComponentIndices moisture_indices(solverChoice.RhoQv_comp,
-                                                  solverChoice.RhoQc_comp,
-                                                  solverChoice.RhoQi_comp,
-                                                  solverChoice.RhoQr_comp,
-                                                  solverChoice.RhoQs_comp,
-                                                  solverChoice.RhoQg_comp);
-
         ComputeTurbulentViscosityLES(Tau_lev,
                                      cons_in, eddyViscosity,
                                      Hfx1, Hfx2, Hfx3, Diss,
                                      geom, use_terrain_fitted_coords,
                                      mapfac, z_phys_nd, turbChoice, const_grav,
-                                     SurfLayer, moisture_indices);
+                                     SurfLayer, solverChoice.moisture_indices);
     }
 
     if (turbChoice.rans_type != RANSType::None) {
@@ -637,15 +628,13 @@ void ComputeTurbulentViscosity (const MultiFab& xvel , const MultiFab& yvel,
                                  geom, turbChoice, SurfLayer,
                                  use_terrain_fitted_coords, use_moisture,
                                  level, bc_ptr, vert_only, z_phys_nd,
-                                 solverChoice.RhoQv_comp, solverChoice.RhoQc_comp,
-                                 solverChoice.RhoQr_comp);
+                                 solverChoice.moisture_indices);
     } else if (turbChoice.pbl_type == PBLType::MYNNEDMF) {
         ComputeDiffusivityMYNNEDMF(xvel, yvel, cons_in, eddyViscosity,
                                    geom, turbChoice, SurfLayer,
                                    use_terrain_fitted_coords, use_moisture,
                                    level, bc_ptr, vert_only, z_phys_nd,
-                                   solverChoice.RhoQv_comp, solverChoice.RhoQc_comp,
-                                   solverChoice.RhoQr_comp);
+                                   solverChoice.moisture_indices);
     } else if (turbChoice.pbl_type == PBLType::YSU) {
         ComputeDiffusivityYSU(xvel, yvel, cons_in, eddyViscosity,
                               geom, turbChoice, SurfLayer,

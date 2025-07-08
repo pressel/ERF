@@ -4,26 +4,6 @@
 #include "ERF_MicrophysicsUtils.H"
 
 // =============================================================================
-// MOISTURE COMPONENT INDICES STRUCT
-// =============================================================================
-struct MoistureComponentIndices {
-    int qv  = -1;  // Water vapor
-    int qc  = -1;  // Cloud liquid water
-    int qi  = -1;  // Cloud ice
-    int qr  = -1;  // Rain
-    int qs  = -1;  // Snow
-    int qg  = -1;  // Graupel
-
-    // Constructor for easy initialization
-    MoistureComponentIndices(int qv_comp, int qc_comp, int qi_comp,
-                           int qr_comp, int qs_comp, int qg_comp)
-        : qv(qv_comp), qc(qc_comp), qi(qi_comp), qr(qr_comp), qs(qs_comp), qg(qg_comp) {}
-
-    // Default constructor
-    MoistureComponentIndices() = default;
-};
-
-// =============================================================================
 // MOIST TURBULENCE FUNCTIONS
 // =============================================================================
 

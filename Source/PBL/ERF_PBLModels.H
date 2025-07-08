@@ -1,6 +1,7 @@
 #ifndef ERF_PBLMODELS_H_
 #define ERF_PBLMODELS_H_
 
+#include "ERF_DataStruct.H"
 #include "ERF_Thetav.H"
 
 /**
@@ -34,9 +35,7 @@ ComputeDiffusivityMYNN25 (const amrex::MultiFab& xvel,
                           const amrex::BCRec* bc_ptr,
                           bool /*vert_only*/,
                           const std::unique_ptr<amrex::MultiFab>& z_phys_nd,
-                          const int RhoQv_comp,
-                          const int RhoQc_comp,
-                          const int RhoQr_comp);
+                          const MoistureComponentIndices& moisture_indices);
 
 /**
  * Compute eddy diffusivities of momentum (eddy viscosity) and heat using the
@@ -69,9 +68,7 @@ ComputeDiffusivityMYNNEDMF (const amrex::MultiFab& xvel,
                             const amrex::BCRec* bc_ptr,
                             bool /*vert_only*/,
                             const std::unique_ptr<amrex::MultiFab>& z_phys_nd,
-                            const int RhoQv_comp,
-                            const int RhoQc_comp,
-                            const int RhoQr_comp);
+                            const MoistureComponentIndices& moisture_indices);
 
 /**
  * Compute eddy diffusivities of momentum (eddy viscosity) and heat using the

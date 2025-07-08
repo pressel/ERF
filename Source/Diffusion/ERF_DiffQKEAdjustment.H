@@ -3,9 +3,9 @@
         int qty_index = RhoKE_comp;
         auto pbl_mynn_B1_l = turbChoice.pbl_mynn.B1;
 
-        const int rhoqv_comp = solverChoice.RhoQv_comp;
-        const int rhoqc_comp = solverChoice.RhoQc_comp;
-        const int rhoqr_comp = solverChoice.RhoQr_comp;
+        const int rhoqv_comp = solverChoice.moisture_indices.qv;
+        const int rhoqc_comp = solverChoice.moisture_indices.qc;
+        const int rhoqr_comp = solverChoice.moisture_indices.qr;
 
         ParallelFor(bx,[=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
