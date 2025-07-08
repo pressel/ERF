@@ -1,6 +1,7 @@
 #ifndef ERF_MOISTUTILS_H_
 #define ERF_MOISTUTILS_H_
 
+#include "ERF_EOS.H"
 #include "ERF_MicrophysicsUtils.H"
 
 // =============================================================================
@@ -64,6 +65,23 @@ amrex::Real ComputeVirtualPotentialTemperature (amrex::Real theta,
 }
 
 /**
+ * Wrapper around ComputeVirtualPotentialTemperature
+ */
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real GetThetav (int i, int j, int k,
+                       const amrex::Array4<amrex::Real const>& cell_data,
+                       const MoistureComponentIndices& moisture_indices)
+{
+    amrex::Real theta = cell_data(i, j, k, RhoTheta_comp) / cell_data(i, j, k, Rho_comp);
+
+    amrex::Real qv, qcl, qci;
+    GetMoistureVars(i, j, k, cell_data, qv, qcl, qci, moisture_indices);
+
+    return ComputeVirtualPotentialTemperature(theta, qv, qcl, qci);
+}
+
+/**
  * Compute moist stratification accounting for conditional instability
  */
 AMREX_GPU_DEVICE
@@ -75,22 +93,13 @@ amrex::Real ComputeMoistStratification (int i, int j, int k,
                                         amrex::Real inv_theta0,
                                         const MoistureComponentIndices& moisture_indices)
 {
-    // Get moisture at three levels
+    // Get moisture variables partitioned into phases
     amrex::Real qv, qc_liquid, qc_ice;
     GetMoistureVars(i, j, k, cell_data, qv, qc_liquid, qc_ice, moisture_indices);
 
-    amrex::Real qv_upper, qcl_upper, qci_upper;
-    GetMoistureVars(i, j, k+1, cell_data, qv_upper, qcl_upper, qci_upper, moisture_indices);
-
-    amrex::Real qv_lower, qcl_lower, qci_lower;
-    GetMoistureVars(i, j, k-1, cell_data, qv_lower, qcl_lower, qci_lower, moisture_indices);
-
     // Compute virtual potential temperature gradient
-    amrex::Real theta_upper = cell_data(i,j,k+1,RhoTheta_comp)/cell_data(i,j,k+1,Rho_comp);
-    amrex::Real theta_lower = cell_data(i,j,k-1,RhoTheta_comp)/cell_data(i,j,k-1,Rho_comp);
-
-    amrex::Real theta_v_upper = ComputeVirtualPotentialTemperature(theta_upper, qv_upper, qcl_upper, qci_upper);
-    amrex::Real theta_v_lower = ComputeVirtualPotentialTemperature(theta_lower, qv_lower, qcl_lower, qci_lower);
+    amrex::Real theta_v_upper = GetThetav(i, j, k+1, cell_data, moisture_indices);
+    amrex::Real theta_v_lower = GetThetav(i, j, k-1, cell_data, moisture_indices);
 
     amrex::Real dthetav_dz = 0.5 * (theta_v_upper - theta_v_lower) * dzInv;
     amrex::Real stratification = abs_g * dthetav_dz * inv_theta0;
