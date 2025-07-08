@@ -1266,9 +1266,7 @@ ERF::InitData_post ()
                 // we don't want to call update_fluxes multiple times because
                 // it will change u* and theta* from their previous values
                 m_SurfaceLayer->update_pblh(lev, vars_new, z_phys_cc[lev].get(),
-                                            solverChoice.moisture_indices.qv,
-                                            solverChoice.moisture_indices.qc,
-                                            solverChoice.moisture_indices.qr);
+                                            solverChoice.moisture_indices);
                 m_SurfaceLayer->update_fluxes(lev, time);
             }
         }

@@ -114,9 +114,7 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
             //       Reassign the field ptrs for MAC avg computation.
             m_SurfaceLayer->update_mac_ptrs(lev, vars_old, Theta_prim, Qv_prim, Qr_prim);
             m_SurfaceLayer->update_pblh(lev, vars_old, z_phys_cc[lev].get(),
-                                        solverChoice.moisture_indices.qv,
-                                        solverChoice.moisture_indices.qc,
-                                        solverChoice.moisture_indices.qr);
+                                        solverChoice.moisture_indices);
             m_SurfaceLayer->update_fluxes(lev, time);
         }
     }

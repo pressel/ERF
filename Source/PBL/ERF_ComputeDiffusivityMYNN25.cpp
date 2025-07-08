@@ -141,7 +141,7 @@ ComputeDiffusivityMYNN25 (const MultiFab& xvel,
                                           u_ext_dir_on_zlo, u_ext_dir_on_zhi,
                                           v_ext_dir_on_zlo, v_ext_dir_on_zhi,
                                           dthetavdz, dudz, dvdz,
-                                          RhoQv_comp, RhoQc_comp, RhoQr_comp);
+                                          moisture_indices);
 
             // Spatially varying MOST
             Real theta0 = tm_arr(i,j,0);
