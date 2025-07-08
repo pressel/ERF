@@ -12,12 +12,12 @@
  */
 AMREX_GPU_DEVICE
 AMREX_FORCE_INLINE
-void GetMoistureAtLevel (int i, int j, int k,
-                         const amrex::Array4<amrex::Real const>& cell_data,
-                         amrex::Real& qv,
-                         amrex::Real& qc_liquid,
-                         amrex::Real& qc_ice,
-                         const MoistureComponentIndices& moisture_indices)
+void GetMoistureVars (int i, int j, int k,
+                      const amrex::Array4<amrex::Real const>& cell_data,
+                      amrex::Real& qv,
+                      amrex::Real& qc_liquid,
+                      amrex::Real& qc_ice,
+                      const MoistureComponentIndices& moisture_indices)
 {
     qv = 0.0; qc_liquid = 0.0; qc_ice = 0.0;
 
@@ -77,13 +77,13 @@ amrex::Real ComputeMoistStratification (int i, int j, int k,
 {
     // Get moisture at three levels
     amrex::Real qv, qc_liquid, qc_ice;
-    GetMoistureAtLevel(i, j, k, cell_data, qv, qc_liquid, qc_ice, moisture_indices);
+    GetMoistureVars(i, j, k, cell_data, qv, qc_liquid, qc_ice, moisture_indices);
 
     amrex::Real qv_upper, qcl_upper, qci_upper;
-    GetMoistureAtLevel(i, j, k+1, cell_data, qv_upper, qcl_upper, qci_upper, moisture_indices);
+    GetMoistureVars(i, j, k+1, cell_data, qv_upper, qcl_upper, qci_upper, moisture_indices);
 
     amrex::Real qv_lower, qcl_lower, qci_lower;
-    GetMoistureAtLevel(i, j, k-1, cell_data, qv_lower, qcl_lower, qci_lower, moisture_indices);
+    GetMoistureVars(i, j, k-1, cell_data, qv_lower, qcl_lower, qci_lower, moisture_indices);
 
     // Compute virtual potential temperature gradient
     amrex::Real theta_upper = cell_data(i,j,k+1,RhoTheta_comp)/cell_data(i,j,k+1,Rho_comp);
