@@ -53,7 +53,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
         Real l_abs_g = const_grav;
         Real l_inv_theta0 = 1.0 / turbChoice.theta_ref;  // or whatever reference theta you use
         bool l_use_moisture = moisture_indices.qv > 0;
-        int l_rho_qv_comp = moisture_indices.qv ;
+        int  l_rho_qv_comp = moisture_indices.qv;
         bool l_use_smag_stratification = turbChoice.use_smag_stratification;
 
     #ifdef _OPENMP
@@ -607,11 +607,11 @@ void ComputeTurbulentViscosity (const MultiFab& xvel , const MultiFab& yvel,
 
         // Create moisture indices struct once here
         MoistureComponentIndices moisture_indices(solverChoice.RhoQv_comp,
-                                                solverChoice.RhoQc_comp,
-                                                solverChoice.RhoQi_comp,
-                                                solverChoice.RhoQr_comp,
-                                                solverChoice.RhoQs_comp,
-                                                solverChoice.RhoQg_comp);
+                                                  solverChoice.RhoQc_comp,
+                                                  solverChoice.RhoQi_comp,
+                                                  solverChoice.RhoQr_comp,
+                                                  solverChoice.RhoQs_comp,
+                                                  solverChoice.RhoQg_comp);
 
         ComputeTurbulentViscosityLES(Tau_lev,
                                      cons_in, eddyViscosity,

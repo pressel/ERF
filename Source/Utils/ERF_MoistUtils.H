@@ -30,11 +30,14 @@ struct MoistureComponentIndices {
 /**
  * Extract moisture variables and partition into liquid/ice phases
  */
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-void GetMoistureAtLevel(int i, int j, int k,
-                       const amrex::Array4<amrex::Real const>& cell_data,
-                       amrex::Real& qv, amrex::Real& qc_liquid, amrex::Real& qc_ice,
-                       const MoistureComponentIndices& moisture_indices)
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+void GetMoistureAtLevel (int i, int j, int k,
+                         const amrex::Array4<amrex::Real const>& cell_data,
+                         amrex::Real& qv,
+                         amrex::Real& qc_liquid,
+                         amrex::Real& qc_ice,
+                         const MoistureComponentIndices& moisture_indices)
 {
     qv = 0.0; qc_liquid = 0.0; qc_ice = 0.0;
 
@@ -69,9 +72,12 @@ void GetMoistureAtLevel(int i, int j, int k,
 /**
  * Compute virtual potential temperature with moisture loading effects
  */
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-amrex::Real ComputeVirtualPotentialTemperature(amrex::Real theta, amrex::Real qv,
-                                              amrex::Real qc_liquid, amrex::Real qc_ice)
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real ComputeVirtualPotentialTemperature (amrex::Real theta,
+                                                amrex::Real qv,
+                                                amrex::Real qc_liquid,
+                                                amrex::Real qc_ice)
 {
     amrex::Real qc_total = qc_liquid + qc_ice;
     return theta * (1.0 + 0.61*qv - qc_total);
@@ -80,11 +86,14 @@ amrex::Real ComputeVirtualPotentialTemperature(amrex::Real theta, amrex::Real qv
 /**
  * Compute moist stratification accounting for conditional instability
  */
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-amrex::Real ComputeMoistStratification(int i, int j, int k,
-                                      const amrex::Array4<amrex::Real const>& cell_data,
-                                      amrex::Real dzInv, amrex::Real abs_g, amrex::Real inv_theta0,
-                                      const MoistureComponentIndices& moisture_indices)
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real ComputeMoistStratification (int i, int j, int k,
+                                        const amrex::Array4<amrex::Real const>& cell_data,
+                                        amrex::Real dzInv,
+                                        amrex::Real abs_g,
+                                        amrex::Real inv_theta0,
+                                        const MoistureComponentIndices& moisture_indices)
 {
     // Get moisture at three levels
     amrex::Real qv, qc_liquid, qc_ice;
@@ -139,12 +148,16 @@ amrex::Real ComputeMoistStratification(int i, int j, int k,
 /**
  * Compute stratification for Smagorinsky scheme (moist or dry)
  */
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-amrex::Real ComputeStratificationForSmagorinsky(int i, int j, int k,
-                                               const amrex::Array4<amrex::Real const>& cell_data,
-                                               amrex::Real dzInv, amrex::Real abs_g, amrex::Real inv_theta0,
-                                               bool use_moisture, int rho_qv_comp,
-                                               const MoistureComponentIndices& moisture_indices)
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real ComputeStratificationForSmagorinsky (int i, int j, int k,
+                                                 const amrex::Array4<amrex::Real const>& cell_data,
+                                                 amrex::Real dzInv,
+                                                 amrex::Real abs_g,
+                                                 amrex::Real inv_theta0,
+                                                 bool use_moisture,
+                                                 int rho_qv_comp,
+                                                 const MoistureComponentIndices& moisture_indices)
 {
     if (use_moisture && (rho_qv_comp >= 0)) {
         // Moist stratification with virtual temperature and conditional instability
