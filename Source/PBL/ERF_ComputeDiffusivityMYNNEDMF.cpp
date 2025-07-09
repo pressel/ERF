@@ -4189,10 +4189,6 @@ ComputeDiffusivityMYNNEDMF (const MultiFab& xvel,
                             const std::unique_ptr<MultiFab>& z_phys_nd,
                             const MoistureComponentIndices& moisture_indices)
 {
-    const int RhoQv_comp = moisture_indices.qv;
-    const int RhoQc_comp = moisture_indices.qc;
-    const int RhoQr_comp = moisture_indices.qr;
-
     Print()<<"reached mynnedmf"<<std::endl;
     {
       int n=1;

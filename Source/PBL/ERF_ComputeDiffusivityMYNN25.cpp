@@ -28,10 +28,6 @@ ComputeDiffusivityMYNN25 (const MultiFab& xvel,
     auto mynn     = turbChoice.pbl_mynn;
     auto level2   = turbChoice.pbl_mynn_level2;
 
-    const int RhoQv_comp = moisture_indices.qv;
-    const int RhoQc_comp = moisture_indices.qc;
-    const int RhoQr_comp = moisture_indices.qr;
-
     Real Lt_alpha = (mynn.config == MYNNConfigType::CHEN2021) ? 0.1 : 0.23;
 
     // Dirichlet flags to switch derivative stencil

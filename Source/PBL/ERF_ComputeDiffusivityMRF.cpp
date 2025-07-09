@@ -197,9 +197,6 @@ ComputeDiffusivityMRF (const MultiFab& xvel,
                 const Real lambda = 150.0;
                 const Real lscale = (KAPPA * zval * lambda) / (KAPPA * zval + lambda);
                 Real dthetadz, dudz, dvdz;
-                const int RhoQv_comp = -1;
-                const int RhoQc_comp = -1;
-                const int RhoQr_comp = -1;
                 ComputeVerticalDerivativesPBL(i, j, k, uvel, vvel, cell_data, izmin, izmax, 1.0 / dz_terrain,
                                               c_ext_dir_on_zlo, c_ext_dir_on_zhi, u_ext_dir_on_zlo,
                                               u_ext_dir_on_zhi, v_ext_dir_on_zlo, v_ext_dir_on_zhi, dthetadz,
