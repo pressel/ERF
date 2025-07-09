@@ -9,7 +9,6 @@
 #include "ERF_IndexDefines.H"
 #include "ERF_Constants.H"
 #include "ERF_EOS.H"
-#include "ERF_MoistUtils.H"
 
 void
 ComputeTurbulentViscosity (const amrex::MultiFab& xvel ,

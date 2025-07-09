@@ -82,6 +82,40 @@ amrex::Real GetThetav (int i, int j, int k,
 }
 
 /**
+ * Compute linearized liquid-water potential temperature
+ */
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real ComputeLiquidWaterPotentialTemperature (amrex::Real theta,
+                                                    amrex::Real T,
+                                                    amrex::Real qc_liquid)
+{
+    return theta - (theta / T) * (L_v / Cp_d) * qc_liquid;
+}
+
+/**
+ * Wrapper around ComputeLiquidWaterPotentialTemperature
+ */
+AMREX_GPU_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real GetThetal (int i, int j, int k,
+                       const amrex::Array4<amrex::Real const>& cell_data,
+                       const MoistureComponentIndices& moisture_indices)
+{
+    amrex::Real qv, qcl, qci;
+    GetMoistureVars(i, j, k, cell_data, qv, qcl, qci, moisture_indices);
+
+    amrex::Real theta = cell_data(i, j, k, RhoTheta_comp) / cell_data(i, j, k, Rho_comp);
+
+    amrex::Real T = getTgivenRandRTh(cell_data(i, j, k, Rho_comp),
+                                     cell_data(i, j, k, RhoTheta_comp),
+                                     qv);
+
+    return ComputeLiquidWaterPotentialTemperature(theta, T, qcl);
+}
+
+
+/**
  * Compute moist stratification accounting for conditional instability
  */
 AMREX_GPU_DEVICE

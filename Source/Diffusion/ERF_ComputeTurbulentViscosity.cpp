@@ -6,7 +6,7 @@
 #include "ERF_PBLModels.H"
 #include "ERF_TileNoZ.H"
 #include "ERF_TerrainMetrics.H"
-#include "ERF_MoistTheta.H"
+#include "ERF_MoistUtils.H"
 
 using namespace amrex;
 
@@ -229,11 +229,11 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
 
                 Real dtheta_dz;
                 if (use_thetav_grad) {
-                    dtheta_dz = 0.5 * ( Thetav(i, j, k+1, cell_data, RhoQv_comp, RhoQc_comp, RhoQr_comp)
-                                      - Thetav(i, j, k-1, cell_data, RhoQv_comp, RhoQc_comp, RhoQr_comp) )*dzInv;
+                    dtheta_dz = 0.5 * ( GetThetav(i, j, k+1, cell_data, moisture_indices)
+                                      - GetThetav(i, j, k-1, cell_data, moisture_indices) )*dzInv;
                 } else if (use_thetal_grad) {
-                    dtheta_dz = 0.5 * ( Thetal(i, j, k+1, cell_data, RhoQv_comp, RhoQc_comp, RhoQr_comp)
-                                      - Thetal(i, j, k-1, cell_data, RhoQv_comp, RhoQc_comp, RhoQr_comp) )*dzInv;
+                    dtheta_dz = 0.5 * ( GetThetal(i, j, k+1, cell_data, moisture_indices)
+                                      - GetThetal(i, j, k-1, cell_data, moisture_indices) )*dzInv;
                 } else {
                     dtheta_dz = 0.5 * ( cell_data(i, j, k+1, RhoTheta_comp) / cell_data(i, j, k+1, Rho_comp)
                                       - cell_data(i, j, k-1, RhoTheta_comp) / cell_data(i, j, k-1, Rho_comp) )*dzInv;
