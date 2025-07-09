@@ -55,7 +55,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
 
         // Define variables that need to be captured in the lambda
         Real l_abs_g = const_grav;
-        Real l_inv_theta0 = 1.0 / turbChoice.theta_ref;  // or whatever reference theta you use
+        const bool use_ref_theta = (turbChoice.theta_ref > 0);
         bool l_use_moisture = moisture_indices.qv > 0;
         int  l_rho_qv_comp = moisture_indices.qv;
         bool l_use_smag_stratification = turbChoice.use_smag_stratification;
@@ -125,8 +125,11 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
 
                 if (l_use_smag_stratification) {
                     // ENHANCED SMAGORINSKY: Our moist stratification approach
+                    Real inv_theta = (use_ref_theta) ? 1.0 / turbChoice.theta_ref
+                                                     : cell_data(i,j,k,Rho_comp) /
+                                                       cell_data(i,j,k,RhoTheta_comp);
                     Real stratification = ComputeStratificationForSmagorinsky(
-                        i, j, k, cell_data, dzInv, l_abs_g, l_inv_theta0,
+                        i, j, k, cell_data, dzInv, l_abs_g, inv_theta,
                         l_use_moisture, l_rho_qv_comp, moisture_indices);
 
                     // Stability-limited mixing length
