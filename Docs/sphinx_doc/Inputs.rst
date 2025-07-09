@@ -1000,11 +1000,15 @@ List of Parameters
 |                                  | downgradient       |                     |              |
 |                                  | diffusion term     |                     |              |
 +----------------------------------+--------------------+---------------------+--------------+
-| **erf.theta_ref**                | Reference potential| Real                | 300.0        |
+| **erf.theta_ref**                | Reference potential| Real                | 0.0          |
 |                                  | temperature used   |                     |              |
 |                                  | to characterize    |                     |              |
 |                                  | stable             |                     |              |
-|                                  | stratficiation     |                     |              |
+|                                  | stratficiation;    |                     |              |
+|                                  | constant if > 0,   |                     |              |
+|                                  | otherwise the      |                     |              |
+|                                  | instantaneous local|                     |              |
+|                                  | value is used      |                     |              |
 +----------------------------------+--------------------+---------------------+--------------+
 | **erf.Pr_t**                     | Turbulent Prandtl  | Real                | 1.0          |
 |                                  | Number             |                     |              |
