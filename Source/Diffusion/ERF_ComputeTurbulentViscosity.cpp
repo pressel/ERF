@@ -53,7 +53,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
         Real l_abs_g = const_grav;
         Real l_inv_theta0 = 1.0 / turbChoice.theta_ref;  // or whatever reference theta you use
         bool l_use_moisture = moisture_indices.qv > 0;
-        int l_rho_qv_comp = moisture_indices.qv ;
+        int  l_rho_qv_comp = moisture_indices.qv;
         bool l_use_smag_stratification = turbChoice.use_smag_stratification;
 
     #ifdef _OPENMP
@@ -101,6 +101,19 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     dzInv /= Compute_h_zeta_AtCellCenter(i,j,k, cellSizeInv, z_nd_arr);
                 }
 
+                Real Delta;
+                Real DeltaH;
+                if (isotropic) {
+                    Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
+                    Delta = std::cbrt(cellVolMsf);
+                    DeltaH = Delta;
+                } else { // separate horizontal/vertical length scales
+                    // Typically, dx and dy >> dz
+                    // If using enhanced Smagorinsky, dz is the more meaningful grid scale
+                    Delta = 1.0 / dzInv;
+                    DeltaH = std::sqrt(1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0)));
+                }
+
                 // =====================================================================
                 // MIXING LENGTH CALCULATION: STANDARD vs ADJUSTED
                 // =====================================================================
@@ -111,9 +124,6 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     Real stratification = ComputeStratificationForSmagorinsky(
                         i, j, k, cell_data, dzInv, l_abs_g, l_inv_theta0,
                         l_use_moisture, l_rho_qv_comp, moisture_indices);
-
-                    Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
-                    Real Delta = std::cbrt(cellVolMsf);
 
                     // Stability-limited mixing length
                     mixing_length = Delta;
@@ -130,20 +140,26 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
 
                 } else {
                     // STANDARD SMAGORINSKY: Grid-scale mixing length only
-                    Real cellVolMsf = 1.0 / (dxInv * mf_u(i,j,0) * dyInv * mf_v(i,j,0) * dzInv);
-                    mixing_length = std::cbrt(cellVolMsf);  // Always use grid scale
+                    mixing_length = Delta;  // Always use grid scale
                 }
 
                 // =====================================================================
-                // EDDY VISCOSITY CALCULATION (same for both approaches)
+                // EDDY VISCOSITY CALCULATION (same for standard/enhanced)
                 // =====================================================================
                 Real CsDeltaSqr = Cs * Cs * mixing_length * mixing_length;
-                mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
 
-                if (smag2d) {
-                    mu_turb(i, j, k, EddyDiff::Mom_v) = 0.0;
-                } else {
+                if (isotropic) {
+                    mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
                     mu_turb(i, j, k, EddyDiff::Mom_v) = mu_turb(i, j, k, EddyDiff::Mom_h);
+
+                } else { // anisotropic or smag2d
+                    Real CsDeltaHSqr = Cs * Cs * DeltaH * DeltaH;
+                    mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaHSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
+                    if (smag2d) {
+                        mu_turb(i, j, k, EddyDiff::Mom_v) = 0.0;
+                    } else {
+                        mu_turb(i, j, k, EddyDiff::Mom_v) = CsDeltaSqr * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
+                    }
                 }
 
                 // =====================================================================
@@ -588,21 +604,12 @@ void ComputeTurbulentViscosity (const MultiFab& xvel , const MultiFab& yvel,
 
     if (turbChoice.les_type != LESType::None) {
         impose_phys_bcs = true;
-
-        // Create moisture indices struct once here
-        MoistureComponentIndices moisture_indices(solverChoice.RhoQv_comp,
-                                                solverChoice.RhoQc_comp,
-                                                solverChoice.RhoQi_comp,
-                                                solverChoice.RhoQr_comp,
-                                                solverChoice.RhoQs_comp,
-                                                solverChoice.RhoQg_comp);
-
         ComputeTurbulentViscosityLES(Tau_lev,
                                      cons_in, eddyViscosity,
                                      Hfx1, Hfx2, Hfx3, Diss,
                                      geom, use_terrain_fitted_coords,
                                      mapfac, z_phys_nd, turbChoice, const_grav,
-                                     SurfLayer, moisture_indices);
+                                     SurfLayer, solverChoice.moisture_indices);
     }
 
     if (turbChoice.rans_type != RANSType::None) {
@@ -621,26 +628,26 @@ void ComputeTurbulentViscosity (const MultiFab& xvel , const MultiFab& yvel,
                                  geom, turbChoice, SurfLayer,
                                  use_terrain_fitted_coords, use_moisture,
                                  level, bc_ptr, vert_only, z_phys_nd,
-                                 solverChoice.RhoQv_comp, solverChoice.RhoQc_comp,
-                                 solverChoice.RhoQr_comp);
+                                 solverChoice.moisture_indices);
     } else if (turbChoice.pbl_type == PBLType::MYNNEDMF) {
         ComputeDiffusivityMYNNEDMF(xvel, yvel, cons_in, eddyViscosity,
                                    geom, turbChoice, SurfLayer,
                                    use_terrain_fitted_coords, use_moisture,
                                    level, bc_ptr, vert_only, z_phys_nd,
-                                   solverChoice.RhoQv_comp, solverChoice.RhoQc_comp,
-                                   solverChoice.RhoQr_comp);
+                                   solverChoice.moisture_indices);
     } else if (turbChoice.pbl_type == PBLType::YSU) {
         ComputeDiffusivityYSU(xvel, yvel, cons_in, eddyViscosity,
                               geom, turbChoice, SurfLayer,
                               use_terrain_fitted_coords, use_moisture,
-                              level, bc_ptr, vert_only, z_phys_nd);
+                              level, bc_ptr, vert_only, z_phys_nd,
+                              solverChoice.moisture_indices);
     }
     else if (turbChoice.pbl_type == PBLType::MRF) {
         ComputeDiffusivityMRF(xvel, yvel, cons_in, eddyViscosity,
                               geom, turbChoice, SurfLayer,
                               use_terrain_fitted_coords, use_moisture,
-                              level, bc_ptr, vert_only, z_phys_nd);
+                              level, bc_ptr, vert_only, z_phys_nd,
+                              solverChoice.moisture_indices);
     }
 
     //

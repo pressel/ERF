@@ -21,7 +21,8 @@ ComputeDiffusivityMRF (const MultiFab& xvel,
                        int level,
                        const BCRec* bc_ptr,
                        bool /*vert_only*/,
-                       const std::unique_ptr<MultiFab>& z_phys_nd)
+                       const std::unique_ptr<MultiFab>& z_phys_nd,
+                       const MoistureComponentIndices& moisture_indices)
 {
     /*
     Implementation of the older MRF Scheme based on Hong and Pan (1996)
@@ -202,7 +203,7 @@ ComputeDiffusivityMRF (const MultiFab& xvel,
                 ComputeVerticalDerivativesPBL(i, j, k, uvel, vvel, cell_data, izmin, izmax, 1.0 / dz_terrain,
                                               c_ext_dir_on_zlo, c_ext_dir_on_zhi, u_ext_dir_on_zlo,
                                               u_ext_dir_on_zhi, v_ext_dir_on_zlo, v_ext_dir_on_zhi, dthetadz,
-                                              dudz, dvdz, RhoQv_comp, RhoQc_comp, RhoQr_comp);
+                                              dudz, dvdz, moisture_indices);
                 const Real wind_shear = dudz * dudz + dvdz * dvdz + 1.0e-9;
                 const Real theta   = cell_data(i, j, k, RhoTheta_comp) / cell_data(i, j, k, Rho_comp);
                 const Real grad_Ri = std::max(CONST_GRAV / theta * dthetadz / wind_shear, -100.0);

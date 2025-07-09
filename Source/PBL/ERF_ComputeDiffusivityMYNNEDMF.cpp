@@ -4187,10 +4187,12 @@ ComputeDiffusivityMYNNEDMF (const MultiFab& xvel,
                             const BCRec* bc_ptr,
                             bool /*vert_only*/,
                             const std::unique_ptr<MultiFab>& z_phys_nd,
-                            const int RhoQv_comp,
-                            const int RhoQc_comp,
-                            const int RhoQr_comp)
+                            const MoistureComponentIndices& moisture_indices)
 {
+    const int RhoQv_comp = moisture_indices.qv;
+    const int RhoQc_comp = moisture_indices.qc;
+    const int RhoQr_comp = moisture_indices.qr;
+
     Print()<<"reached mynnedmf"<<std::endl;
     {
       int n=1;
@@ -4314,7 +4316,7 @@ ComputeDiffusivityMYNNEDMF (const MultiFab& xvel,
                                           u_ext_dir_on_zlo, u_ext_dir_on_zhi,
                                           v_ext_dir_on_zlo, v_ext_dir_on_zhi,
                                           dthetadz, dudz, dvdz,
-                                          RhoQv_comp, RhoQc_comp, RhoQr_comp);
+                                          moisture_indices);
 
             // Spatially varying MOST
             Real theta0 = tm_arr(i,j,0);
