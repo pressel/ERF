@@ -413,13 +413,18 @@ public:
 
     void init_thin_body (int lev, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm);
 
-    void init_coarse_weather_data(const std::string& filename,
-                                    amrex::Geometry& geom_weather,
-                                    amrex::BoxArray& nba,
-                                    amrex::DistributionMapping& dm,
-                                    amrex::Vector<amrex::MultiFab>& weather_forecast_data);
+    void CreateWeatherDataGeomBoxArrayDistMap(const std::string& filename,
+                                              amrex::Geometry& geom_weather,
+                                              amrex::BoxArray& nba,
+                                              amrex::DistributionMapping& dm);
 
-    void interp_weather_data_onto_mesh(const amrex::Geometry& geom_weather,
+    void FillWeatherDataMultiFab(const std::string& filename,
+                                 const amrex::Geometry& geom_weather,
+                                 const amrex::BoxArray& nba,
+                                 const amrex::DistributionMapping& dm,
+                                 amrex::Vector<amrex::MultiFab>& weather_forecast_data);
+
+    void InterpWeatherDataOntoMesh(const amrex::Geometry& geom_weather,
                                        amrex::MultiFab& weather_forecast_interp);
 
     void WeatherDataInterpolation(const amrex::Real time);
