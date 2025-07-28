@@ -105,20 +105,19 @@
         // *****************************************************************************
         // Define the pressure gradient
         // *****************************************************************************
-        BCRec const* bcrec_ptr = domain_bcs_type_d.data();
         make_gradp_pert(level, solverChoice, fine_geom, S_data,
-                        p0_to_use, *zpn_to_use, *zpc_to_use, bcrec_ptr, get_eb(level), gradp[level]);
+                        p0_to_use, *zpn_to_use, *zpc_to_use, get_eb(level), gradp[level]);
 
         // *****************************************************************************
         // Define the buoyancy forcing term in the z-direction
         // *****************************************************************************
         make_buoyancy(S_data, S_prim, qt, buoyancy, fine_geom, solverChoice, base_to_use,
-                      micro->Get_Qstate_Moist_Size(), solverChoice.anelastic[level]);
+                      micro->Get_Qstate_Moist_Size(), get_eb(level), solverChoice.anelastic[level]);
 
         // *****************************************************************************
         // Make remaining (not gradp or buoyancy) momentum sources
         // *****************************************************************************
-        make_mom_sources(old_stage_time, S_data, *zpn_to_use, *zpc_to_use,
+        make_mom_sources(old_stage_time, S_data, *zpn_to_use, *zpc_to_use, stretched_dz_h[level],
                          xvel_new, yvel_new, zvel_new,
                          xmom_src, ymom_src, zmom_src,
                          base_to_use, forest_drag, terrain_blank,

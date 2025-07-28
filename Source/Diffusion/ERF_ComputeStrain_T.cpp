@@ -45,13 +45,14 @@ ComputeStrain_T (Box bxcc, Box tbxxy, Box tbxxz, Box tbxyz, Box domain,
                  Array4<Real>& tau23, Array4<Real>& tau32,
                  const Array4<const Real>& z_nd,
                  const Array4<const Real>& detJ,
-                 const BCRec* bc_ptr, const GpuArray<Real, AMREX_SPACEDIM>& dxInv,
+                 const GpuArray<Real, AMREX_SPACEDIM>& dxInv,
                  const Array4<const Real>& mf_mx,
                  const Array4<const Real>& mf_ux,
                  const Array4<const Real>& mf_vx,
                  const Array4<const Real>& mf_my,
                  const Array4<const Real>& mf_uy,
-                 const Array4<const Real>& mf_vy)
+                 const Array4<const Real>& mf_vy,
+                 const BCRec* bc_ptr)
 {
     // Convert domain to each index type to test if we are on dirichlet boundary
     Box domain_xy = convert(domain, tbxxy.ixType());
@@ -421,6 +422,8 @@ ComputeStrain_T (Box bxcc, Box tbxxy, Box tbxxz, Box tbxyz, Box domain,
             Real met_h_xi;
             met_h_xi   = Compute_h_xi_AtEdgeCenterJ  (i,j,k,dxInv,z_nd);
 
+            // Note: u(i,j,k) and u(i,j,k+1) are located at cell centers
+            //       whereas u(i,j,k-1) is the value on the boundary
             tau13(i,j,k) = 0.5 * ( (c1 * u(i,j,k-1) + c2 * u(i,j,k) + c3 * u(i,j,k+1))*idz0
                                  + ( (w(i, j, k) - w(i-1, j, k))*dxInv[0]
                                    - (met_h_xi)*GradWz ) * mfx );
@@ -476,6 +479,8 @@ ComputeStrain_T (Box bxcc, Box tbxxy, Box tbxxz, Box tbxyz, Box domain,
             Real met_h_eta;
             met_h_eta  = Compute_h_eta_AtEdgeCenterI (i,j,k,dxInv,z_nd);
 
+            // Note: v(i,j,k) and v(i,j,k+1) are located at cell centers
+            //       whereas v(i,j,k-1) is the value on the boundary
             tau23(i,j,k) = 0.5 * ( (c1 * v(i,j,k-1) + c2 * v(i,j,k  ) + c3 * v(i,j,k+1))*idz0
                                  + ( (w(i, j, k) - w(i, j-1, k))*dxInv[1]
                                    - (met_h_eta)*GradWz ) * mfy );

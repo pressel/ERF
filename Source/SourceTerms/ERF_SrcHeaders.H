@@ -22,6 +22,7 @@ void make_buoyancy (const amrex::Vector<amrex::MultiFab>& S_data,
                     const SolverChoice& solverChoice,
                     const amrex::MultiFab& base_state,
                     const int n_qstate,
+                    const eb_& ebfact,
                     const int anelastic);
 
 void make_gradp_pert (int level,
@@ -31,7 +32,6 @@ void make_gradp_pert (int level,
                       amrex::MultiFab& p0,
                       amrex::MultiFab& z_phys_nd,
                       amrex::MultiFab& z_phys_cc,
-                      amrex::BCRec const* bcrec_ptr,
                       const eb_& ebfact,
                       amrex::Vector<amrex::MultiFab>& gradp);
 
@@ -39,7 +39,6 @@ void compute_gradp (const amrex::MultiFab& p,
                     const amrex::Geometry& geom,
                     amrex::MultiFab& z_phys_nd,
                     amrex::MultiFab& z_phys_cc,
-                    amrex::BCRec const* bcrec_ptr,
                     const eb_& ebfact,
                     amrex::Vector<amrex::MultiFab>& gradp,
                     const SolverChoice& solverChoice);
@@ -68,6 +67,7 @@ void make_mom_sources (amrex::Real time,
                        const amrex::Vector<amrex::MultiFab>& S_data,
                              amrex::MultiFab& z_phys_nd,
                              amrex::MultiFab& z_phys_cc,
+                             amrex::Vector<amrex::Real>& stretched_dz_h,
                        const amrex::MultiFab& xvel,
                        const amrex::MultiFab& yvel,
                        const amrex::MultiFab& zvel,
@@ -87,8 +87,8 @@ void make_mom_sources (amrex::Real time,
                        const amrex::Real* dptr_wbar_sub,
                        const amrex::Vector<amrex::Real*> d_rayleigh_ptrs_at_lev,
                        const amrex::Vector<amrex::Real*> d_sponge_ptrs_at_lev,
-                       InputSoundingData& input_sounding_data,
-                       bool is_slow_step);
+                             InputSoundingData& input_sounding_data,
+                             bool is_slow_step);
 
 void add_thin_body_sources (amrex::MultiFab& xmom_source,
                             amrex::MultiFab& ymom_source,

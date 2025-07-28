@@ -64,9 +64,6 @@ std::string ERF::nc_bdy_file; // Must provide via input
 // NetCDF wrflow (bottom boundary) file
 std::string ERF::nc_low_file; // Must provide via input
 
-// Flag to trigger initialization from input_sounding like WRF's ideal.exe
-bool ERF::init_sounding_ideal = false;
-
 // 1D NetCDF output (for ingestion by AMR-Wind)
 int  ERF::output_1d_column = 0;
 int  ERF::column_interval  = -1;
@@ -201,6 +198,39 @@ ERF::ERF_shared ()
         }
 
         // Redefine the problem domain here?
+    }
+
+    // Get lo/hi indices for massflux calc
+    if ((solverChoice.const_massflux_u != 0) || (solverChoice.const_massflux_v != 0)) {
+        if (solverChoice.mesh_type == MeshType::ConstantDz) {
+            const Real massflux_zlo = solverChoice.const_massflux_layer_lo - geom[0].ProbLo(2);
+            const Real massflux_zhi = solverChoice.const_massflux_layer_hi - geom[0].ProbLo(2);
+            const Real dz = geom[0].CellSize(2);
+            if (massflux_zlo == -1e34) {
+                solverChoice.massflux_klo = geom[0].Domain().smallEnd(2);
+            } else {
+                solverChoice.massflux_klo = static_cast<int>(std::ceil(massflux_zlo / dz - 0.5));
+            }
+            if (massflux_zhi ==  1e34) {
+                solverChoice.massflux_khi = geom[0].Domain().bigEnd(2);
+            } else {
+                solverChoice.massflux_khi = static_cast<int>(std::floor(massflux_zhi / dz - 0.5));
+            }
+        } else if (solverChoice.mesh_type == MeshType::StretchedDz) {
+            const Real massflux_zlo = solverChoice.const_massflux_layer_lo;
+            const Real massflux_zhi = solverChoice.const_massflux_layer_hi;
+            solverChoice.massflux_klo = geom[0].Domain().smallEnd(2);
+            solverChoice.massflux_khi = geom[0].Domain().bigEnd(2) + 1;
+            for (int k=0; k <= geom[0].Domain().bigEnd(2)+1; ++k) {
+                if (zlevels_stag[0][k] <= massflux_zlo) solverChoice.massflux_klo = k;
+                if (zlevels_stag[0][k] <= massflux_zhi) solverChoice.massflux_khi = k;
+            }
+        } else { // solverChoice.mesh_type == MeshType::VariableDz
+            Error("Const massflux with variable dz not supported -- planar averages are on k rather than constant-z planes");
+        }
+
+        Print() << "Constant mass flux based on k in ["
+            << solverChoice.massflux_klo << ", " << solverChoice.massflux_khi << "]" << std::endl;
     }
 
     prob = amrex_probinit(geom[0].ProbLo(),geom[0].ProbHi());
@@ -726,9 +756,11 @@ ERF::InitData_pre ()
         // BC compatibility
         if ( ( (solverChoice.turbChoice[lev].pbl_type == PBLType::MYNN25)   ||
                (solverChoice.turbChoice[lev].pbl_type == PBLType::MYNNEDMF) ||
-               (solverChoice.turbChoice[lev].pbl_type == PBLType::YSU)       ) &&
+               (solverChoice.turbChoice[lev].pbl_type == PBLType::YSU) ||
+               (solverChoice.turbChoice[lev].pbl_type == PBLType::MRF)
+                   ) &&
             phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::surface_layer ) {
-            Abort("MYNN2.5/MYNNEDMF/YSU PBL Model requires MOST at lower boundary");
+            Abort("MYNN2.5/MYNNEDMF/YSU/MRF PBL Model requires MOST at lower boundary");
         }
         if ( (solverChoice.turbChoice[lev].les_type == LESType::Deardorff) &&
              (solverChoice.turbChoice[lev].Ce_wall > 0) &&
@@ -737,6 +769,17 @@ ERF::InitData_pre ()
              (phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::no_slip_wall) )
         {
             Warning("Deardorff LES assumes wall at zlo when applying Ce_wall");
+        }
+
+        if ( (solverChoice.const_massflux_u != 0) &&
+             (phys_bc_type[Orientation(Direction::x,Orientation::low)] != ERF_BC::periodic ) )
+        {
+            Abort("Constant mass flux (in x) should be used with periodic boundaries");
+        }
+        if ( (solverChoice.const_massflux_v != 0) &&
+             (phys_bc_type[Orientation(Direction::y,Orientation::low)] != ERF_BC::periodic ) )
+        {
+            Abort("Constant mass flux (in y) should be used with periodic boundaries");
         }
 
         // mesoscale diffusion
@@ -781,6 +824,10 @@ ERF::InitData_post ()
 
 #ifdef ERF_USE_PARTICLES
         if (Microphysics::modelType(solverChoice.moisture_type) == MoistureModelType::Lagrangian) {
+            if (solverChoice.moisture_tight_coupling) {
+                Warning("Tight coupling has not been tested with Lagrangian microphysics");
+            }
+
             for (int lev = 0; lev <= finest_level; lev++) {
                 dynamic_cast<LagrangianMicrophysics&>(*micro).initParticles(z_phys_nd[lev]);
             }
@@ -1051,6 +1098,27 @@ ERF::InitData_post ()
 
     ComputeDt();
 
+    // Check the viscous limit
+    DiffChoice dc = solverChoice.diffChoice;
+    if (dc.molec_diff_type == MolecDiffType::Constant ||
+        dc.molec_diff_type == MolecDiffType::ConstantAlpha) {
+        Real delta = std::min({geom[finest_level].CellSize(0),
+                               geom[finest_level].CellSize(1),
+                               dz_min[finest_level]});
+        if (dc.dynamic_viscosity == 0) {
+            Print() << "Note: Molecular diffusion specified but dynamic_viscosity has not been specified" << std::endl;
+        } else {
+            Real nu = dc.dynamic_viscosity / dc.rho0_trans;
+            Real viscous_limit = 0.5 * delta*delta / nu;
+            Print() << "Viscous CFL is " << dt[finest_level] / viscous_limit << std::endl;
+            if (fixed_dt[finest_level] >= viscous_limit) {
+                Warning("Specified fixed_dt is above the viscous limit");
+            } else if (dt[finest_level] >= viscous_limit) {
+                Warning("Adaptive dt based on convective CFL only is above the viscous limit");
+            }
+        }
+    }
+
     // Fill ghost cells/faces
     for (int lev = 0; lev <= finest_level; ++lev)
     {
@@ -1184,7 +1252,7 @@ ERF::InitData_post ()
                 MultiFab::Copy(  *Qv_prim[lev], vars_new[lev][Vars::cons], RhoQ1_comp, 0, 1, ng);
                 MultiFab::Divide(*Qv_prim[lev], vars_new[lev][Vars::cons],   Rho_comp, 0, 1, ng);
 
-                int rhoqr_comp = solverChoice.RhoQr_comp;
+                int rhoqr_comp = solverChoice.moisture_indices.qr;
                 if (rhoqr_comp > -1) {
                     MultiFab::Copy(  *Qr_prim[lev], vars_new[lev][Vars::cons], rhoqr_comp, 0, 1, ng);
                     MultiFab::Divide(*Qr_prim[lev], vars_new[lev][Vars::cons],   Rho_comp, 0, 1, ng);
@@ -1199,9 +1267,7 @@ ERF::InitData_post ()
                 // we don't want to call update_fluxes multiple times because
                 // it will change u* and theta* from their previous values
                 m_SurfaceLayer->update_pblh(lev, vars_new, z_phys_cc[lev].get(),
-                                            solverChoice.RhoQv_comp,
-                                            solverChoice.RhoQc_comp,
-                                            solverChoice.RhoQr_comp);
+                                            solverChoice.moisture_indices);
                 m_SurfaceLayer->update_fluxes(lev, time);
             }
         }
@@ -1475,10 +1541,6 @@ ERF::init_only (int lev, Real time)
 
     // Initialize background flow (optional)
     if (solverChoice.init_type == InitType::Input_Sounding) {
-        // The base state is initialized by integrating vertically through the
-        // input sounding, if the init_sounding_ideal flag is set; otherwise
-        // it is set by initHSE()
-
         // The physbc's need the terrain but are needed for initHSE
         // We have already made the terrain in the call to init_zphys
         //    in MakeNewLevelFromScratch
@@ -1487,10 +1549,16 @@ ERF::init_only (int lev, Real time)
         // Now init the base state and the data itself
         init_from_input_sounding(lev);
 
-        if (init_sounding_ideal) {
+        // The base state has been initialized by integrating vertically
+        // through the sounding for ideal (like WRF) or isentropic approaches
+        if (solverChoice.sounding_type == SoundingType::Ideal ||
+            solverChoice.sounding_type == SoundingType::Isentropic ||
+            solverChoice.sounding_type == SoundingType::DryIsentropic) {
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(solverChoice.use_gravity,
                 "Gravity should be on to be consistent with sounding initialization.");
-        } else {
+        } else { // SoundingType::ConstantDensity
+            AMREX_ASSERT_WITH_MESSAGE(!solverChoice.use_gravity,
+                "Constant density probably doesn't make sense with gravity");
             initHSE();
         }
 
@@ -1706,9 +1774,6 @@ ERF::ReadParameters ()
         }
 
 #endif
-
-        // Flag to trigger initialization from input_sounding like WRF's ideal.exe
-        pp.query("init_sounding_ideal", init_sounding_ideal);
 
         // Options for vertical interpolation of met_em*.nc data.
         pp.query("metgrid_debug_quiescent",  metgrid_debug_quiescent);

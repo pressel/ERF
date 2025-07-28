@@ -54,7 +54,21 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba_in,
     SetDistributionMap(lev, dm);
 
     if (verbose) {
-        amrex::Print() <<" BA FROM SCRATCH AT LEVEL " << lev << " " << ba << std::endl;
+        amrex::Print() <<            "BA FROM SCRATCH AT LEVEL " << lev << " " << ba << std::endl;
+        amrex::Print() <<" SIMPLIFIED BA FROM SCRATCH AT LEVEL " << lev << " " << ba.simplified_list() << std::endl;
+    }
+
+    subdomains.resize(lev+1);
+    if ( (lev == 0) || (solverChoice.anelastic[lev] == 0 && !solverChoice.project_initial_velocity) ) {
+        BoxArray dom(geom[lev].Domain());
+        subdomains[lev].push_back(dom);
+    } else {
+        //
+        // Create subdomains at each level within the domain such that
+        // 1) all boxes in a given subdomain are "connected"
+        // 2) no boxes in a subdomain touch any boxes in any other subdomain
+        //
+        make_subdomains(ba.simplified_list(), subdomains[lev]);
     }
 
     if (lev == 0) init_bcs();
@@ -64,7 +78,11 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba_in,
     {
         const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
         const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
-        eb[lev]->make_factory(lev, geom[lev], grids[lev], dmap[lev], eb_level);
+        if (solverChoice.terrain_type == TerrainType::EB) {
+            eb[lev]->make_all_factories(lev, geom[lev], grids[lev], dmap[lev], eb_level);
+        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing) {
+            eb[lev]->make_cc_factory(lev, geom[lev], grids[lev], dmap[lev], eb_level);
+        }
     } else {
         // m_factory[lev] = std::make_unique<FabFactory<FArrayBox>>();
     }
@@ -156,7 +174,13 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba_in,
 
             // this will calculate the hydrostatically balanced density and pressure
             // profiles following WRF ideal.exe
-            if (init_sounding_ideal) input_sounding_data.calc_rho_p(0);
+            if (solverChoice.sounding_type == SoundingType::Ideal) {
+                input_sounding_data.calc_rho_p(0);
+            } else if (solverChoice.sounding_type == SoundingType::Isentropic ||
+                       solverChoice.sounding_type == SoundingType::DryIsentropic) {
+                input_sounding_data.assume_dry = (solverChoice.sounding_type == SoundingType::DryIsentropic);
+                input_sounding_data.calc_rho_p_isentropic(0);
+            }
         }
 
         // We re-create terrain_blanking on restart rather than storing it in the checkpoint
@@ -260,6 +284,24 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
         amrex::Print() <<" NEW BA FROM COARSE AT LEVEL " << lev << " " << ba << std::endl;
     }
 
+    //
+    // Grow the subdomains vector and build the subdomains vector at this level
+    //
+    subdomains.resize(lev+1);
+    //
+    // Create subdomains at each level within the domain such that
+    // 1) all boxes in a given subdomain are "connected"
+    // 2) no boxes in a subdomain touch any boxes in any other subdomain
+    //
+    if (solverChoice.anelastic[lev] == 0 && !solverChoice.project_initial_velocity) {
+        BoxArray dom(geom[lev].Domain());
+        subdomains[lev].push_back(dom);
+    } else {
+        make_subdomains(ba.simplified_list(), subdomains[lev]);
+    }
+
+    if (lev == 0) init_bcs();
+
     //********************************************************************************************
     // This allocates all kinds of things, including but not limited to: solution arrays,
     //      terrain arrays, metric terms and base state.
@@ -272,6 +314,17 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
     // ********************************************************************************************
     // Build the data structures for metric quantities used with terrain-fitted coordinates
     // ********************************************************************************************
+    if ( solverChoice.terrain_type == TerrainType::EB ||
+         solverChoice.terrain_type == TerrainType::ImmersedForcing)
+    {
+        const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
+        const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
+        if (solverChoice.terrain_type == TerrainType::EB) {
+            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
+        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing) {
+            eb[lev]->make_cc_factory(lev, geom[lev], ba, dm, eb_level);
+        }
+    }
     init_zphys(lev, time);
     update_terrain_arrays(lev);
 
@@ -315,9 +368,17 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
     make_physbcs(lev);
 
     // ********************************************************************************************
-    // Update the base state at this level by interpolation from coarser level (inside initHSE)
+    // Update the base state at this level by interpolation from coarser level
     // ********************************************************************************************
-    initHSE(lev);
+    InterpFromCoarseLevel(base_state[lev], base_state[lev].nGrowVect(),
+                            IntVect(0,0,0), // do not fill ghost cells outside the domain
+                            base_state[lev-1], 0, 0, base_state[lev].nComp(),
+                            geom[lev-1], geom[lev],
+                            refRatio(lev-1), &cell_cons_interp,
+                            domain_bcs_type, BCVars::cons_bc);
+
+    // Impose bc's outside the domain
+    (*physbcs_base[lev])(base_state[lev],0,base_state[lev].nComp(),base_state[lev].nGrowVect());
 
     // ********************************************************************************************
     // Build the data structures for calculating diffusive/turbulent terms
@@ -385,6 +446,15 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
         amrex::Print() <<"               OLD BA AT LEVEL " << lev << " " << ba_old << std::endl;
     }
 
+    //
+    // Re-define subdomain at this level within the domain such that
+    // 1) all boxes in a given subdomain are "connected"
+    // 2) no boxes in a subdomain touch any boxes in any other subdomain
+    //
+    if (solverChoice.anelastic[lev] == 1) {
+        make_subdomains(ba.simplified_list(), subdomains[lev]);
+    }
+
     int     ncomp_cons  = vars_new[lev][Vars::cons].nComp();
     IntVect ngrow_state = vars_new[lev][Vars::cons].nGrowVect();
 
@@ -405,6 +475,17 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
     // ********************************************************************************************
     // Build the data structures for terrain-related quantities
     // ********************************************************************************************
+    if ( solverChoice.terrain_type == TerrainType::EB ||
+         solverChoice.terrain_type == TerrainType::ImmersedForcing)
+    {
+        const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
+        const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
+        if (solverChoice.terrain_type == TerrainType::EB) {
+            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
+        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing) {
+            eb[lev]->make_cc_factory(lev, geom[lev], ba, dm, eb_level);
+        }
+    }
     remake_zphys(lev, time, temp_zphys_nd);
     update_terrain_arrays(lev);
 

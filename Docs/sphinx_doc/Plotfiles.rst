@@ -46,7 +46,7 @@ List of Parameters
 |                             |                  | Values                |            |
 +=============================+==================+=======================+============+
 | **erf.plotfile_type**       | AMReX or NETCDF  | "amrex" or            | "amrex"    |
-|                             |                  | "netcdf / "NetCDF" or |            |
+|                             |                  | "netcdf / "NetCDF"    |            |
 +-----------------------------+------------------+-----------------------+------------+
 | **erf.plot_file_1**         | prefix for       | String                | “*plt_1_*” |
 |                             | plotfiles        |                       |            |
@@ -90,7 +90,15 @@ List of Parameters
 |                             | variables to     |                       |            |
 |                             | include in       |                       |            |
 |                             | plotfiles        |                       |            |
-|                             | at seoncd freq.  |                       |            |
+|                             | at second freq.  |                       |            |
++-----------------------------+------------------+-----------------------+------------+
+| **erf.plot_face_vels**      | output plotfiles | Boolean               | false      |
+|                             | "{prefix}U",     |                       |            |
+|                             | "{prefix}V", and |                       |            |
+|                             | "{prefix}W"      |                       |            |
+|                             | with velocity    |                       |            |
+|                             | components on the|                       |            |
+|                             | staggered grid.  |                       |            |
 +-----------------------------+------------------+-----------------------+------------+
 
 The analogous list for subvolumes contains the following options:
