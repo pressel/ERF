@@ -673,7 +673,7 @@ ERF::post_timestep (int nstep, Real time, Real dt_lev0)
     {
         if (rad_datalog_int > 0 && (nstep+1) % rad_datalog_int == 0) {
             if (rad[0]->hasDatalog()) {
-                rad[0]->WriteDataLog(time);
+                rad[0]->WriteDataLog(time+start_time);
             }
         }
     }
@@ -906,8 +906,7 @@ ERF::InitData_post ()
                                                        start_bdy_time);
             Real dT = bdy_time_interval;
 
-            Real time_since_start_old = t_new[0] - start_bdy_time;
-            int n_time_old = static_cast<int>(time_since_start_old /  dT);
+            int n_time_old = static_cast<int>(t_new[0] /  dT);
 
             // I don't think this works if lev > 0 ...?
             AMREX_ALWAYS_ASSERT(finest_level == 0);
@@ -1179,10 +1178,10 @@ ERF::InitData_post ()
         //
         bool fillset = false;
         if (lev == 0) {
-            FillPatch(lev, t_new[lev],
+            FillPatchCrseLevel(lev, t_new[lev],
                       {&lev_new[Vars::cons],&lev_new[Vars::xvel],&lev_new[Vars::yvel],&lev_new[Vars::zvel]});
         } else {
-            FillPatch(lev, t_new[lev],
+            FillPatchFineLevel(lev, t_new[lev],
                       {&lev_new[Vars::cons],&lev_new[Vars::xvel],&lev_new[Vars::yvel],&lev_new[Vars::zvel]},
                       {&lev_new[Vars::cons],&rU_new[lev],&rV_new[lev],&rW_new[lev]},
                       base_state[lev], base_state[lev],
@@ -1313,7 +1312,7 @@ ERF::InitData_post ()
         m_SurfaceLayer = std::make_unique<SurfaceLayer>(geom, rotate, pp_prefix, Qv_prim,
                                                         z_phys_nd, solverChoice.terrain_type
 #ifdef ERF_USE_NETCDF
-                                                        ,start_bdy_time, bdy_time_interval
+                                                        , bdy_time_interval
 #endif
                                                         );
         // This call will allocate the arrays at each level. If we regrid later, either changing
