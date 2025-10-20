@@ -553,13 +553,13 @@ void erf_slow_rhs_pre (int level, int finest_level,
             int n_comp  = 1;
 
             if (l_use_stretched_dz) {
-                DiffusionSrcForState_S(bx, domain, n_start, n_comp, l_rotate, u, v,
+                DiffusionSrcForState_S(bx, domain, n_start, n_comp, u, v,
                                        cell_data, cell_prim, cell_rhs,
                                        diffflux_x, diffflux_y, diffflux_z,
                                        stretched_dz_d, dxInv, SmnSmn_a,
                                        mf_mx, mf_ux, mf_vx,
                                        mf_my, mf_uy, mf_vy,
-                                       hfx_x, hfx_y, hfx_z, q1fx_x, q1fx_y, q1fx_z, q2fx_z, diss,
+                                       hfx_z, q1fx_z, q2fx_z, diss,
                                        mu_turb, solverChoice, level,
                                        tm_arr, grav_gpu, bc_ptr_d, l_use_SurfLayer);
             } else if (l_use_terrain_fitted_coords) {
