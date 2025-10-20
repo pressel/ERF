@@ -164,6 +164,9 @@ ERF::erf_enforce_hse (int lev,
     Real l_gravity = solverChoice.gravity;
     bool l_use_terrain = (solverChoice.mesh_type != MeshType::ConstantDz);
 
+    // Get problem-specific surface pressure (defaults to p_0 if not overridden)
+    Real p_surf = prob->getSurfacePressure();
+
     const auto geomdata = geom[lev].data();
     const Real dz = geomdata.CellSize(2);
 
@@ -217,7 +220,7 @@ ERF::erf_enforce_hse (int lev,
                     hz = 0.5*dz;
                 }
 
-                pres_arr(i,j,klo) = p_0 - hz * rho_arr(i,j,klo) * l_gravity;
+                pres_arr(i,j,klo) = p_surf - hz * rho_arr(i,j,klo) * l_gravity;
                   pi_arr(i,j,klo) = getExnergivenP(pres_arr(i,j,klo), rdOcp);
                   th_arr(i,j,klo) = getRhoThetagivenP(pres_arr(i,j,klo)) / rho_arr(i,j,klo);
 
@@ -225,7 +228,7 @@ ERF::erf_enforce_hse (int lev,
                 // Set ghost cell with dz and rho at boundary
                 // (We will set the rest of the ghost cells in the boundary condition routine)
                 //
-                pres_arr(i,j,klo-1) = p_0 + hz * rho_arr(i,j,klo) * l_gravity;
+                pres_arr(i,j,klo-1) = p_surf + hz * rho_arr(i,j,klo) * l_gravity;
                   pi_arr(i,j,klo-1) = getExnergivenP(pres_arr(i,j,klo-1), rdOcp);
                   th_arr(i,j,klo-1) = getRhoThetagivenP(pres_arr(i,j,klo-1)) / rho_arr(i,j,klo-1);
 

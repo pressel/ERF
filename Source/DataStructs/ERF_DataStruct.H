@@ -79,7 +79,7 @@ AMREX_ENUM(LandSurfaceType,
 );
 
 AMREX_ENUM(RadiationType,
-    None, RRTMGP
+    None, RRTMGP, Dycoms_Longwave
 );
 
 enum struct Coord {

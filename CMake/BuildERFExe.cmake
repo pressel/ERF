@@ -85,6 +85,11 @@ function(build_erf_lib erf_lib_name)
       target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_SYCL)
   endif()
 
+  target_include_directories(${erf_lib_name} PUBLIC
+                             $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/Source/PhysicsInterfaces/Radiation>)
+  target_sources(${erf_lib_name} PRIVATE
+                 ${SRC_DIR}/PhysicsInterfaces/Radiation/ERF_RadiationDyCOMS.cpp)
+
   ########################### RRTMGP #################################
   if(ERF_ENABLE_RRTMGP)
     target_include_directories(${erf_lib_name} PUBLIC
@@ -285,6 +290,7 @@ function(build_erf_lib erf_lib_name)
        ${SRC_DIR}/Microphysics/Morrison/ERF_InitMorrison.cpp
        ${SRC_DIR}/Microphysics/Morrison/ERF_AdvanceMorrison.cpp
        ${SRC_DIR}/Microphysics/Morrison/ERF_UpdateMorrison.cpp
+       ${SRC_DIR}/Microphysics/Morrison/ERF_Morrison_Plot.cpp
        ${SRC_DIR}/Microphysics/SAM/ERF_InitSAM.cpp
        ${SRC_DIR}/Microphysics/SAM/ERF_CloudSAM.cpp
        ${SRC_DIR}/Microphysics/SAM/ERF_IceFall.cpp

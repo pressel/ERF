@@ -1,0 +1,101 @@
+# ------------------  MAIN TIME CONTROL  -------------------
+stop_time = 21600.0        # 6 hours of simulation
+
+amrex.fpe_trap_invalid = 1
+
+fabarray.mfiter_tile_size = 1024 1024 1024
+
+# ------------------  GEOMETRY  -------------------
+geometry.prob_lo     = 0.0    0.0    0.0
+geometry.prob_hi     = 6400.0 6400.0 1500.0
+amr.n_cell           = 128    128    96
+amr.max_level        = 0
+
+geometry.is_periodic = 1 1 0
+
+# ------------------  BOUNDARY CONDITIONS  -------------------
+zlo.type = "surface_layer"
+erf.surface_layer.flux_type = "custom"
+erf.most.ustar  = 0.25        # Prescribed friction velocity (m/s)
+erf.most.tstar  = -0.052682   # Consistent with 16 W/m^2 sensible heat flux (rho=1.21 kg/m^3)
+erf.most.qstar  = -1.2298e-4  # Consistent with 93 W/m^2 latent heat flux (Lv=2.5e6 J/kg)
+erf.most.rhosurf = 1.21
+erf.most.z0     = 0.1
+erf.most.zref   = 10.0
+
+zhi.type = "SlipWall"
+
+# ------------------  NUMERICS  -------------------
+erf.fixed_dt            = 0.1
+erf.fixed_mri_dt_ratio  = 4
+
+# ------------------  VERBOSITY & OUTPUT  -------------------
+erf.v         = 1
+amr.v         = 1
+erf.sum_interval = 60
+
+erf.check_file  = chk_dycoms_flux
+erf.check_int   = 0
+
+erf.plot_file_1 = plt_dycoms_flux
+erf.plot_int_1  = 600
+erf.plot_vars_1 = density rhotheta x_velocity y_velocity z_velocity pressure temp theta qv qc qr qsat qt qn qp rain
+
+# ------------------  PHYSICS  -------------------
+erf.use_gravity    = true
+erf.use_coriolis   = true
+erf.latitude       = 45.0
+erf.use_moist_background = true
+
+erf.moisture_model = "Kessler"
+erf.use_warm_rain  = true
+erf.radiation_model = dycoms_longwave
+erf.rad_freq_in_steps = 10
+
+erf.use_rayleigh_damping = true
+erf.rayleigh_damp_U = true
+erf.rayleigh_damp_V = true
+erf.rayleigh_damp_W = true
+erf.rayleigh_damp_T = true
+erf.rayleigh_dampcoef = 0.01
+erf.rayleigh_zdamp  = 1250.0
+
+erf.add_custom_w_subsidence        = true
+erf.add_custom_geostrophic_profile = true
+
+# ------------------  TRANSPORT  -------------------
+erf.dycore_horiz_adv_type    = Upwind_3rd
+erf.dycore_vert_adv_type     = Upwind_3rd
+erf.dryscal_horiz_adv_type   = Upwind_3rd_SL
+erf.dryscal_vert_adv_type    = Upwind_3rd_SL
+erf.moistscal_horiz_adv_type = Upwind_3rd_SL
+erf.moistscal_vert_adv_type  = Upwind_3rd_SL
+
+erf.les_type = "Smagorinsky"
+erf.Cs       = 0.17
+erf.Pr_t     = 0.3333333333
+erf.Sc_t     = 0.3333333333
+
+# ------------------  PROBLEM PARAMETERS  -------------------
+prob.rho_0 = 1.22
+prob.T_0   = 289.0
+prob.U_0   = 7.0
+prob.V_0   = -5.5
+prob.W_0   = 0.0
+
+prob.dycoms.sst        = 292.0
+prob.dycoms.u_star     = 0.25        # RF02 spec: u* = 0.25 m/s
+prob.dycoms.divergence = 3.75e-6     # RF02 spec: D = 3.75e-6 s^-1
+prob.dycoms.f_coriolis = 1.03e-4
+prob.dycoms.nc         = 55.0
+prob.dycoms.rad_F0         = 70.0
+prob.dycoms.rad_F1         = 22.0
+prob.dycoms.rad_kappa      = 85.0
+prob.dycoms.rad_clear_scale= 15.0
+prob.dycoms.rad_qc_threshold = 1.0e-7
+
+prob.dycoms.z_levels = 0.0 840.0 870.0 1500.0
+prob.dycoms.theta_l  = 289.0 289.0 297.5 312.66
+prob.dycoms.qt       = 9.0e-3 9.0e-3 1.5e-3 2.5e-3
+prob.dycoms.u_profile= 7.0 7.0 4.0 4.0
+prob.dycoms.v_profile= -5.5 -5.5 -5.5 -5.5

@@ -195,7 +195,10 @@ ERF::ERF_shared ()
 
     rad.resize(nlevs_max);
     for (int lev = 0; lev <= max_level; ++lev) {
-        if (solverChoice.rad_type == RadiationType::RRTMGP) {
+        if (solverChoice.rad_type == RadiationType::Dycoms_Longwave) {
+            rad[lev] = std::make_unique<RadiationDyCOMS>(solverChoice);
+            rad[lev]->setDataLogFrequency(rad_datalog_int);
+        } else if (solverChoice.rad_type == RadiationType::RRTMGP) {
 #ifdef ERF_USE_RRTMGP
             rad[lev] = std::make_unique<Radiation>(lev, solverChoice);
             // pass radiation datalog frequency to model - RRTMGP needs to know when to save data for profiles

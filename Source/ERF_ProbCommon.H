@@ -79,6 +79,17 @@ public:
     }
 
     /**
+     * Function to get problem-specific surface pressure for HSE initialization
+     *
+     * @return surface pressure in Pa (defaults to p_0 from ERF_Constants.H)
+    */
+    virtual amrex::Real
+    getSurfacePressure () const
+    {
+        return p_0;  // Default: use thermodynamic reference pressure
+    }
+
+    /**
      * Function to perform custom initialization of a test problem
      *
      * @param[in]  bx cell-centered box on which to initialize scalars
