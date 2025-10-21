@@ -238,8 +238,13 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
 
     // Maximum number of vertical levels (assuming reasonable domain size)
     // If domain is larger, increase this or switch to Arena allocation
-    constexpr int MaxNzFaces = 256;
-    constexpr int MaxNzCells = 255;
+    // Use preprocessor macros for MSVC compatibility in device code
+#ifndef ERF_MAX_NZ_FACES
+#define ERF_MAX_NZ_FACES 256
+#endif
+#ifndef ERF_MAX_NZ_CELLS
+#define ERF_MAX_NZ_CELLS 255
+#endif
 
     // Loop over horizontal (i,j) columns in the tile
     // For each column, do serial k-loop to build prefix/suffix sums
@@ -252,14 +257,14 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         const int NZ = k_hi - k_lo + 1;
         const int NF = NZ + 1; // number of faces (including domain boundaries)
 
-        AMREX_ASSERT_WITH_MESSAGE(NF <= MaxNzFaces, "Increase MaxNzFaces for this domain");
+        AMREX_ASSERT_WITH_MESSAGE(NF <= ERF_MAX_NZ_FACES, "Increase ERF_MAX_NZ_FACES for this domain");
 
         // Stack arrays for this column
-        Real zf[MaxNzFaces];  // z-coordinate at faces [m]
-        Real z_cc[MaxNzCells]; // z-coordinate at cell centers [m]
-        Real dz[MaxNzCells];  // cell thickness [m]
-        Real tau_from_bottom[MaxNzFaces]; // τ(0, z_face) [dimensionless]
-        Real tau_from_top[MaxNzFaces];    // τ(z_face, ∞) [dimensionless]
+        Real zf[ERF_MAX_NZ_FACES];  // z-coordinate at faces [m]
+        Real z_cc[ERF_MAX_NZ_CELLS]; // z-coordinate at cell centers [m]
+        Real dz[ERF_MAX_NZ_CELLS];  // cell thickness [m]
+        Real tau_from_bottom[ERF_MAX_NZ_FACES]; // τ(0, z_face) [dimensionless]
+        Real tau_from_top[ERF_MAX_NZ_FACES];    // τ(z_face, ∞) [dimensionless]
 
         // =====================================================================
         // Step 1: Build z-face, z-center, and dz arrays (cache geometry)
@@ -274,7 +279,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         }
 
         for (int kc = 0; kc < NZ; ++kc) {
-            dz[kc] = amrex::max(zf[kc+1] - zf[kc], 1.0e-6_rt);
+            dz[kc] = std::max(zf[kc+1] - zf[kc], 1.0e-6_rt);
             z_cc[kc] = 0.5_rt * (zf[kc] + zf[kc+1]); // cell center height
         }
 
@@ -289,9 +294,9 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
             Real ql_k = 0.0_rt;
             if (use_moisture && midx.qc >= 0) {
                 const Real qc_k = state(i, j, k_cell, midx.qc);
-                ql_k = qc_k / amrex::max(rho_k, 1.0e-12_rt);
+                ql_k = qc_k / std::max(rho_k, 1.0e-12_rt);
             }
-            ql_k = amrex::max(ql_k, 0.0_rt);
+            ql_k = std::max(ql_k, 0.0_rt);
 
             // Apply threshold to suppress noise
             if (ql_k <= qc_threshold) {
@@ -320,9 +325,9 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
             Real ql_k = 0.0_rt;
             if (use_moisture && midx.qc >= 0) {
                 const Real qc_k = state(i, j, k_cell, midx.qc);
-                ql_k = qc_k / amrex::max(rho_k, 1.0e-12_rt);
+                ql_k = qc_k / std::max(rho_k, 1.0e-12_rt);
             }
-            ql_k = amrex::max(ql_k, 0.0_rt);
+            ql_k = std::max(ql_k, 0.0_rt);
 
             // Apply threshold to suppress noise
             if (ql_k <= qc_threshold) {
@@ -357,20 +362,20 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 const int k_above = k_lo + kc + 1;
 
                 const Real rho_k = state(i, j, k_cell, Rho_comp);
-                const Real qv_k = state(i, j, k_cell, midx.qv) / amrex::max(rho_k, 1.0e-12_rt);
-                const Real qc_k = state(i, j, k_cell, midx.qc) / amrex::max(rho_k, 1.0e-12_rt);
+                const Real qv_k = state(i, j, k_cell, midx.qv) / std::max(rho_k, 1.0e-12_rt);
+                const Real qc_k = state(i, j, k_cell, midx.qc) / std::max(rho_k, 1.0e-12_rt);
                 const Real qt_k = qv_k + qc_k;
 
                 const Real rho_above = state(i, j, k_above, Rho_comp);
-                const Real qv_above = state(i, j, k_above, midx.qv) / amrex::max(rho_above, 1.0e-12_rt);
-                const Real qc_above = state(i, j, k_above, midx.qc) / amrex::max(rho_above, 1.0e-12_rt);
+                const Real qv_above = state(i, j, k_above, midx.qv) / std::max(rho_above, 1.0e-12_rt);
+                const Real qc_above = state(i, j, k_above, midx.qc) / std::max(rho_above, 1.0e-12_rt);
                 const Real qt_above = qv_above + qc_above;
 
                 // Check if we cross from moist (qt >= threshold) to dry (qt < threshold)
                 if (qt_k >= qt_threshold && qt_above < qt_threshold) {
                     // Linear interpolation between cell centers to find crossing height
-                    Real alpha = (qt_threshold - qt_k) / amrex::max(qt_above - qt_k, 1.0e-12_rt);
-                    alpha = amrex::min(1.0_rt, amrex::max(0.0_rt, alpha));
+                    Real alpha = (qt_threshold - qt_k) / std::max(qt_above - qt_k, 1.0e-12_rt);
+                    alpha = std::min(1.0_rt, std::max(0.0_rt, alpha));
                     zi_local = z_cc[kc] + alpha * (z_cc[kc+1] - z_cc[kc]);
                     found_crossing = true;
                     break;
@@ -382,8 +387,8 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 // Check if entire column is moist or dry
                 const int k_bottom = k_lo;
                 const Real rho_bot = state(i, j, k_bottom, Rho_comp);
-                const Real qv_bot = state(i, j, k_bottom, midx.qv) / amrex::max(rho_bot, 1.0e-12_rt);
-                const Real qc_bot = state(i, j, k_bottom, midx.qc) / amrex::max(rho_bot, 1.0e-12_rt);
+                const Real qv_bot = state(i, j, k_bottom, midx.qv) / std::max(rho_bot, 1.0e-12_rt);
+                const Real qc_bot = state(i, j, k_bottom, midx.qc) / std::max(rho_bot, 1.0e-12_rt);
                 const Real qt_bot = qv_bot + qc_bot;
 
                 if (qt_bot < qt_threshold) {
@@ -416,7 +421,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
 
             Real qv = 0.0_rt;
             if (use_moisture && midx.qv >= 0) {
-                qv = state(i, j, k_cell, midx.qv) / amrex::max(rho, 1.0e-12_rt);
+                qv = state(i, j, k_cell, midx.qv) / std::max(rho, 1.0e-12_rt);
             }
 
             const Real pres  = getPgivenRTh(rhotheta, qv);
@@ -442,7 +447,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
             // CRITICAL: Must include divergence D for correct units (W/m²)
             if (z_b >= zi_local) {
                 const Real eps_m   = 1.0_rt; // small length [m]
-                const Real d_eff   = amrex::max(z_b - zi_local, 0.0_rt) + eps_m;
+                const Real d_eff   = std::max(z_b - zi_local, 0.0_rt) + eps_m;
                 const Real delta13 = std::cbrt(d_eff);
                 const Real delta43 = d_eff * delta13;
                 const Real F_add_b = a_coef * rho_i * Cp_d * divergence *
@@ -461,7 +466,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
 
             if (z_t >= zi_local) {
                 const Real eps_m   = 1.0_rt; // small length [m]
-                const Real d_eff   = amrex::max(z_t - zi_local, 0.0_rt) + eps_m;
+                const Real d_eff   = std::max(z_t - zi_local, 0.0_rt) + eps_m;
                 const Real delta13 = std::cbrt(d_eff);
                 const Real delta43 = d_eff * delta13;
                 const Real F_add_t = a_coef * rho_i * Cp_d * divergence *
@@ -479,8 +484,8 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
             // Heating rate computation
             // dT/dt = -∇·F / (ρ·cp) = -(F_top - F_bottom) / (ρ·cp·Δz)
             const Real denom = rho * Cp_d * dz[kc];
-            const Real dTdt   = -(F_t - F_b) / amrex::max(denom, 1.0e-12_rt);
-            const Real dthetadt = dTdt / amrex::max(exner, 1.0e-12_rt);
+            const Real dTdt   = -(F_t - F_b) / std::max(denom, 1.0e-12_rt);
+            const Real dthetadt = dTdt / std::max(exner, 1.0e-12_rt);
 
 #ifdef ERF_DEBUG
             // Sanity check: heating rate should be reasonable (< ~86 K/day = 1e-3 K/s)
