@@ -87,19 +87,16 @@ Problem::erf_init_dens_hse (MultiFab& rho_hse,
     // Extract z-levels
     Vector<Real> h_z_faces(khi+2);
     if (z_phys_nd) {
-        bool filled = false;
-        for (MFIter mfi(*z_phys_nd); mfi.isValid(); ++mfi) {
-            const auto& z_arr = z_phys_nd->const_array(mfi);
-            const Box& vbx = mfi.validbox();
-            const int i0 = vbx.smallEnd(0);
-            const int j0 = vbx.smallEnd(1);
-            for (int k = 0; k <= khi+1; ++k) {
-                h_z_faces[k] = z_arr(i0, j0, k);
-            }
-            filled = true;
-            break;
+        // Extract z-coordinates from first valid box (all boxes share same vertical levels)
+        MFIter mfi(*z_phys_nd);
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(mfi.isValid(), "z_phys_nd has no valid boxes.");
+        const auto& z_arr = z_phys_nd->const_array(mfi);
+        const Box& vbx = mfi.validbox();
+        const int i0 = vbx.smallEnd(0);
+        const int j0 = vbx.smallEnd(1);
+        for (int k = 0; k <= khi+1; ++k) {
+            h_z_faces[k] = z_arr(i0, j0, k);
         }
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(filled, "Failed to populate z-levels from z_phys_nd.");
     } else {
         const Real dz = geom.CellSize(2);
         const Real z0 = geom.ProbLo(2);
@@ -117,8 +114,6 @@ Problem::erf_init_dens_hse (MultiFab& rho_hse,
     Real pressure = parms.p_surf;  // Start from RF02 surface pressure
 
     for (int k = 0; k <= khi; ++k) {
-        const Real z_cc = 0.5 * (h_z_faces[k] + h_z_faces[k+1]);
-
         // Dry adiabatic: T = θ₀ · (p/p₀)^(R/c_p)
         const Real exner = getExnergivenP(pressure, rdOcp);
         const Real temp = theta_ref * exner;
@@ -183,20 +178,17 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
     Vector<Real> h_z_faces(khi+2);
 
     if (z_phys_nd) {
-        bool filled = false;
-        for (MFIter mfi(*z_phys_nd); mfi.isValid(); ++mfi) {
-            const auto& z_arr = z_phys_nd->const_array(mfi);
-            const Box& vbx = mfi.validbox();
-            const int i0 = vbx.smallEnd(0);
-            const int j0 = vbx.smallEnd(1);
-            for (int k = 0; k <= khi+1; ++k) {
-                h_z_faces[k] = z_arr(i0, j0, k);
-            }
-            filled = true;
-            break;
-        }
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(filled,
+        // Extract z-coordinates from first valid box (all boxes share same vertical levels)
+        MFIter mfi(*z_phys_nd);
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(mfi.isValid(),
             "Failed to populate DyCOMS RF02 z-levels from z_phys_nd.");
+        const auto& z_arr = z_phys_nd->const_array(mfi);
+        const Box& vbx = mfi.validbox();
+        const int i0 = vbx.smallEnd(0);
+        const int j0 = vbx.smallEnd(1);
+        for (int k = 0; k <= khi+1; ++k) {
+            h_z_faces[k] = z_arr(i0, j0, k);
+        }
     } else {
         const Real dz = geom.CellSize(2);
         const Real z0 = geom.ProbLo(2);

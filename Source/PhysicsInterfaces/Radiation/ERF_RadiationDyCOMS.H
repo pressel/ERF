@@ -46,7 +46,6 @@ public:
     void
     WriteDataLog (const amrex::Real& time) override;
 
-private:
     void
     compute_radiative_tendency (const amrex::MFIter& mfi,
                                 amrex::MultiFab* cons_in,
@@ -55,6 +54,7 @@ private:
                                 const amrex::Geometry& geom,
                                 amrex::MultiFab* zi_field = nullptr);
 
+private:
     SolverChoice m_solver_choice;
     amrex::Geometry m_geom;
     amrex::BoxArray m_ba;

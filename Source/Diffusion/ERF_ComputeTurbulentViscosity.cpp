@@ -65,7 +65,6 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
         bool l_has_xvel = (xvel != nullptr);
         bool l_has_yvel = (yvel != nullptr);
         bool l_has_moisture = (moisture_indices.qv >= 0);
-        int  l_qc_index = moisture_indices.qc;
 
         // Legacy stratification approach (deprecated, for backward compatibility)
         const bool use_ref_theta = (turbChoice.theta_ref > 0);
