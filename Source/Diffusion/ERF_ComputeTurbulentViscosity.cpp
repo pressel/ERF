@@ -66,7 +66,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
         bool l_has_yvel = (yvel != nullptr);
         bool l_has_moisture = (moisture_indices.qv >= 0);
         int  l_qc_index = moisture_indices.qc;
-        
+
         // Legacy stratification approach (deprecated, for backward compatibility)
         const bool use_ref_theta = (turbChoice.theta_ref > 0);
         bool l_use_moisture_legacy = (moisture_indices.qv > 0);
@@ -95,7 +95,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
             Array4<Real const> mf_u = mapfac[MapFacType::u_x]->const_array(mfi);
             Array4<Real const> mf_v = mapfac[MapFacType::v_y]->const_array(mfi);
             Array4<Real const> z_nd_arr = z_phys_nd->const_array(mfi);
-            
+
             // Get velocity arrays for moist Ri correction (optional)
             Array4<Real const> u_arr = (l_has_xvel) ? xvel->const_array(mfi) : Array4<Real const>{};
             Array4<Real const> v_arr = (l_has_yvel) ? yvel->const_array(mfi) : Array4<Real const>{};
@@ -140,7 +140,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 Real rho = cell_data(i,j,k,Rho_comp);
                 Real CsDeltaSqr_h = Cs * Cs * DeltaH * DeltaH;
                 Real CsDeltaSqr_v = Cs * Cs * Delta * Delta;
-                
+
                 Real nu_turb_base_h = CsDeltaSqr_h * strain_rate_magnitude;
                 Real nu_turb_base_v = CsDeltaSqr_v * strain_rate_magnitude;
 
@@ -148,23 +148,23 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                 // 4. OPTIONAL MOIST RICHARDSON NUMBER CORRECTION (NEW IMPLEMENTATION)
                 // =====================================================================
                 Real stability_factor = 1.0;  // Default: no correction
-                
+
                 if (l_use_moist_Ri && l_has_moisture && l_has_xvel && l_has_yvel) {
-                    
+
                     // Compute moist Brunt-Väisälä frequency squared
-                    Real N2_moist = ComputeMoistN2(i, j, k, dzInv, l_abs_g, 
+                    Real N2_moist = ComputeMoistN2(i, j, k, dzInv, l_abs_g,
                                                    cell_data, moisture_indices);
-                    
+
                     // Compute vertical wind shear squared
                     Real S2_vert = ComputeVerticalShear2(i, j, k, dzInv, u_arr, v_arr);
-                    
+
                     // Moist Richardson number
                     Real Ri_moist = ComputeRichardson(N2_moist, S2_vert);
-                    
+
                     // Apply Mason (1989) stability function
                     stability_factor = StabilityFunction(Ri_moist, l_Ri_crit);
                 }
-                
+
                 // =====================================================================
                 // 5A. LEGACY STRATIFICATION APPROACH (DEPRECATED, for backward compat)
                 // =====================================================================
@@ -188,7 +188,7 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                             mixing_length = amrex::max(mixing_length, 0.001 * Delta);
                         }
                     }
-                    
+
                     // Recompute viscosity with modified length scale
                     Real CsDeltaSqr_legacy = Cs * Cs * mixing_length * mixing_length;
                     nu_turb_base_v = CsDeltaSqr_legacy * strain_rate_magnitude;

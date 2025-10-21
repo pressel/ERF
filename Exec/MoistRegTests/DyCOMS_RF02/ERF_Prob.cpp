@@ -68,22 +68,22 @@ Problem::erf_init_dens_hse (MultiFab& rho_hse,
     /**
      * DyCOMS RF02 Dry Adiabatic Reference State (for use_moist_background=false)
      * ===========================================================================
-     * 
+     *
      * **Purpose:** Compute smooth ρ₀(z) for anelastic simulations while preserving
      * RF02 moist discontinuities as perturbations in init_custom_pert().
-     * 
+     *
      * **Strategy:** Use dry isentropic atmosphere with BL-averaged thermodynamics:
      * - θ₀ = constant (BL mean: ~288.5 K)
      * - Hydrostatic: dp/dz = -ρ₀·g
      * - Ideal gas: ρ₀ = p/(R_d·T)
      * - T = θ·(p/p₀)^(R/c_p)
-     * 
+     *
      * **Result:** C^∞ smooth ρ₀(z) suitable for anelastic base state.
      * RF02 moist structure (sharp θ_ℓ, qt jumps) applied as ρ', θ' perturbations.
      */
-    
+
     const int khi = geom.Domain().bigEnd()[2];
-    
+
     // Extract z-levels
     Vector<Real> h_z_faces(khi+2);
     if (z_phys_nd) {
@@ -107,38 +107,38 @@ Problem::erf_init_dens_hse (MultiFab& rho_hse,
             h_z_faces[k] = z0 + k * dz;
         }
     }
-    
+
     // Use BL-representative dry adiabatic profile
     // θ₀ = constant ≈ 288.5 K (midpoint between surface 287K and pre-inversion 290K)
     const Real theta_ref = 288.5;  // Dry potential temperature reference [K]
     const Real rdOcp = R_d / Cp_d;
-    
+
     Vector<Real> h_rho(khi+1);
     Real pressure = parms.p_surf;  // Start from RF02 surface pressure
-    
+
     for (int k = 0; k <= khi; ++k) {
         const Real z_cc = 0.5 * (h_z_faces[k] + h_z_faces[k+1]);
-        
+
         // Dry adiabatic: T = θ₀ · (p/p₀)^(R/c_p)
         const Real exner = getExnergivenP(pressure, rdOcp);
         const Real temp = theta_ref * exner;
-        
+
         // Dry ideal gas law: ρ = p/(R_d·T)
         const Real rho_level = pressure / (R_d * temp);
         h_rho[k] = rho_level;
-        
+
         // Hydrostatic integration: dp/dz = -ρ·g
         if (k < khi) {
             const Real dz = h_z_faces[k+1] - h_z_faces[k];
             pressure = std::max(pressure - rho_level * CONST_GRAV * dz, 1.0e3);
         }
     }
-    
+
     // Copy to device and fill MultiFab
     Gpu::DeviceVector<Real> d_rho(khi+1);
     Gpu::copy(Gpu::hostToDevice, h_rho.begin(), h_rho.end(), d_rho.begin());
     Real* rho_ptr = d_rho.data();
-    
+
 #ifdef _OPENMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
@@ -161,23 +161,23 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
     /**
      * DyCOMS RF02 Moist HSE with Smoothed Density Integration
      * ========================================================
-     * 
+     *
      * **Problem:** RF02 sharp discontinuities (θ_ℓ: 288→295K, qt: 9.45→5 g/kg at zi=795m)
      * create unphysical density jumps when integrated hydrostatically.
-     * 
+     *
      * **Solution:** Apply vertical smoothing (running mean) to thermodynamic profiles
      * during hydrostatic integration to compute smooth ρ₀(z), while preserving
      * sharp RF02 profiles in the actual state via init_custom_pert().
-     * 
+     *
      * **Method:**
      * 1. Compute RF02 (θ_ℓ, qt) at each level
      * 2. Apply vertical smoothing filter (Δz ~ 50-100m) for HSE integration only
      * 3. Integrate smooth profiles hydrostatically → smooth ρ₀(z)
      * 4. init_custom_pert() applies sharp RF02 profiles → ρ' contains discontinuities
-     * 
+     *
      * **Result:** Smooth base state ρ₀(z) for anelastic, sharp inversion preserved.
      */
-    
+
     const int khi = geom.Domain().bigEnd()[2];
 
     Vector<Real> h_z_faces(khi+2);
@@ -209,33 +209,33 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
     Vector<Real> theta_l_raw(khi+1);
     Vector<Real> qt_raw(khi+1);
     Vector<Real> z_cc(khi+1);
-    
+
     for (int k = 0; k <= khi; ++k) {
         z_cc[k] = 0.5 * (h_z_faces[k] + h_z_faces[k+1]);
         theta_l_raw[k] = dycoms_theta_l(parms, z_cc[k]);
         qt_raw[k] = dycoms_qt(parms, z_cc[k]);
     }
-    
+
     // Step 2: Apply vertical smoothing for HSE integration
     // Smoothing scale: ~5 grid points (typically 50-70m for DyCOMS grids)
     const int smooth_radius = 5;
     Vector<Real> theta_l_smooth(khi+1);
     Vector<Real> qt_smooth(khi+1);
-    
+
     for (int k = 0; k <= khi; ++k) {
         const int k_lo = std::max(0, k - smooth_radius);
         const int k_hi = std::min(khi, k + smooth_radius);
-        
+
         Real sum_theta = 0.0;
         Real sum_qt = 0.0;
         int count = 0;
-        
+
         for (int kk = k_lo; kk <= k_hi; ++kk) {
             sum_theta += theta_l_raw[kk];
             sum_qt += qt_raw[kk];
             count++;
         }
-        
+
         theta_l_smooth[k] = sum_theta / count;
         qt_smooth[k] = sum_qt / count;
     }
@@ -243,7 +243,7 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
     // Step 3: Hydrostatic integration with SMOOTHED profiles
     Vector<Real> h_rho(khi+1);
     Real pressure = parms.p_surf;
-    
+
     for (int k = 0; k <= khi; ++k) {
         Real rho_level, theta_level, temp_level, qv_level, qc_level;
         dycoms_compute_moist_state(pressure, theta_l_smooth[k], qt_smooth[k], R_d/Cp_d,
@@ -408,7 +408,7 @@ Problem::update_geostrophic_profile (const Real& /*time*/,
     const int khi = geom.Domain().bigEnd()[2];
     const Real* prob_lo = geom.ProbLo();
     const Real dz = geom.CellSize(2);
-    
+
     if (z_phys_cc) {
         zlevels.resize(khi+1);
         reduce_to_max_per_height(zlevels, z_phys_cc);

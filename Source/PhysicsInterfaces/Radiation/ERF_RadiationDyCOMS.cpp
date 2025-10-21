@@ -85,7 +85,7 @@ RadiationDyCOMS::RadiationDyCOMS (const SolverChoice& sc)
     pp.query("divergence", m_divergence);
     pp.query("zi", m_zi);
     pp.query("rad_qt_threshold", m_qt_threshold);
-    
+
     int use_local = m_use_local_zi ? 1 : 0;
     pp.query("rad_use_local_zi", use_local);
     m_use_local_zi = (use_local != 0);
@@ -103,22 +103,22 @@ RadiationDyCOMS::Init (const Geometry& geom,
     m_initialized = true;
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(cons_in != nullptr,
                                      "RadiationDyCOMS requires valid state MultiFab");
-    
+
     // CRITICAL: RadiationDyCOMS requires full-column boxes (no z-tiling)
     // for correct optical depth computation via prefix/suffix sums.
     // Check that every box in the BoxArray spans the full vertical domain.
     const Box& domain = geom.Domain();
     const int domain_k_lo = domain.smallEnd(2);
     const int domain_k_hi = domain.bigEnd(2);
-    
+
     for (int i = 0; i < ba.size(); ++i) {
         const Box& bx = ba[i];
         if (bx.smallEnd(2) != domain_k_lo || bx.bigEnd(2) != domain_k_hi) {
-            amrex::Abort("RadiationDyCOMS ERROR: Box " + std::to_string(i) + 
+            amrex::Abort("RadiationDyCOMS ERROR: Box " + std::to_string(i) +
                         " does not span full vertical domain.\n" +
-                        "  Box k-range: [" + std::to_string(bx.smallEnd(2)) + ", " + 
+                        "  Box k-range: [" + std::to_string(bx.smallEnd(2)) + ", " +
                         std::to_string(bx.bigEnd(2)) + "]\n" +
-                        "  Domain k-range: [" + std::to_string(domain_k_lo) + ", " + 
+                        "  Domain k-range: [" + std::to_string(domain_k_lo) + ", " +
                         std::to_string(domain_k_hi) + "]\n" +
                         "  RadiationDyCOMS requires no z-tiling for full-column optical depth.\n" +
                         "  Set fabarray.mfiter_tile_size = 1024000 2 1024000 in inputs to disable z-tiling.");
@@ -156,7 +156,7 @@ RadiationDyCOMS::Run (int& level,
     m_last_level   = level;
 
     // Create a MultiFab to store inversion heights zi(i,j) for diagnostics
-    // One component, no ghost cells. Note: This is a 3D MultiFab but zi is 
+    // One component, no ghost cells. Note: This is a 3D MultiFab but zi is
     // constant in the vertical (one value per horizontal column), so we fill
     // all k-levels with the same value to ensure min/max reductions work correctly.
     MultiFab zi_field(cons_in->boxArray(), cons_in->DistributionMap(), 1, 0);
@@ -172,9 +172,9 @@ RadiationDyCOMS::Run (int& level,
     // Compute min/max inversion height across all columns
     Real zi_min = zi_field.min(0);
     Real zi_max = zi_field.max(0);
-    
+
     if (ParallelDescriptor::IOProcessor()) {
-        amrex::Print() << "Inversion height range: zi_min = " << zi_min 
+        amrex::Print() << "Inversion height range: zi_min = " << zi_min
                        << " m, zi_max = " << zi_max << " m\n";
     }
 }
@@ -190,17 +190,17 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
     /*
      * DyCOMS-II RF02 Longwave Radiation Parameterization (Stevens et al. 2005)
      * ==========================================================================
-     * 
+     *
      * Implements Beer's-law cooling with divergence-weighted additive term above
      * the inversion following RF02 specification.
-     * 
+     *
      * Key Features:
      * - Full-column optical depth computation via prefix/suffix sums
      * - Per-column diagnostic inversion height zi(x,y) from qt = 8 g/kg isosurface
      * - Subsidence heating term with correct units (includes divergence D)
      * - Thresholded cloud liquid water (qc) to avoid spurious optical depth
      * - Debug checks for magnitude and unit consistency
-     * 
+     *
      * Physical Constants (RF02 spec):
      * - F0 = 70 W/m² (downward flux from above)
      * - F1 = 22 W/m² (upward flux from surface)
@@ -212,31 +212,31 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
      * - zi = 795 m (fallback inversion height from RF02 canonical value)
      * - qt_threshold = 0.008 kg/kg (8 g/kg - total water threshold for zi diagnostic)
      * - Cp_d = 1004.5 J/(kg·K) (dry air specific heat)
-     * 
+     *
      * Optical Depth: τ(z₁, z₂) = ∫[z₁,z₂] κ ρ qₗ dz [dimensionless]
-     * 
+     *
      * Beer's-law Fluxes at face z:
      *   F(z) = F0·exp(-τ(z,∞)) + F1·exp(-τ(0,z))  [W/m²]
-     * 
+     *
      * Additive subsidence term (z > zi, includes D for correct units):
      *   F_add(z) = a·ρi·Cp_d·D·[¼(z-zi)^(4/3) + zi·(z-zi)^(1/3)]  [W/m²]
-     * 
+     *
      * Heating Rate:
      *   dT/dt = -(F_top - F_bottom) / (ρ·Cp_d·Δz)  [K/s]
      *   dθ/dt = dT/dt / Π  [K/s]  where Π = (p/p0)^(R/Cp) is Exner function
-     * 
+     *
      * Expected Magnitudes:
      * - Peak in-cloud cooling: ~2-6 K/day (≈ 2.3e-5 to 6.9e-5 K/s)
      * - Additive term contribution: O(1-10) W/m² near inversion
      * - Column optical depth: O(0.3-2) depending on LWP
-     * 
+     *
      * Inversion Height Diagnostic:
      * - zi is diagnosed from qt = 8 g/kg isosurface (RF02 spec)
      * - Scans vertically to find where qt crosses threshold
      * - Linear interpolation between cell centers for sub-grid accuracy
      * - Fallback to configured zi if no crossing found (clear or fully moist column)
      * - Toggle: prob.dycoms.rad_use_local_zi (default = 1)
-     * 
+     *
      * MPI/Tiling Requirements:
      * - Requires full-column boxes (no z-tiling) for correct optical depth
      * - Checked in Init() with clear error message if violated
@@ -287,7 +287,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
 
     // Loop over horizontal (i,j) columns in the tile
     // For each column, do serial k-loop to build prefix/suffix sums
-    
+
     ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
     {
         // Only process once per (i,j) column at the lowest k in the tile
@@ -329,27 +329,27 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         for (int kc = 0; kc < NZ; ++kc) {
             const int k_cell = k_lo + kc;
             const Real rho_k = state(i, j, k_cell, Rho_comp);
-            
+
             Real ql_k = 0.0_rt;
             if (use_moisture && midx.qc >= 0) {
                 const Real qc_k = state(i, j, k_cell, midx.qc);
                 ql_k = qc_k / amrex::max(rho_k, 1.0e-12_rt);
             }
             ql_k = amrex::max(ql_k, 0.0_rt);
-            
+
             // Apply threshold to suppress noise
             if (ql_k <= qc_threshold) {
                 ql_k = 0.0_rt;
             }
 
             const Real tau_inc = kappa * rho_k * ql_k * dz[kc];
-            
+
 #ifdef ERF_DEBUG
             // Sanity check: optical depth increment must be non-negative and dimensionless
-            AMREX_ASSERT_WITH_MESSAGE(tau_inc >= 0.0_rt, 
+            AMREX_ASSERT_WITH_MESSAGE(tau_inc >= 0.0_rt,
                 "Negative optical depth increment detected");
 #endif
-            
+
             tau_from_bottom[kc+1] = tau_from_bottom[kc] + tau_inc;
         }
 
@@ -360,14 +360,14 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         for (int kc = NZ-1; kc >= 0; --kc) {
             const int k_cell = k_lo + kc;
             const Real rho_k = state(i, j, k_cell, Rho_comp);
-            
+
             Real ql_k = 0.0_rt;
             if (use_moisture && midx.qc >= 0) {
                 const Real qc_k = state(i, j, k_cell, midx.qc);
                 ql_k = qc_k / amrex::max(rho_k, 1.0e-12_rt);
             }
             ql_k = amrex::max(ql_k, 0.0_rt);
-            
+
             // Apply threshold to suppress noise
             if (ql_k <= qc_threshold) {
                 ql_k = 0.0_rt;
@@ -383,33 +383,33 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         // RF02 specification: zi is defined where total water qt crosses 8 g/kg.
         // We scan vertically to find where qt[k] >= qt_threshold and qt[k+1] < qt_threshold,
         // then linearly interpolate between cell centers to get sub-grid accuracy.
-        // 
+        //
         // Fallback behavior:
         // - If all qt >= threshold: zi = topmost cell center (H=0 everywhere)
         // - If all qt < threshold: zi = lowest cell center (H=1 everywhere)
         // - If no moisture or toggle off: zi = configured fallback value
-        
+
         Real zi_local = zi_fallback;
-        
+
         if (use_local_zi && use_moisture && midx.qv >= 0 && midx.qc >= 0) {
             // Compute total water qt = qv + qc at each cell center
             bool found_crossing = false;
-            
+
             // Scan from bottom up to find where qt crosses below threshold
             for (int kc = 0; kc < NZ - 1; ++kc) {
                 const int k_cell = k_lo + kc;
                 const int k_above = k_lo + kc + 1;
-            
+
                 const Real rho_k = state(i, j, k_cell, Rho_comp);
                 const Real qv_k = state(i, j, k_cell, midx.qv) / amrex::max(rho_k, 1.0e-12_rt);
                 const Real qc_k = state(i, j, k_cell, midx.qc) / amrex::max(rho_k, 1.0e-12_rt);
                 const Real qt_k = qv_k + qc_k;
-            
+
                 const Real rho_above = state(i, j, k_above, Rho_comp);
                 const Real qv_above = state(i, j, k_above, midx.qv) / amrex::max(rho_above, 1.0e-12_rt);
                 const Real qc_above = state(i, j, k_above, midx.qc) / amrex::max(rho_above, 1.0e-12_rt);
                 const Real qt_above = qv_above + qc_above;
-            
+
                 // Check if we cross from moist (qt >= threshold) to dry (qt < threshold)
                 if (qt_k >= qt_threshold && qt_above < qt_threshold) {
                     // Linear interpolation between cell centers to find crossing height
@@ -420,7 +420,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                     break;
                 }
             }
-            
+
             // Handle edge cases
             if (!found_crossing) {
                 // Check if entire column is moist or dry
@@ -429,7 +429,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 const Real qv_bot = state(i, j, k_bottom, midx.qv) / amrex::max(rho_bot, 1.0e-12_rt);
                 const Real qc_bot = state(i, j, k_bottom, midx.qc) / amrex::max(rho_bot, 1.0e-12_rt);
                 const Real qt_bot = qv_bot + qc_bot;
-                
+
                 if (qt_bot < qt_threshold) {
                     // Entire column is dry: set zi to bottom (H=1 everywhere)
                     zi_local = z_cc[0];
@@ -454,15 +454,15 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         // =====================================================================
         for (int kc = 0; kc < NZ; ++kc) {
             const int k_cell = k_lo + kc;
-            
+
             const Real rho      = state(i, j, k_cell, Rho_comp);
             const Real rhotheta = state(i, j, k_cell, RhoTheta_comp);
-            
+
             Real qv = 0.0_rt;
             if (use_moisture && midx.qv >= 0) {
                 qv = state(i, j, k_cell, midx.qv) / amrex::max(rho, 1.0e-12_rt);
             }
-            
+
             const Real pres  = getPgivenRTh(rhotheta, qv);
             const Real exner = getExnergivenP(pres, R_d / Cp_d);
 
@@ -492,7 +492,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 const Real F_add_b = a_coef * rho_i * Cp_d * divergence *
                                     (0.25_rt * delta43 + zi_local * delta13);
                 F_b += F_add_b;
-                
+
 #ifdef ERF_DEBUG
                 // Sanity check: additive term should be O(1-10) W/m² near inversion
                 // Allow up to 50 W/m² for robustness (can be large far above inversion)
@@ -502,7 +502,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 }
 #endif
             }
-            
+
             if (z_t >= zi_local) {
                 const Real eps_m   = 1.0_rt; // small length [m]
                 const Real d_eff   = amrex::max(z_t - zi_local, 0.0_rt) + eps_m;
@@ -511,7 +511,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 const Real F_add_t = a_coef * rho_i * Cp_d * divergence *
                                     (0.25_rt * delta43 + zi_local * delta13);
                 F_t += F_add_t;
-                
+
 #ifdef ERF_DEBUG
                 if (std::abs(F_add_t) > 50.0_rt && d_eff < 500.0_rt) {
                     printf("WARNING: Large F_add_t=%.2f W/m² at z=%.1f (d_eff=%.1f, zi=%.1f)\n",
@@ -530,7 +530,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
             // Sanity check: heating rate should be reasonable (< ~86 K/day = 1e-3 K/s)
             AMREX_ASSERT_WITH_MESSAGE(std::abs(dthetadt) < 1.0e-3_rt,
                 "Heating rate exceeds 1e-3 K/s (unrealistic)");
-            
+
             // Top-layer diagnostic (print top 5 layers for first column)
             if (i == bx.smallEnd(0) && j == bx.smallEnd(1) && kc >= NZ - 5) {
                 printf("LW top k=%d/%d z=%.1f Qinf_b=%.3f Qinf_t=%.3f F_b=%.2f F_t=%.2f dθ/dt=%.3e K/s\n",

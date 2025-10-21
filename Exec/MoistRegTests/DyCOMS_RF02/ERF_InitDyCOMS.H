@@ -22,7 +22,7 @@ dycoms_theta_l (const ProbParm& parms, amrex::Real z)
     // RF02 specification: sharp discontinuity at zi (no smooth transition)
     // Below zi: constant BL value θ_l = 288.3 K
     // Above zi: free troposphere profile θ_l = 295 + (z-zi)^(1/3) K
-    
+
     if (z < parms.zi) {
         return parms.theta_l_bl;  // 288.3 K below zi
     } else {
@@ -40,12 +40,12 @@ dycoms_qt (const ProbParm& parms, amrex::Real z)
     // Above zi: exponential decay qt = 2 + 3*exp(-(z-zi)/500) g/kg
     //   At zi: qt = 2 + 3 = 5 g/kg (jump from 9.45 → 5 g/kg)
     //   As z→∞: qt → 2 g/kg
-    
+
     if (z < parms.zi) {
         return parms.qt_bl;  // 9.45e-3 kg/kg below zi
     } else {
         const amrex::Real delta = z - parms.zi;
-        return parms.qt_free_asymptote + 
+        return parms.qt_free_asymptote +
                parms.qt_free_excess * std::exp(-delta / parms.qt_free_scale);
     }
 }
@@ -80,29 +80,29 @@ dycoms_cell_height (int i, int j, int k,
 /**
  * DyCOMS-II RF02 Moist State Solver with Linearized θ_ℓ
  * ======================================================
- * 
+ *
  * Solves for (θ, T, qᵥ, qₗ) given (θ_ℓ_lin, qₜ, p₀) using the RF02 specification:
- * 
+ *
  *   θ = θ_ℓ_lin + (Lᵥ/(cₚ·π₀)) · qₗ
- * 
+ *
  * where π₀(z) = (p₀(z)/p₀)^(Rₐ/cₚ) is the Exner function held FIXED at the base-state
  * pressure p₀(z).
- * 
+ *
  * Supersaturation: Enforces S=0 by default (qᵥ = min(qₜ, qₛₐₜ(T,p₀))).
- * 
+ *
  * Usage for Anelastic:
  * - Hold (p₀, π₀, ρ₀) FIXED during saturation adjustment.
  * - Do NOT hold T fixed; compute T = θ·π₀ after solving.
  * - Initialize with ρ' = 0 (thermo fields consistent with ρ₀).
- * 
+ *
  * Usage for Compressible:
  * - Integrate p(z) hydrostatically using the resulting moist density.
- * 
+ *
  * Newton Iteration:
  * For saturated parcels, solve g(T) = T - π₀·θ_ℓ_lin - (Lᵥ/cₚ)·(qₜ - qₛₐₜ(T,p₀)) = 0
  * with g'(T) = 1 + (Lᵥ/cₚ)·∂qₛₐₜ/∂T.
  * Typically converges in 2-6 iterations.
- * 
+ *
  * @param[in]  pressure  Base-state pressure p₀(z) [Pa]
  * @param[in]  theta_l   Linearized liquid-water potential temperature θ_ℓ_lin [K]
  * @param[in]  qt        Total water mixing ratio qₜ = qᵥ + qₗ [kg/kg]
@@ -128,10 +128,10 @@ void dycoms_compute_moist_state (amrex::Real pressure,
 
     // Convert pressure to mb for saturation routines (which expect hPa/mb)
     const Real p_mb = 0.01_rt * pressure;  // Pa → mb
-    
+
     // Compute and HOLD FIXED the Exner function π₀ at base-state pressure
     const Real pi0 = getExnergivenP(pressure, rdOcp);
-    
+
     // =====================================================================
     // Step 1: Quick unsaturated check
     // =====================================================================
@@ -139,7 +139,7 @@ void dycoms_compute_moist_state (amrex::Real pressure,
     const Real T0 = pi0 * theta_l;
     Real qsat_0;
     erf_qsatw(T0, p_mb, qsat_0);
-    
+
     if (qt <= qsat_0) {
         // Unsaturated: no iteration needed
         qv    = qt;
@@ -155,7 +155,7 @@ void dycoms_compute_moist_state (amrex::Real pressure,
     // =====================================================================
     // Solve: g(T) = T - π₀·θ_ℓ_lin - (Lᵥ/cₚ)·(qₜ - qₛₐₜ(T, p₀)) = 0
     // with derivative g'(T) = 1 + (Lᵥ/cₚ)·∂qₛₐₜ/∂T
-    
+
     Real T = T0;  // Start from unsaturated estimate
 
     for (int it = 0; it < 12; ++it) {
@@ -167,7 +167,7 @@ void dycoms_compute_moist_state (amrex::Real pressure,
         const Real gp = 1.0_rt + (lat_vap / Cp_d) * dqsat_dT;
 
         Real dT = -g / amrex::max(gp, 1.0e-12_rt);
-        
+
         // Clamp step size for robustness
         dT = amrex::min(amrex::max(dT, -5.0_rt), 5.0_rt);
         T += dT;
@@ -187,10 +187,10 @@ void dycoms_compute_moist_state (amrex::Real pressure,
 
     // RF02 linearized θ_ℓ relation: θ = θ_ℓ_lin + (Lᵥ/(cₚ·π₀))·qₗ
     theta = theta_l + (lat_vap / (Cp_d * pi0)) * qc;
-    
+
     // Temperature consistent with θ and π₀
     temp = T;  // Already solved to satisfy T = π₀·θ_ℓ_lin + (Lᵥ/cₚ)·qₗ
-    
+
     // Moist density using ideal gas law with vapor mixing ratio
     rho = getRhogivenTandPress(T, pressure, qv);
 }

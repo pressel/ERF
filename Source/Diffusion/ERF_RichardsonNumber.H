@@ -129,34 +129,34 @@ ComputeMoistN2(int i, int j, int k,
                const MoistureComponentIndices& moisture_indices)
 {
     amrex::Real N2_moist;
-    
+
     bool saturated = IsSaturated(i, j, k, cell_data, moisture_indices.qc);
-    
+
     if (saturated) {
         // Use liquid water potential temperature in clouds
         amrex::Real theta_l_c = GetThetal(i, j, k, cell_data, moisture_indices);
         amrex::Real theta_l_p = GetThetal(i, j, k+1, cell_data, moisture_indices);
         amrex::Real theta_l_m = GetThetal(i, j, k-1, cell_data, moisture_indices);
-        
+
         // Centered difference: ∂θ_l/∂z = (θ_l(k+1) - θ_l(k-1)) / (2Δz)
         amrex::Real dtheta_l_dz = 0.5 * (theta_l_p - theta_l_m) * dzInv;
-        
+
         // N² = (g/θ_l) · ∂θ_l/∂z
         N2_moist = (const_grav / theta_l_c) * dtheta_l_dz;
-        
+
     } else {
         // Use virtual potential temperature outside clouds
         amrex::Real theta_v_c = GetThetav(i, j, k, cell_data, moisture_indices);
         amrex::Real theta_v_p = GetThetav(i, j, k+1, cell_data, moisture_indices);
         amrex::Real theta_v_m = GetThetav(i, j, k-1, cell_data, moisture_indices);
-        
+
         // Centered difference: ∂θ_v/∂z = (θ_v(k+1) - θ_v(k-1)) / (2Δz)
         amrex::Real dtheta_v_dz = 0.5 * (theta_v_p - theta_v_m) * dzInv;
-        
+
         // N² = (g/θ_v) · ∂θ_v/∂z
         N2_moist = (const_grav / theta_v_c) * dtheta_v_dz;
     }
-    
+
     return N2_moist;
 }
 
@@ -196,18 +196,18 @@ ComputeVerticalShear2(int i, int j, int k,
     // Interpolate u to cell center at k-1, k, k+1
     amrex::Real u_c_km1 = 0.5 * (u(i, j, k-1) + u(i+1, j, k-1));
     amrex::Real u_c_kp1 = 0.5 * (u(i, j, k+1) + u(i+1, j, k+1));
-    
+
     // Interpolate v to cell center at k-1, k, k+1
     amrex::Real v_c_km1 = 0.5 * (v(i, j, k-1) + v(i, j+1, k-1));
     amrex::Real v_c_kp1 = 0.5 * (v(i, j, k+1) + v(i, j+1, k+1));
-    
+
     // Centered differences for vertical gradients
     amrex::Real du_dz = 0.5 * (u_c_kp1 - u_c_km1) * dzInv;
     amrex::Real dv_dz = 0.5 * (v_c_kp1 - v_c_km1) * dzInv;
-    
+
     // Vertical shear squared
     amrex::Real S2_vert = du_dz * du_dz + dv_dz * dv_dz;
-    
+
     return S2_vert;
 }
 
@@ -282,11 +282,11 @@ StabilityFunction(amrex::Real Ri, amrex::Real Ri_crit)
     if (Ri >= Ri_crit) {
         // Strong stability: complete suppression
         return 0.0;
-        
+
     } else if (Ri > 0.0) {
         // Weak stability: partial suppression following Mason (1989)
         return std::sqrt(1.0 - Ri / Ri_crit);
-        
+
     } else {
         // Unstable or neutral: no suppression (full mixing)
         // This includes conditionally unstable cloud updrafts (Ri < 0)

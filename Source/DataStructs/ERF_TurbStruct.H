@@ -190,11 +190,11 @@ public:
 
     query_one_or_per_level(pp, "mix_isotropic", mix_isotropic, lev, max_level);
     query_one_or_per_level(pp, "use_smag_stratification", use_smag_stratification, lev, max_level);
-    
+
     // Moist Richardson number correction for Smagorinsky (new implementation)
     query_one_or_per_level(pp, "use_moist_Ri_correction", use_moist_Ri_correction, lev, max_level);
     query_one_or_per_level(pp, "Ri_crit", Ri_crit, lev, max_level);
-    
+
     // Validate: cannot use both old and new stratification approaches simultaneously
     if (use_smag_stratification && use_moist_Ri_correction) {
         amrex::Abort("Cannot enable both use_smag_stratification (deprecated) and use_moist_Ri_correction. "
@@ -390,7 +390,7 @@ public:
   // NOTE: This is the old incorrect implementation using buoyancy length scale.
   //       Use use_moist_Ri_correction instead for proper moist stability handling.
   bool use_smag_stratification = false;
-  
+
   // Moist Richardson number correction (NEW CORRECT IMPLEMENTATION)
   // Applies Mason (1989) stability function to vertical diffusion only
   bool use_moist_Ri_correction = false;

@@ -1016,10 +1016,10 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
           amrex::Box boxD(box); boxD.makeSlab(2,0);
 
           ParmParse pp("erf");
-          
+
           // Allow user to override constant droplet concentration from inputs file
           pp.query("morrison_ndcnst", m_ndcnst);
-          
+
 #ifdef ERF_USE_MORR_FORT
           // If using Fortran version, update the Fortran module variable as well
           set_morrison_ndcnst_c(m_ndcnst);
