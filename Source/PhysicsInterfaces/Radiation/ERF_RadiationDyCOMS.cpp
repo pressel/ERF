@@ -18,50 +18,6 @@
 
 using namespace amrex;
 
-namespace
-{
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-Real
-cell_thickness (const int i, const int j, const int k,
-                const Array4<const Real>& z_nd,
-                const GeometryData& geomdata,
-                const bool has_z)
-{
-    if (has_z) {
-        const Real z_hi = Compute_Z_AtWFace(i,j,k+1,z_nd);
-        const Real z_lo = Compute_Z_AtWFace(i,j,k  ,z_nd);
-        return amrex::max(z_hi - z_lo, 1.0e-6);
-    }
-    return geomdata.CellSize(2);
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-Real
-cell_height (const int i, const int j, const int k,
-             const Array4<const Real>& z_nd,
-             const GeometryData& geomdata,
-             const bool has_z)
-{
-    if (has_z) {
-        return Compute_Zrel_AtCellCenter(i,j,k,z_nd);
-    }
-    return (k + Real(0.5)) * geomdata.CellSize(2);
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-Real
-cloud_top_height (const int i, const int j, const int k,
-                  const Array4<const Real>& z_nd,
-                  const GeometryData& geomdata,
-                  const bool has_z)
-{
-    if (has_z) {
-        return Compute_Z_AtWFace(i,j,k+1,z_nd);
-    }
-    return (k + 1) * geomdata.CellSize(2);
-}
-} // namespace
-
 RadiationDyCOMS::RadiationDyCOMS (const SolverChoice& sc)
     : m_solver_choice(sc),
       m_F0(70.0),
