@@ -579,7 +579,6 @@ SUBROUTINE SET_MORRISON_NDCNST(ndcnst_in) BIND(C, name='set_morrison_ndcnst_c')
       REAL(C_DOUBLE), INTENT(IN) :: ndcnst_in
 
       NDCNST = ndcnst_in
-      print *,'Morrison: Setting NDCNST to ', NDCNST, ' cm^-3'
 
 END SUBROUTINE SET_MORRISON_NDCNST
 
