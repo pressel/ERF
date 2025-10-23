@@ -267,21 +267,21 @@ ERF::init_stuff (int lev, const BoxArray& ba, const DistributionMapping& dm,
     BoxArray ba2d_mf(std::move(bl2d_mf));
 
     mapfac[lev].resize(MapFacType::num);
-    mapfac[lev][MapFacType::m_x] = std::make_unique<MultiFab>(ba2d_mf,dm,1,3);
-    mapfac[lev][MapFacType::u_x] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(1,0,0)),dm,1,3);
-    mapfac[lev][MapFacType::v_x] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(0,1,0)),dm,1,3);
+    mapfac[lev][MapFacType::m_x] = std::make_unique<MultiFab>(                        ba2d_mf,dm,1,IntVect(3,3,0));
+    mapfac[lev][MapFacType::u_x] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(1,0,0)),dm,1,IntVect(3,3,0));
+    mapfac[lev][MapFacType::v_x] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(0,1,0)),dm,1,IntVect(3,3,0));
 
 #if 0
     // For now we comment this out to avoid CI failures but we will need to re-enable
     //     this if using non-conformal mappings
     if (MapFacType::m_y != MapFacType::m_x) {
-        mapfac[lev][MapFacType::m_y] = std::make_unique<MultiFab>(ba2d_mf,dm,1,3);
+        mapfac[lev][MapFacType::m_y] = std::make_unique<MultiFab>(ba2d_mf,dm,1,IntVect(3,3,0));
     }
     if (MapFacType::u_y != MapFacType::u_x) {
-        mapfac[lev][MapFacType::u_y] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(1,0,0)),dm,1,3);
+        mapfac[lev][MapFacType::u_y] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(1,0,0)),dm,1,IntVect(3,3,0));
     }
     if (MapFacType::v_y != MapFacType::v_x) {
-        mapfac[lev][MapFacType::v_y] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(0,1,0)),dm,1,3);
+        mapfac[lev][MapFacType::v_y] = std::make_unique<MultiFab>(convert(ba2d_mf,IntVect(0,1,0)),dm,1,IntVect(3,3,0));
     }
 #endif
 
@@ -635,9 +635,8 @@ ERF::init_zphys (int lev, Real time)
     } // init_type
 
     // Compute the min dz and pass to the micro model
-    Real dz_min = get_dzmin_terrain(*z_phys_nd[lev]);
-    ParallelDescriptor::ReduceRealMin(dz_min);
-    micro->Set_dzmin(lev, dz_min);
+    Real dzmin = get_dzmin_terrain(*z_phys_nd[lev]);
+    micro->Set_dzmin(lev, dzmin);
 }
 
 void
@@ -675,9 +674,8 @@ ERF::remake_zphys (int lev, Real /*time*/, std::unique_ptr<MultiFab>& temp_zphys
     }
 
     // Compute the min dz and pass to the micro model
-    Real dz_min = get_dzmin_terrain(*z_phys_nd[lev]);
-    ParallelDescriptor::ReduceRealMin(dz_min);
-    micro->Set_dzmin(lev, dz_min);
+    Real dzmin = get_dzmin_terrain(*z_phys_nd[lev]);
+    micro->Set_dzmin(lev, dzmin);
 }
 
 void
