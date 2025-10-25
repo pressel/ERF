@@ -142,26 +142,17 @@ ComputeMoistN2(int i, int j, int k,
     amrex::Real dtheta_dz;
 
     if (saturated && qc_index >= 0) {
-        amrex::Real theta_l =
-            GetLiquidWaterPotentialTemperature(cell_data(i,j,k,rhoTheta_comp) / rho,
-                                               cell_data(i,j,k,qv_index) / rho,
-                                               cell_data(i,j,k,qc_index) / rho);
-        amrex::Real theta_l_kp1 =
-            GetLiquidWaterPotentialTemperature(cell_data(i,j,k+1,rhoTheta_comp) / cell_data(i,j,k+1,rho_comp),
-                                               cell_data(i,j,k+1,qv_index) / cell_data(i,j,k+1,rho_comp),
-                                               cell_data(i,j,k+1,qc_index) / cell_data(i,j,k+1,rho_comp));
-        amrex::Real theta_l_km1 =
-            GetLiquidWaterPotentialTemperature(cell_data(i,j,k-1,rhoTheta_comp) / cell_data(i,j,k-1,rho_comp),
-                                               cell_data(i,j,k-1,qv_index) / cell_data(i,j,k-1,rho_comp),
-                                               cell_data(i,j,k-1,qc_index) / cell_data(i,j,k-1,rho_comp));
+        amrex::Real theta_l    = GetThetal(i, j, k  , cell_data, moisture_indices);
+        amrex::Real theta_l_kp1= GetThetal(i, j, k+1, cell_data, moisture_indices);
+        amrex::Real theta_l_km1= GetThetal(i, j, k-1, cell_data, moisture_indices);
 
         inv_theta = 1.0 / theta_l;
         dtheta_dz = 0.5 * (theta_l_kp1 - theta_l_km1) * dzInv;
 
     } else if (qv_index >= 0) {
-        amrex::Real theta_v = GetThetavGivenRhoRhoTheta(cell_data, i, j, k);
-        amrex::Real theta_v_kp1 = GetThetavGivenRhoRhoTheta(cell_data, i, j, k+1);
-        amrex::Real theta_v_km1 = GetThetavGivenRhoRhoTheta(cell_data, i, j, k-1);
+        amrex::Real theta_v    = GetThetav(i, j, k  , cell_data, moisture_indices);
+        amrex::Real theta_v_kp1= GetThetav(i, j, k+1, cell_data, moisture_indices);
+        amrex::Real theta_v_km1= GetThetav(i, j, k-1, cell_data, moisture_indices);
 
         inv_theta = 1.0 / theta_v;
         dtheta_dz = 0.5 * (theta_v_kp1 - theta_v_km1) * dzInv;

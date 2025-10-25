@@ -66,15 +66,9 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
         bool l_has_yvel = (yvel != nullptr);
         bool l_has_moisture = (moisture_indices.qv >= 0);
 
-        // Legacy stratification approach (deprecated, for backward compatibility)
-        const bool use_ref_theta = (turbChoice.theta_ref > 0);
-        bool l_use_moisture_legacy = (moisture_indices.qv > 0);
-        int  l_rho_qv_comp  = moisture_indices.qv;
-        bool l_use_smag_stratification = turbChoice.use_smag_stratification;
-
-    #ifdef _OPENMP
-    #pragma omp parallel if (Gpu::notInLaunchRegion())
-    #endif
+#ifdef _OPENMP
+#pragma omp parallel if (Gpu::notInLaunchRegion())
+#endif
         for (MFIter mfi(eddyViscosity,TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             Box bxcc  = mfi.growntilebox(1) & domain;
@@ -145,26 +139,6 @@ void ComputeTurbulentViscosityLES (Vector<std::unique_ptr<MultiFab>>& Tau_lev,
                     Real S2_vert = ComputeVerticalShear2(i, j, k, dzInv, u_arr, v_arr);
                     Real Ri_moist = ComputeRichardson(N2_moist, S2_vert);
                     stability_factor = StabilityFunction(Ri_moist, l_Ri_crit);
-                }
-
-                else if (l_use_smag_stratification) {
-                    Real inv_theta = (use_ref_theta) ? 1.0 / turbChoice.theta_ref
-                                                     : cell_data(i,j,k,Rho_comp) /
-                                                       cell_data(i,j,k,RhoTheta_comp);
-                    Real stratification = ComputeStratificationForSmagorinsky(
-                        i, j, k, cell_data, dzInv, l_abs_g, inv_theta,
-                        l_use_moisture_legacy, l_rho_qv_comp, moisture_indices);
-
-                    Real mixing_length = Delta;
-                    if (stratification > 1e-10 && strain_rate_magnitude > 1e-10) {
-                        Real velocity_scale = strain_rate_magnitude * Delta;
-                        Real buoyancy_length = std::sqrt((velocity_scale * velocity_scale) / stratification);
-                        mixing_length = amrex::min(Delta, buoyancy_length);
-                        mixing_length = amrex::max(mixing_length, 0.001 * Delta);
-                    }
-
-                    Real CsDeltaSqr_legacy = Cs * Cs * mixing_length * mixing_length;
-                    nu_turb_base_v = CsDeltaSqr_legacy * strain_rate_magnitude;
                 }
 
                 if (isotropic) {
