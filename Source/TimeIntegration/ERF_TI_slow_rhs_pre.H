@@ -11,6 +11,7 @@
                                 const Real new_stage_time,
                                 const int nrk)
     {
+        BL_PROFILE("slow_rhs_fun_pre");
         //
         // Define primitive variables for all later RK stages
         // (We have already done this for the first RK step)
@@ -22,13 +23,14 @@
             cons_to_prim(S_data[IntVars::cons], ng_cons);
         }
 
-        BL_PROFILE("slow_rhs_fun_pre");
         if (verbose) Print() << std::setprecision(timeprecision)
                              << "Making slow rhs at time " << old_stage_time
                              << " for fast variables advancing from " << old_step_time
                              << " to " << new_stage_time << std::endl;
 
         Real slow_dt = new_stage_time - old_step_time;
+
+        const GpuArray<Real, AMREX_SPACEDIM> dxInv = fine_geom.InvCellSizeArray();
 
         // *************************************************************************
         // Set up flux registers if using two_way coupling
@@ -151,7 +153,11 @@
                          fine_geom, solverChoice, m_SurfaceLayer, domain_bcs_type_d, domain_bcs_type,
                          *zpn_to_use, *zpc_to_use, *ax_to_use, *ay_to_use, *az_to_use, *dJ_to_use,
                          stretched_dz_d[level], gradp[level],
-                         mapfac[level], get_eb(level), fr_as_crse, fr_as_fine);
+                         mapfac[level], get_eb(level),
+#ifdef ERF_USE_SHOC
+                         shoc_interface[level],
+#endif
+                         fr_as_crse, fr_as_fine);
 
         // *****************************************************************************
         // Update for moving terrain
@@ -181,8 +187,6 @@
             AMREX_ALWAYS_ASSERT(solverChoice.advChoice.dycore_vert_adv_type  == AdvType::Centered_2nd);
 
             Real dt_base  = (new_stage_time - old_step_time);
-
-            const GpuArray<Real, AMREX_SPACEDIM> dxInv = fine_geom.InvCellSizeArray();
 
             const Real l_rdOcp   = solverChoice.rdOcp;
 
