@@ -7,7 +7,7 @@
 #             nocturnal marine stratocumulus"
 #
 # Domain:    6.4 km × 6.4 km × 1.5 km
-# Resolution: 50 m horizontal × ~10 m vertical (96 levels, stretched grid)
+# Resolution: 50 m horizontal, stretched vertical (~5 m near surface/inversion)
 # Duration:   6 hours (0000-0600 UTC, 10-11 July 1999)
 # Location:   31.5°N, 122°W, Pacific Ocean west of California
 #
@@ -16,27 +16,64 @@
 #   - Smagorinsky LES with moist Richardson number stability correction
 #   - Prescribed surface fluxes (van Zanten & Stevens 2005 observations)
 #   - Case-specific longwave radiation (Beer's law absorption)
-#   - Large-scale subsidence (divergence D = 3.75×10⁻⁶ s⁻¹)
+#   - Large-scale subsidence (divergence D = 3.76×10⁻⁶ s⁻¹)
 #   - Geostrophic wind forcing
 #   - Rayleigh damping above 1250 m (100 s e-folding time)
 #
 ################################################################################
 
 # ============================  TIME CONTROL  ==================================
-stop_time = 21600.0           # 6 hours (0-6h) per RF02 intercomparison spec
-                              # Original observations: 0000-0600 UTC, 10-11 July 1999
+# Dynamic time stepping based on CFL condition for anelastic dycore
+erf.cfl            = 0.7          # CFL number for dynamic time step computation
+erf.init_shrink    = 1.0          # Factor to shrink initial timestep (default 1.0)
 
-amrex.fpe_trap_invalid = 1    # Abort on floating point errors (recommended)
+# Simulation duration
+stop_time = 21600.0               # 6 hours (0-6h) per RF02 intercomparison spec
+                                  # Original observations: 0000-0600 UTC, 10-11 July 1999
+
+amrex.fpe_trap_invalid = 1        # Abort on floating point errors (recommended)
 fabarray.mfiter_tile_size = 1024 1024 1024  # Tiling for CPU/GPU efficiency
 
 # ==============================  GEOMETRY  ====================================
-# RF02 standard domain: 6.4 km × 6.4 km × 1.5 km (100 × 100 × 120 points)
-# This config uses 128 × 128 × 96 (50 m × 50 m × ~15 m stretched)
+# RF02 standard domain: 6.4 km × 6.4 km × 1.5 km
+# This config uses 128 × 128 × 96 cells with stretched vertical grid
 geometry.prob_lo     = 0.0    0.0    0.0
 geometry.prob_hi     = 6400.0 6400.0 1500.0
-amr.n_cell           = 128    128    96    # 50 m horizontal, ~15 m vertical avg
+amr.n_cell           = 128    128    96    # 50 m horizontal, stretched vertical
 amr.max_level        = 0                   # No adaptive mesh refinement
 geometry.is_periodic = 1 1 0               # Periodic in x,y; bounded in z
+
+################################################################################
+# VERTICAL GRID - DYCOMS-II RF02 (Ackerman et al., 2009 MWR)
+################################################################################
+# Implements stretched vertical grid with 96 cells (97 z-levels) from 0-1500 m
+#
+# Reference:
+#   Ackerman et al. (2009), "Large-Eddy Simulations of a Drizzling,
+#   Stratocumulus-Topped Marine Boundary Layer," MWR, 137, 1083–1110.
+#
+# Grid structure (96 cells total):
+#   • 0-100 m:     5 m spacing (21 levels, 20 cells) - surface layer
+#   • 100-700 m:   ~20-25 m spacing (25 levels, 24 cells) - subcloud/cloud layer  
+#   • 700-900 m:   5 m spacing (41 levels, 40 cells) - inversion region (FINE)
+#   • 900-1500 m:  ~25-100 m spacing (10 levels, 11 cells) - free troposphere
+#
+# Total: 97 z-levels providing fine resolution where it matters most
+################################################################################
+
+erf.terrain_type = StaticFittedMesh
+
+# Custom terrain levels list (z-coordinates of layer interfaces, in meters)
+# Exactly 97 values (96 cells): ~5m resolution near surface (0-100m) and inversion (700-900m)
+erf.terrain_z_levels = 0.0 5.0 10.0 15.0 20.0 25.0 30.0 35.0 40.0 45.0 50.0 55.0 60.0 65.0 70.0 75.0 80.0 85.0 90.0 95.0 100.0 120.0 140.0 160.0 180.0 200.0 220.0 240.0 260.0 280.0 300.0 325.0 350.0 375.0 400.0 425.0 450.0 475.0 500.0 525.0 550.0 575.0 600.0 625.0 650.0 675.0 700.0 705.0 710.0 715.0 720.0 725.0 730.0 735.0 740.0 745.0 750.0 755.0 760.0 765.0 770.0 775.0 780.0 785.0 790.0 795.0 800.0 805.0 810.0 815.0 820.0 825.0 830.0 835.0 840.0 845.0 850.0 855.0 860.0 865.0 870.0 875.0 880.0 885.0 890.0 895.0 900.0 925.0 950.0 975.0 1000.0 1050.0 1100.0 1200.0 1300.0 1400.0 1500.0
+
+################################################################################
+# Notes:
+# - Grid spacing: 5m near surface (0-100m) AND in inversion (700-900m)
+# - Fine resolution captures surface fluxes AND sharp inversion structure
+# - Coarser spacing (20-25m) in cloud layer conserves cells
+# - Very coarse above 900m reduces cost in free atmosphere/sponge layer
+################################################################################
 
 # ========================  BOUNDARY CONDITIONS  ===============================
 # LOWER BOUNDARY (ocean surface at z=0)
@@ -60,8 +97,11 @@ erf.most.zref    = 10.0           # Reference height for diagnostics (m)
 zhi.type = "SlipWall"             # No vertical velocity, free slip
 
 # =============================  NUMERICS  =====================================
-erf.fixed_dt           = 0.1      # Fixed timestep (s) - RF02 intercomparison standard
-erf.fixed_mri_dt_ratio = 4        # Acoustic subcycling ratio (4 × 0.1 s = 0.025 s)
+# Use anelastic approximation (filters acoustic waves, allows larger timesteps)
+erf.anelastic = 1                 # 1 = anelastic, 0 = compressible
+
+# Pressure solver: FFT-based for periodic domains (fast and accurate)
+erf.use_fft = 1                   # Use FFT-based Poisson solver (requires ERF_USE_FFT build flag)
 
 # ========================  VERBOSITY & OUTPUT  ================================
 erf.v            = 1              # Verbosity level (1=normal)
@@ -74,10 +114,10 @@ erf.check_int  = 0                # 0 = no checkpoints (set >0 for restart capab
 
 # Plot files (visualization)
 erf.plot_file_1 = plt_dycoms_rf02 # Plot file prefix
-erf.plot_int_1  = 600             # Output every 600 steps (60 s)
+erf.plot_int_1  = 100             # Output every 100 steps
 erf.plot_vars_1 = density rhotheta x_velocity y_velocity z_velocity pressure \
-                  temp theta qv qc qr qsat qt qn qp rain micro_nc micro_nr \
-                  nut Kmv Kmh                # Added: turbulent viscosity diagnostics
+                  temp theta qv qc qsat qt qn qp micro_nc micro_nr \
+                  nut Kmv Kmh z_phys         # Added: z_phys for stretched grid visualization
 
 # Variable descriptions:
 #   qv  = water vapor mixing ratio (kg/kg)
@@ -96,7 +136,7 @@ erf.use_gravity    = true         # Include gravity (essential for stratocumulus
 erf.use_coriolis   = true         # Coriolis force (geostrophic adjustment)
 erf.latitude       = 31.5         # RF02 location: 31.5°N, 122°W
 
-erf.use_moist_background = true   # Use moist thermodynamics for base state
+erf.use_moist_background = true   # Use moist RF02 profiles for base state (NO smoothing!)
 
 # ---------- MICROPHYSICS ----------
 # Morrison two-moment warm-rain scheme (Morrison et al. 2005, 2009)
@@ -206,8 +246,8 @@ prob.W_0   = 0.0                  # Initial w-wind (m/s)
 prob.dycoms.p_surf     = 101780.0 # Surface pressure (Pa) - RF02 spec: 1017.8 hPa
 prob.dycoms.sst        = 292.0    # Sea surface temperature (K) - RF02 spec
 prob.dycoms.u_star     = 0.25     # Surface friction velocity (m/s) - RF02 spec
-prob.dycoms.divergence = 3.75e-6  # Large-scale divergence (s⁻¹) - RF02 spec
-                                  # Note: RF02 paper states 3.76×10⁻⁶, some use 3.75×10⁻⁶
+prob.dycoms.divergence = 3.76e-6  # Large-scale divergence (s⁻¹) - RF02 spec
+                                  # Note: RF02 paper states 3.76×10⁻⁶, some use 3.76×10⁻⁶
 prob.dycoms.f_coriolis = 1.03e-4  # Coriolis parameter (s⁻¹) at 31.5°N
 prob.dycoms.nc         = 55.0     # Cloud droplet concentration (cm⁻³) - RF02 observed
 
@@ -245,7 +285,7 @@ prob.dycoms.theta_pert_height = 200.0  # Height limit (m) - default 200 m
 # u*:          0.25 m/s
 # Sensible H:  16 W/m²
 # Latent LE:   93 W/m²
-# Divergence:  3.75×10⁻⁶ s⁻¹
+# Divergence:  3.76×10⁻⁶ s⁻¹
 # Coriolis f:  1.03×10⁻⁴ s⁻¹ (31.5°N)
 # Cloud Nc:    55 cm⁻³
 # Inversion:   ~795 m (initial), evolves with time

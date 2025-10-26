@@ -236,15 +236,37 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
     const Real qt_threshold = m_qt_threshold;
     const bool use_local_zi = m_use_local_zi;
 
-    // Maximum number of vertical levels (assuming reasonable domain size)
-    // If domain is larger, increase this or switch to Arena allocation
-    // Use preprocessor macros for MSVC compatibility in device code
-#ifndef ERF_MAX_NZ_FACES
-#define ERF_MAX_NZ_FACES 256
-#endif
-#ifndef ERF_MAX_NZ_CELLS
-#define ERF_MAX_NZ_CELLS 255
-#endif
+    // Determine actual domain size for dynamic allocation
+    // This respects the actual grid while maintaining GPU safety
+    const int NZ_domain = geom.Domain().length(2);  // Number of cells in z-direction
+    const int NF_domain = NZ_domain + 1;            // Number of faces
+
+    // Safety check: Ensure reasonable domain size
+    constexpr int MAX_REASONABLE_NZ = 2048;  // Generous upper limit for safety
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        NZ_domain <= MAX_REASONABLE_NZ,
+        "Domain has unreasonably large vertical extent (NZ > 2048). "
+        "If intentional, increase MAX_REASONABLE_NZ in ERF_RadiationDyCOMS.cpp"
+    );
+
+    // Allocate work arrays dynamically based on actual domain size
+    // Using Gpu::ManagedVector ensures GPU/CPU accessibility
+    Gpu::ManagedVector<Real> work_zf(NF_domain);
+    Gpu::ManagedVector<Real> work_z_cc(NZ_domain);
+    Gpu::ManagedVector<Real> work_dz(NZ_domain);
+    Gpu::ManagedVector<Real> work_tau_bottom(NF_domain);
+    Gpu::ManagedVector<Real> work_tau_top(NF_domain);
+
+    // Get raw pointers for device capture
+    Real* zf_ptr            = work_zf.data();
+    Real* z_cc_ptr          = work_z_cc.data();
+    Real* dz_ptr            = work_dz.data();
+    Real* tau_bottom_ptr    = work_tau_bottom.data();
+    Real* tau_top_ptr       = work_tau_top.data();
+
+    // Pass NZ_domain and NF_domain for device code to use
+    const int dev_NZ = NZ_domain;
+    const int dev_NF = NF_domain;
 
     // Loop over horizontal (i,j) columns in the tile
     // For each column, do serial k-loop to build prefix/suffix sums
@@ -257,14 +279,12 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         const int NZ = k_hi - k_lo + 1;
         const int NF = NZ + 1; // number of faces (including domain boundaries)
 
-        AMREX_ASSERT_WITH_MESSAGE(NF <= ERF_MAX_NZ_FACES, "Increase ERF_MAX_NZ_FACES for this domain");
+        AMREX_ASSERT_WITH_MESSAGE(NZ == dev_NZ && NF == dev_NF,
+                                  "Tile NZ must match domain NZ (no z-tiling allowed)");
 
-        // Stack arrays for this column
-        Real zf[ERF_MAX_NZ_FACES];  // z-coordinate at faces [m]
-        Real z_cc[ERF_MAX_NZ_CELLS]; // z-coordinate at cell centers [m]
-        Real dz[ERF_MAX_NZ_CELLS];  // cell thickness [m]
-        Real tau_from_bottom[ERF_MAX_NZ_FACES]; // τ(0, z_face) [dimensionless]
-        Real tau_from_top[ERF_MAX_NZ_FACES];    // τ(z_face, ∞) [dimensionless]
+        // Use shared work arrays allocated outside the kernel
+        // Index as: zf_ptr[kf], z_cc_ptr[kc], etc.
+        // This avoids stack allocation and works with any vertical resolution
 
         // =====================================================================
         // Step 1: Build z-face, z-center, and dz arrays (cache geometry)
@@ -272,21 +292,21 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
         for (int kf = 0; kf < NF; ++kf) {
             const int k_face = k_lo + kf;
             if (has_z) {
-                zf[kf] = Compute_Z_AtWFace(i, j, k_face, z_nd);
+                zf_ptr[kf] = Compute_Z_AtWFace(i, j, k_face, z_nd);
             } else {
-                zf[kf] = prob_lo[2] + k_face * geomdata.CellSize(2);
+                zf_ptr[kf] = prob_lo[2] + k_face * geomdata.CellSize(2);
             }
         }
 
         for (int kc = 0; kc < NZ; ++kc) {
-            dz[kc] = std::max(zf[kc+1] - zf[kc], 1.0e-6_rt);
-            z_cc[kc] = 0.5_rt * (zf[kc] + zf[kc+1]); // cell center height
+            dz_ptr[kc] = std::max(zf_ptr[kc+1] - zf_ptr[kc], 1.0e-6_rt);
+            z_cc_ptr[kc] = 0.5_rt * (zf_ptr[kc] + zf_ptr[kc+1]); // cell center height
         }
 
         // =====================================================================
         // Step 2: Build prefix sum τ(0, z_face) from bottom up
         // =====================================================================
-        tau_from_bottom[0] = 0.0_rt; // surface
+        tau_bottom_ptr[0] = 0.0_rt; // surface
         for (int kc = 0; kc < NZ; ++kc) {
             const int k_cell = k_lo + kc;
             const Real rho_k = state(i, j, k_cell, Rho_comp);
@@ -303,7 +323,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 ql_k = 0.0_rt;
             }
 
-            const Real tau_inc = kappa * rho_k * ql_k * dz[kc];
+            const Real tau_inc = kappa * rho_k * ql_k * dz_ptr[kc];
 
 #ifdef ERF_DEBUG
             // Sanity check: optical depth increment must be non-negative and dimensionless
@@ -311,13 +331,13 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 "Negative optical depth increment detected");
 #endif
 
-            tau_from_bottom[kc+1] = tau_from_bottom[kc] + tau_inc;
+            tau_bottom_ptr[kc+1] = tau_bottom_ptr[kc] + tau_inc;
         }
 
         // =====================================================================
         // Step 3: Build suffix sum τ(z_face, ∞) from top down
         // =====================================================================
-        tau_from_top[NF-1] = 0.0_rt; // top of domain
+        tau_top_ptr[NF-1] = 0.0_rt; // top of domain
         for (int kc = NZ-1; kc >= 0; --kc) {
             const int k_cell = k_lo + kc;
             const Real rho_k = state(i, j, k_cell, Rho_comp);
@@ -334,8 +354,8 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                 ql_k = 0.0_rt;
             }
 
-            const Real tau_inc = kappa * rho_k * ql_k * dz[kc];
-            tau_from_top[kc] = tau_from_top[kc+1] + tau_inc;
+            const Real tau_inc = kappa * rho_k * ql_k * dz_ptr[kc];
+            tau_top_ptr[kc] = tau_top_ptr[kc+1] + tau_inc;
         }
 
         // =====================================================================
@@ -376,7 +396,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
                     // Linear interpolation between cell centers to find crossing height
                     Real alpha = (qt_threshold - qt_k) / std::max(qt_above - qt_k, 1.0e-12_rt);
                     alpha = std::min(1.0_rt, std::max(0.0_rt, alpha));
-                    zi_local = z_cc[kc] + alpha * (z_cc[kc+1] - z_cc[kc]);
+                    zi_local = z_cc_ptr[kc] + alpha * (z_cc_ptr[kc+1] - z_cc_ptr[kc]);
                     found_crossing = true;
                     break;
                 }
@@ -393,10 +413,10 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
 
                 if (qt_bot < qt_threshold) {
                     // Entire column is dry: set zi to bottom (H=1 everywhere)
-                    zi_local = z_cc[0];
+                    zi_local = z_cc_ptr[0];
                 } else {
                     // Entire column is moist: set zi to top (H=0 everywhere)
-                    zi_local = z_cc[NZ-1];
+                    zi_local = z_cc_ptr[NZ-1];
                 }
             }
         }
@@ -428,16 +448,16 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
             const Real exner = getExnergivenP(pres, R_d / Cp_d);
 
             // Face indices and heights
-            const int kb = kc;       // bottom face index
-            const int kt = kc + 1;   // top face index
-            const Real z_b = zf[kb]; // bottom face height [m]
-            const Real z_t = zf[kt]; // top face height [m]
+            const int kb = kc;           // bottom face index
+            const int kt = kc + 1;       // top face index
+            const Real z_b = zf_ptr[kb]; // bottom face height [m]
+            const Real z_t = zf_ptr[kt]; // top face height [m]
 
             // Optical depths from prefix/suffix sums
-            const Real Qb = tau_from_bottom[kb];  // τ(0, z_bottom)
-            const Real Qt = tau_from_bottom[kt];  // τ(0, z_top)
-            const Real Qinf_b = tau_from_top[kb]; // τ(z_bottom, ∞)
-            const Real Qinf_t = tau_from_top[kt]; // τ(z_top, ∞)
+            const Real Qb = tau_bottom_ptr[kb];  // τ(0, z_bottom)
+            const Real Qt = tau_bottom_ptr[kt];  // τ(0, z_top)
+            const Real Qinf_b = tau_top_ptr[kb]; // τ(z_bottom, ∞)
+            const Real Qinf_t = tau_top_ptr[kt]; // τ(z_top, ∞)
 
             // Beer's-law fluxes at faces [W/m²]
             Real F_b = F0 * std::exp(-Qinf_b) + F1 * std::exp(-Qb);
@@ -483,7 +503,7 @@ RadiationDyCOMS::compute_radiative_tendency (const MFIter& mfi,
 
             // Heating rate computation
             // dT/dt = -∇·F / (ρ·cp) = -(F_top - F_bottom) / (ρ·cp·Δz)
-            const Real denom = rho * Cp_d * dz[kc];
+            const Real denom = rho * Cp_d * dz_ptr[kc];
             const Real dTdt   = -(F_t - F_b) / std::max(denom, 1.0e-12_rt);
             const Real dthetadt = dTdt / std::max(exner, 1.0e-12_rt);
 

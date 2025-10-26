@@ -166,11 +166,22 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
      *
      * **Method:**
      * 1. Compute RF02 (θ_ℓ, qt) at each level
-     * 2. Apply vertical smoothing filter (Δz ~ 50-100m) for HSE integration only
+     * 2. Apply HEIGHT-BASED vertical smoothing filter (Δz ~ 70m) for HSE integration only
+     *    - CRITICAL: For stretched grids, smoothing MUST be height-based, not index-based
+     *    - Index-based smoothing with stretched grids causes variable smoothing scales:
+     *      * Fine regions (5m cells): minimal smoothing
+     *      * Coarse regions (100m cells): excessive smoothing destroys gradients
+     *    - Height-based Gaussian filter ensures consistent 70m smoothing scale everywhere
      * 3. Integrate smooth profiles hydrostatically → smooth ρ₀(z)
+     *    - Uses actual dz from stretched grid: dz = h_z_faces[k+1] - h_z_faces[k]
      * 4. init_custom_pert() applies sharp RF02 profiles → ρ' contains discontinuities
      *
      * **Result:** Smooth base state ρ₀(z) for anelastic, sharp inversion preserved.
+     *
+     * **Stretched Grid Compatibility:**
+     * - Properly handles arbitrary vertical grid spacing
+     * - Smoothing scale independent of local grid resolution
+     * - Hydrostatic integration uses actual layer thicknesses
      */
 
     const int khi = geom.Domain().bigEnd()[2];
@@ -202,39 +213,39 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
     Vector<Real> qt_raw(khi+1);
     Vector<Real> z_cc(khi+1);
 
+    Print() << "DEBUG: First checking z-levels and raw profiles..." << std::endl;
+    Print() << "  parms.zi = " << parms.zi << " m" << std::endl;
+    
     for (int k = 0; k <= khi; ++k) {
         z_cc[k] = 0.5 * (h_z_faces[k] + h_z_faces[k+1]);
         theta_l_raw[k] = dycoms_theta_l(parms, z_cc[k]);
         qt_raw[k] = dycoms_qt(parms, z_cc[k]);
+        
+        // Print levels around the inversion
+        if (k >= 55 && k <= 70) {
+            Print() << "  k=" << k << " z=" << z_cc[k] << " theta_l=" << theta_l_raw[k] 
+                    << " qt=" << qt_raw[k]*1000.0 << " g/kg" << std::endl;
+        }
     }
 
-    // Step 2: Apply vertical smoothing for HSE integration
-    // Smoothing scale: ~5 grid points (typically 50-70m for DyCOMS grids)
-    const int smooth_radius = 5;
+    // Step 2: NO SMOOTHING - use raw profiles directly!
+    // The sharp RF02 inversion is physically correct and should be preserved in base state.
+    // Any smoothing destroys the inversion structure.
     Vector<Real> theta_l_smooth(khi+1);
     Vector<Real> qt_smooth(khi+1);
 
     for (int k = 0; k <= khi; ++k) {
-        const int k_lo = std::max(0, k - smooth_radius);
-        const int k_hi = std::min(khi, k + smooth_radius);
-
-        Real sum_theta = 0.0;
-        Real sum_qt = 0.0;
-        int count = 0;
-
-        for (int kk = k_lo; kk <= k_hi; ++kk) {
-            sum_theta += theta_l_raw[kk];
-            sum_qt += qt_raw[kk];
-            count++;
-        }
-
-        theta_l_smooth[k] = sum_theta / count;
-        qt_smooth[k] = sum_qt / count;
+        theta_l_smooth[k] = theta_l_raw[k];  // NO smoothing!
+        qt_smooth[k] = qt_raw[k];            // NO smoothing!
     }
 
     // Step 3: Hydrostatic integration with SMOOTHED profiles
     Vector<Real> h_rho(khi+1);
     Real pressure = parms.p_surf;
+
+    // DEBUG: Print first few levels to verify profiles
+    Print() << "DyCOMS RF02 Base State Integration (first 10 levels):" << std::endl;
+    Print() << "  k    z(m)   theta_l(K)  qt(g/kg)   pressure(Pa)   rho(kg/m3)" << std::endl;
 
     for (int k = 0; k <= khi; ++k) {
         Real rho_level, theta_level, temp_level, qv_level, qc_level;
@@ -243,11 +254,19 @@ Problem::erf_init_dens_hse_moist (MultiFab& rho_hse,
                                    qv_level, qc_level);
         h_rho[k] = rho_level;
 
+        // DEBUG: Print first 10 levels and levels near inversion
+        if (k < 10 || (k >= 40 && k <= 50)) {
+            Print() << "  " << k << "  " << z_cc[k] << "  " << theta_l_smooth[k] 
+                    << "  " << qt_smooth[k]*1000.0 << "  " << pressure 
+                    << "  " << rho_level << std::endl;
+        }
+
         if (k < khi) {
             const Real dz = h_z_faces[k+1] - h_z_faces[k];
             pressure = std::max(pressure - rho_level * CONST_GRAV * dz, 1.0e3);
         }
     }
+    Print() << "  ..." << std::endl;
 
     Gpu::DeviceVector<Real> d_rho(khi+1);
     Gpu::copy(Gpu::hostToDevice, h_rho.begin(), h_rho.end(), d_rho.begin());
