@@ -38,10 +38,6 @@ ComputeTurbulentViscosity (amrex::Real dt,
                            const amrex::BCRec* bc_ptr,
                            bool vert_only = false);
 
-/**
- * Internal function for computing turbulent viscosity with LES models.
- * Called by ComputeTurbulentViscosity wrapper.
- */
 void
 ComputeTurbulentViscosityLES (amrex::Vector<std::unique_ptr<amrex::MultiFab>>& Tau_lev,
                               const amrex::MultiFab& cons_in,
@@ -51,7 +47,7 @@ ComputeTurbulentViscosityLES (amrex::Vector<std::unique_ptr<amrex::MultiFab>>& T
                               amrex::MultiFab& Hfx3,
                               amrex::MultiFab& Diss,
                               const amrex::Geometry& geom,
-                              bool use_terrain,
+                              bool use_terrain_fitted_coords,
                               amrex::Vector<std::unique_ptr<amrex::MultiFab>>& mapfac,
                               const std::unique_ptr<amrex::MultiFab>& z_phys_nd,
                               const TurbChoice& turbChoice,

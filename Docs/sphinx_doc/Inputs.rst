@@ -996,6 +996,10 @@ List of Parameters
 |                                  | model, and if so,  | "Smagorinsky",      |              |
 |                                  | which type?        | "Deardorff"         |              |
 +----------------------------------+--------------------+---------------------+--------------+
+| **erf.rans_type**                | Using a RANS       | "None" or "kEqn"    | "None"       |
+|                                  | model, and if so,  |                     |              |
+|                                  | which type?        |                     |              |
++----------------------------------+--------------------+---------------------+--------------+
 | **erf.molec_diff_type**          | Using molecular    | "None",             | "None"       |
 |                                  | viscosity and      | "Constant", or      |              |
 |                                  | diffusivity?       | "ConstantAlpha"     |              |
@@ -1006,10 +1010,9 @@ List of Parameters
 | **erf.Cs**                       | Constant           | Real                | 0.0          |
 |                                  | Smagorinsky coeff. |                     |              |
 +----------------------------------+--------------------+---------------------+--------------+
-| **erf.use_smag_stratification**  | Enable             | Boolean             | true         |
-|                                  | stratification     |                     |              |
-|                                  | effects (dry and   |                     |              |
-|                                  | moist) in          |                     |              |
+| **erf.use_moist_Ri_correction**  | Apply moist        | Boolean             | false        |
+|                                  | Richardson number  |                     |              |
+|                                  | limiter to the     |                     |              |
 |                                  | Smagorinsky model  |                     |              |
 +----------------------------------+--------------------+---------------------+--------------+
 | **erf.Ck**                       | Constant           | Real                | 0.1          |
