@@ -628,18 +628,21 @@ rrtmgp_sw (const int ncol,
     int ngas = gas_concs.get_num_gases();
 
     // Associate local pointers for fluxes
+    // NOTE: Creating references to Kokkos views is safe even if they're unallocated.
+    // The danger is USING those unallocated views in kernel captures or dereference operations.
+    // We guard all uses with the extra_clnclrsky_diag and extra_clnsky_diag flags.
     auto& flux_up = fluxes.flux_up;
     auto& flux_dn = fluxes.flux_dn;
     auto& flux_dn_dir = fluxes.flux_dn_dir;
     auto& bnd_flux_up = fluxes.bnd_flux_up;
     auto& bnd_flux_dn = fluxes.bnd_flux_dn;
     auto& bnd_flux_dn_dir = fluxes.bnd_flux_dn_dir;
-    auto& clnclrsky_flux_up = clnclrsky_fluxes.flux_up;
-    auto& clnclrsky_flux_dn = clnclrsky_fluxes.flux_dn;
-    auto& clnclrsky_flux_dn_dir = clnclrsky_fluxes.flux_dn_dir;
     auto& clrsky_flux_up = clrsky_fluxes.flux_up;
     auto& clrsky_flux_dn = clrsky_fluxes.flux_dn;
     auto& clrsky_flux_dn_dir = clrsky_fluxes.flux_dn_dir;
+    auto& clnclrsky_flux_up = clnclrsky_fluxes.flux_up;
+    auto& clnclrsky_flux_dn = clnclrsky_fluxes.flux_dn;
+    auto& clnclrsky_flux_dn_dir = clnclrsky_fluxes.flux_dn_dir;
     auto& clnsky_flux_up = clnsky_fluxes.flux_up;
     auto& clnsky_flux_dn = clnsky_fluxes.flux_dn;
     auto& clnsky_flux_dn_dir = clnsky_fluxes.flux_dn_dir;
@@ -651,16 +654,31 @@ rrtmgp_sw (const int ncol,
         flux_up    (icol,ilev) = 0;
         flux_dn    (icol,ilev) = 0;
         flux_dn_dir(icol,ilev) = 0;
-        clnclrsky_flux_up    (icol,ilev) = 0;
-        clnclrsky_flux_dn    (icol,ilev) = 0;
-        clnclrsky_flux_dn_dir(icol,ilev) = 0;
         clrsky_flux_up    (icol,ilev) = 0;
         clrsky_flux_dn    (icol,ilev) = 0;
         clrsky_flux_dn_dir(icol,ilev) = 0;
-        clnsky_flux_up    (icol,ilev) = 0;
-        clnsky_flux_dn    (icol,ilev) = 0;
-        clnsky_flux_dn_dir(icol,ilev) = 0;
     });
+
+    // Conditionally zero diagnostic fluxes ONLY if they were allocated
+    // Using unallocated Kokkos views in kernel captures causes segfaults
+    if (extra_clnclrsky_diag) {
+        Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {ncol, nlay+1}),
+                             KOKKOS_LAMBDA (int icol, int ilev)
+        {
+            clnclrsky_flux_up    (icol,ilev) = 0;
+            clnclrsky_flux_dn    (icol,ilev) = 0;
+            clnclrsky_flux_dn_dir(icol,ilev) = 0;
+        });
+    }
+    if (extra_clnsky_diag) {
+        Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {ncol, nlay+1}),
+                             KOKKOS_LAMBDA (int icol, int ilev)
+        {
+            clnsky_flux_up    (icol,ilev) = 0;
+            clnsky_flux_dn    (icol,ilev) = 0;
+            clnsky_flux_dn_dir(icol,ilev) = 0;
+        });
+    }
     Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {ncol, nlay+1, nbnd}),
                          KOKKOS_LAMBDA (int icol, int ilev, int ibnd)
     {
@@ -918,14 +936,17 @@ rrtmgp_lw (const int ncol,
     int nbnd = k_dist.get_nband();
 
     // Associate local pointers for fluxes
+    // NOTE: Creating references to Kokkos views is safe even if they're unallocated.
+    // The danger is USING those unallocated views in kernel captures or dereference operations.
+    // We guard all uses with the extra_clnclrsky_diag and extra_clnsky_diag flags.
     auto& flux_up           = fluxes.flux_up;
     auto& flux_dn           = fluxes.flux_dn;
     auto& bnd_flux_up       = fluxes.bnd_flux_up;
     auto& bnd_flux_dn       = fluxes.bnd_flux_dn;
-    auto& clnclrsky_flux_up = clnclrsky_fluxes.flux_up;
-    auto& clnclrsky_flux_dn = clnclrsky_fluxes.flux_dn;
     auto& clrsky_flux_up    = clrsky_fluxes.flux_up;
     auto& clrsky_flux_dn    = clrsky_fluxes.flux_dn;
+    auto& clnclrsky_flux_up = clnclrsky_fluxes.flux_up;
+    auto& clnclrsky_flux_dn = clnclrsky_fluxes.flux_dn;
     auto& clnsky_flux_up    = clnsky_fluxes.flux_up;
     auto& clnsky_flux_dn    = clnsky_fluxes.flux_dn;
 
@@ -933,15 +954,30 @@ rrtmgp_lw (const int ncol,
     Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {ncol, nlay+1}),
                          KOKKOS_LAMBDA (int icol, int ilev)
     {
-        flux_up(icol, ilev)           = 0;
-        flux_dn(icol, ilev)           = 0;
-        clnclrsky_flux_up(icol, ilev) = 0;
-        clnclrsky_flux_dn(icol, ilev) = 0;
-        clrsky_flux_up(icol, ilev)    = 0;
-        clrsky_flux_dn(icol, ilev)    = 0;
-        clnsky_flux_up(icol, ilev)    = 0;
-        clnsky_flux_dn(icol, ilev)    = 0;
+        flux_up(icol, ilev)        = 0;
+        flux_dn(icol, ilev)        = 0;
+        clrsky_flux_up(icol, ilev) = 0;
+        clrsky_flux_dn(icol, ilev) = 0;
     });
+
+    // Conditionally zero diagnostic fluxes ONLY if they were allocated
+    // Using unallocated Kokkos views in kernel captures causes segfaults
+    if (extra_clnclrsky_diag) {
+        Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {ncol, nlay+1}),
+                             KOKKOS_LAMBDA (int icol, int ilev)
+        {
+            clnclrsky_flux_up(icol, ilev) = 0;
+            clnclrsky_flux_dn(icol, ilev) = 0;
+        });
+    }
+    if (extra_clnsky_diag) {
+        Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {ncol, nlay+1}),
+                             KOKKOS_LAMBDA (int icol, int ilev)
+        {
+            clnsky_flux_up(icol, ilev) = 0;
+            clnsky_flux_dn(icol, ilev) = 0;
+        });
+    }
     Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {ncol, nlay+1, nbnd}),
                          KOKKOS_LAMBDA (int icol, int ilev, int ibnd)
     {

@@ -272,21 +272,34 @@ Radiation::alloc_buffers ()
     sw_flux_dn_dir           = real2d_k("sw_flux_dn_dir"          , m_ncol, m_nlay+1);
     lw_flux_up               = real2d_k("sw_flux_up"              , m_ncol, m_nlay+1);
     lw_flux_dn               = real2d_k("sw_flux_dn"              , m_ncol, m_nlay+1);
-    sw_clnclrsky_flux_up     = real2d_k("sw_clnclrsky_flux_up"    , m_ncol, m_nlay+1);
-    sw_clnclrsky_flux_dn     = real2d_k("sw_clnclrsky_flux_dn"    , m_ncol, m_nlay+1);
-    sw_clnclrsky_flux_dn_dir = real2d_k("sw_clnclrsky_flux_dn_dir", m_ncol, m_nlay+1);
+
+    // Always allocate clear-sky fluxes (needed for heating rates)
     sw_clrsky_flux_up        = real2d_k("sw_clrsky_flux_up"       , m_ncol, m_nlay+1);
     sw_clrsky_flux_dn        = real2d_k("sw_clrsky_flux_dn"       , m_ncol, m_nlay+1);
     sw_clrsky_flux_dn_dir    = real2d_k("sw_clrsky_flux_dn_dir"   , m_ncol, m_nlay+1);
-    sw_clnsky_flux_up        = real2d_k("sw_clnsky_flux_up"       , m_ncol, m_nlay+1);
-    sw_clnsky_flux_dn        = real2d_k("sw_clnsky_flux_dn"       , m_ncol, m_nlay+1);
-    sw_clnsky_flux_dn_dir    = real2d_k("sw_clnsky_flux_dn_dir"   , m_ncol, m_nlay+1);
-    lw_clnclrsky_flux_up     = real2d_k("lw_clnclrsky_flux_up"    , m_ncol, m_nlay+1);
-    lw_clnclrsky_flux_dn     = real2d_k("lw_clnclrsky_flux_dn"    , m_ncol, m_nlay+1);
     lw_clrsky_flux_up        = real2d_k("lw_clrsky_flux_up"       , m_ncol, m_nlay+1);
     lw_clrsky_flux_dn        = real2d_k("lw_clrsky_flux_dn"       , m_ncol, m_nlay+1);
-    lw_clnsky_flux_up        = real2d_k("lw_clnsky_flux_up"       , m_ncol, m_nlay+1);
-    lw_clnsky_flux_dn        = real2d_k("lw_clnsky_flux_dn"       , m_ncol, m_nlay+1);
+
+    // Conditionally allocate diagnostic clean-clear-sky and clean-sky flux arrays
+    // RRTMGP's design: FluxesBroadbandK.reduce() checks is_allocated() for each field
+    // and only processes allocated fields. rte_lw/rte_sw only compute diagnostics when
+    // the corresponding flag is true. By only allocating when requested, we save ~1.86 GB/rank.
+    // CRITICAL: Do not create references to unallocated Kokkos views - causes segfaults.
+    if (m_extra_clnclrsky_diag) {
+        sw_clnclrsky_flux_up     = real2d_k("sw_clnclrsky_flux_up"    , m_ncol, m_nlay+1);
+        sw_clnclrsky_flux_dn     = real2d_k("sw_clnclrsky_flux_dn"    , m_ncol, m_nlay+1);
+        sw_clnclrsky_flux_dn_dir = real2d_k("sw_clnclrsky_flux_dn_dir", m_ncol, m_nlay+1);
+        lw_clnclrsky_flux_up     = real2d_k("lw_clnclrsky_flux_up"    , m_ncol, m_nlay+1);
+        lw_clnclrsky_flux_dn     = real2d_k("lw_clnclrsky_flux_dn"    , m_ncol, m_nlay+1);
+    }
+
+    if (m_extra_clnsky_diag) {
+        sw_clnsky_flux_up        = real2d_k("sw_clnsky_flux_up"       , m_ncol, m_nlay+1);
+        sw_clnsky_flux_dn        = real2d_k("sw_clnsky_flux_dn"       , m_ncol, m_nlay+1);
+        sw_clnsky_flux_dn_dir    = real2d_k("sw_clnsky_flux_dn_dir"   , m_ncol, m_nlay+1);
+        lw_clnsky_flux_up        = real2d_k("lw_clnsky_flux_up"       , m_ncol, m_nlay+1);
+        lw_clnsky_flux_dn        = real2d_k("lw_clnsky_flux_dn"       , m_ncol, m_nlay+1);
+    }
 
     // 3d size (ncol, nlay+1, nswbands)
     sw_bnd_flux_up  = real3d_k("sw_bnd_flux_up" , m_ncol, m_nlay+1, m_nswbands);
@@ -305,21 +318,17 @@ Radiation::alloc_buffers ()
     // 2d size (ncol, nlwbands)
     emis_sfc    = real2d_k("emis_sfc", m_ncol, m_nlwbands);
 
-    /*
     // 3d size (ncol, nlay, n[sw,lw]bands)
     aero_tau_sw = real3d_k("aero_tau_sw", m_ncol, m_nlay, m_nswbands);
     aero_ssa_sw = real3d_k("aero_ssa_sw", m_ncol, m_nlay, m_nswbands);
     aero_g_sw   = real3d_k("aero_g_sw"  , m_ncol, m_nlay, m_nswbands);
     aero_tau_lw = real3d_k("aero_tau_lw", m_ncol, m_nlay, m_nlwbands);
 
-    // 3d size (ncol, nlay, n[sw,lw]bnds)
-    cld_tau_sw_bnd = real3d_k("cld_tau_sw_bnd", m_ncol, m_nlay, m_nswbands);
-    cld_tau_lw_bnd = real3d_k("cld_tau_lw_bnd", m_ncol, m_nlay, m_nlwbands);
-
-    // 3d size (ncol, nlay, n[sw,lw]gpts)
-    cld_tau_sw_gpt = real3d_k("cld_tau_sw_gpt", m_ncol, m_nlay, m_nswgpts);
-    cld_tau_lw_gpt = real3d_k("cld_tau_lw_gpt", m_ncol, m_nlay, m_nlwgpts);
-    */
+    // Optional diagnostics: leave default-constructed unless explicitly requested.
+    cld_tau_sw_bnd = real3d_k();
+    cld_tau_lw_bnd = real3d_k();
+    cld_tau_sw_gpt = real3d_k();
+    cld_tau_lw_gpt = real3d_k();
 }
 
 void
@@ -378,19 +387,23 @@ Radiation::dealloc_buffers ()
     sw_flux_dn_dir           = real2d_k();
     lw_flux_up               = real2d_k();
     lw_flux_dn               = real2d_k();
-    sw_clnclrsky_flux_up     = real2d_k();
-    sw_clnclrsky_flux_dn     = real2d_k();
-    sw_clnclrsky_flux_dn_dir = real2d_k();
+
+    // Always deallocate clear-sky fluxes
     sw_clrsky_flux_up        = real2d_k();
     sw_clrsky_flux_dn        = real2d_k();
     sw_clrsky_flux_dn_dir    = real2d_k();
+    lw_clrsky_flux_up        = real2d_k();
+    lw_clrsky_flux_dn        = real2d_k();
+
+    // Deallocate diagnostic fluxes (safe to call on default-constructed views)
+    sw_clnclrsky_flux_up     = real2d_k();
+    sw_clnclrsky_flux_dn     = real2d_k();
+    sw_clnclrsky_flux_dn_dir = real2d_k();
+    lw_clnclrsky_flux_up     = real2d_k();
+    lw_clnclrsky_flux_dn     = real2d_k();
     sw_clnsky_flux_up        = real2d_k();
     sw_clnsky_flux_dn        = real2d_k();
     sw_clnsky_flux_dn_dir    = real2d_k();
-    lw_clnclrsky_flux_up     = real2d_k();
-    lw_clnclrsky_flux_dn     = real2d_k();
-    lw_clrsky_flux_up        = real2d_k();
-    lw_clrsky_flux_dn        = real2d_k();
     lw_clnsky_flux_up        = real2d_k();
     lw_clnsky_flux_dn        = real2d_k();
 
@@ -411,7 +424,6 @@ Radiation::dealloc_buffers ()
     // 2d size (ncol, nlwbands)
     emis_sfc = real2d_k();
 
-    /*
     // 3d size (ncol, nlay, n[sw,lw]bands)
     aero_tau_sw = real3d_k();
     aero_ssa_sw = real3d_k();
@@ -425,7 +437,6 @@ Radiation::dealloc_buffers ()
     // 3d size (ncol, nlay, n[sw,lw]gpts)
     cld_tau_sw_gpt = real3d_k();
     cld_tau_lw_gpt = real3d_k();
-    */
 }
 
 
@@ -1256,3 +1267,4 @@ Radiation::finalize_impl (Vector<MultiFab*>& lsm_output_ptrs)
     // Deallocate the buffer arrays
     dealloc_buffers();
 }
+
