@@ -364,10 +364,22 @@ struct SolverChoice {
 
         pp.query("beta_s", beta_s);
 
-# ifndef ERF_USE_SHOC
-        // This controls the time-centering of the vertical differences in the diffusive term for (rho theta) only
+#ifndef ERF_USE_SHOC
+        // This controls the time-centering of the vertical differences in the diffusive term
+        bool do_vert_implicit = false;
+        if (pp.query("vert_implicit", do_vert_implicit) && do_vert_implicit) {
+            // set to default here
+            vert_implicit_fac[0] = 1.0;
+            vert_implicit_fac[1] = 1.0;
+            vert_implicit_fac[2] = 0.0;
+        }
+
+        // This may be one value for all RK stages or a different value in each stage
         int n_impfac = pp.countval("vert_implicit_fac");
         AMREX_ALWAYS_ASSERT(n_impfac == 0 || n_impfac == 1 || n_impfac==3);
+        if (n_impfac > 0 && do_vert_implicit) {
+            amrex::Print() << "Overriding defaults with specified implicit factor(s)" << std::endl;
+        }
 
         if (n_impfac == 1) {
             amrex::Real fac_in;
@@ -377,9 +389,24 @@ struct SolverChoice {
             pp.getarr("vert_implicit_fac", vert_implicit_fac);
         }
 
+        // If true (default), include implicit contributions to vertical
+        // thermal diffusion
+        pp.query("implicit_thermal_diffusion", implicit_thermal_diffusion);
+
+        // If true (default), include implicit contributions in tau13, tau23,
+        // (and if ERF_IMPLICIT_W is set, tau33) to correct u, v, (and w).
+        pp.query("implicit_momentum_diffusion", implicit_momentum_diffusion);
+
+        if (!implicit_thermal_diffusion && !implicit_momentum_diffusion) {
+            amrex::Print() << "Thermal and momentum diffusion are both turned off -- turning off vertical implicit solve" << std::endl;
+            vert_implicit_fac[0] = 0.0;
+            vert_implicit_fac[1] = 0.0;
+            vert_implicit_fac[2] = 0.0;
+        }
+
         // This controls when the vertical implicit solve for the diffusive terms will happen relative to
         //      the acoustic substepping (if it happens, i.e. if any of the implicit_fac > 0.)
-        // The default is false (i.e. that it happens after the acoustic substepping).
+        // The default is true (i.e. that it happens before the acoustic substepping).
         pp.query("implicit_before_substep", implicit_before_substep);
 #endif
 
@@ -699,7 +726,19 @@ struct SolverChoice {
         }
         amrex::Print() << "vert_implicit_fac           : " << vert_implicit_fac[0] << " "
                                                            << vert_implicit_fac[1] << " "
-                                                           << vert_implicit_fac[2] << std::endl;
+                                                           << vert_implicit_fac[2];
+        if (vert_implicit_fac[0] > 0 ||
+            vert_implicit_fac[0] > 1 ||
+            vert_implicit_fac[0] > 2)
+        {
+            amrex::Print() << " (theta=" << implicit_thermal_diffusion
+                           << ", momenta=" << implicit_momentum_diffusion;
+#ifdef ERF_IMPLICIT_W
+            amrex::Print() << ", including w";
+#endif
+            amrex::Print() << ")";
+        }
+        amrex::Print() << std::endl;
         amrex::Print() << "fixed_density               : " << fixed_density << std::endl;
         amrex::Print() << "use_coriolis                : " << use_coriolis << std::endl;
         amrex::Print() << "use_gravity                 : " << use_gravity << std::endl;
@@ -886,12 +925,15 @@ struct SolverChoice {
     // towards the future time step)
     amrex::Real beta_s = 0.1;
 
-    // This controls the time-centering of the *vertical* differences in the diffusive term for (rho theta) only
+    // This controls the time-centering of the *vertical* differences in the diffusive term for
+    // theta, u, v (and w if ERF_IMPLICIT_W is set)
     // 0: fully explicit
     // 1: fully implicit
     amrex::Vector<amrex::Real> vert_implicit_fac = {0.0, 0.0, 0.0}; // one value per RK stage
-
-    bool implicit_before_substep = false;
+    // if any vert_implicit_fac > 0, then the following apply:
+    bool implicit_thermal_diffusion  = true;
+    bool implicit_momentum_diffusion = true;
+    bool implicit_before_substep     = true;
 
     bool        fixed_density       = false;
     int         ncorr               = 1;

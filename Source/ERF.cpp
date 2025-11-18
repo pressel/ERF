@@ -342,6 +342,7 @@ ERF::ERF_shared ()
 
     // Stresses
     Tau.resize(nlevs_max);
+    Tau_corr.resize(nlevs_max);
     SFS_hfx1_lev.resize(nlevs_max); SFS_hfx2_lev.resize(nlevs_max); SFS_hfx3_lev.resize(nlevs_max);
     SFS_diss_lev.resize(nlevs_max);
     SFS_q1fx1_lev.resize(nlevs_max); SFS_q1fx2_lev.resize(nlevs_max); SFS_q1fx3_lev.resize(nlevs_max);
@@ -943,6 +944,20 @@ ERF::InitData_pre ()
                 Warning("Should not use Deardorff LES for mesoscale resolution");
             }
         }
+
+        // Turn off implicit solve if we have no diffusion
+        bool l_use_kturb   = solverChoice.turbChoice[lev].use_kturb;
+        bool l_use_diff    = ( (solverChoice.diffChoice.molec_diff_type != MolecDiffType::None) ||
+                               l_use_kturb );
+        bool l_implicit_diff = (solverChoice.vert_implicit_fac[0] > 0 ||
+                                solverChoice.vert_implicit_fac[1] > 0 ||
+                                solverChoice.vert_implicit_fac[2] > 0);
+        if (l_implicit_diff && !l_use_diff) {
+            Print() << "No molecular or turbulent diffusion, turning off implicit solve" << std::endl;
+            solverChoice.vert_implicit_fac[0] = 0;
+            solverChoice.vert_implicit_fac[1] = 0;
+            solverChoice.vert_implicit_fac[2] = 0;
+        }
     }
 }
 
@@ -973,6 +988,17 @@ ERF::InitData_post ()
             z_phys_cc[crse_lev]->FillBoundary(geom[crse_lev].periodicity());
         }
     }
+
+#ifdef ERF_IMPLICIT_W
+    if (SolverChoice::mesh_type == MeshType::VariableDz &&
+        (solverChoice.vert_implicit_fac[0] > 0 ||
+         solverChoice.vert_implicit_fac[1] > 0 ||
+         solverChoice.vert_implicit_fac[2] > 0  )       &&
+        solverChoice.implicit_momentum_diffusion)
+    {
+        amrex::Warning("Doing implicit solve for u, v, and w with terrain -- this has not been tested");
+    }
+#endif
 
     //
     // Copy vars_new into vars_old, then use vars_old to fill covered cells in vars_new during AverageDown
@@ -1341,7 +1367,9 @@ ERF::InitData_post ()
             Print() << "Note: Molecular diffusion specified but dynamic_viscosity has not been specified" << std::endl;
         } else {
             Real nu = dc.dynamic_viscosity / dc.rho0_trans;
-            Real viscous_limit = 0.5 * delta*delta / nu;
+            Real viscous_limit = 2.0 * delta*delta / nu;
+            Print() << "smallest grid spacing at level " << finest_level << " = " << delta << std::endl;
+            Print() << "dt at level " << finest_level << " = " << dt[finest_level] << std::endl;
             Print() << "Viscous CFL is " << dt[finest_level] / viscous_limit << std::endl;
             if (fixed_dt[finest_level] >= viscous_limit) {
                 Warning("Specified fixed_dt is above the viscous limit");
