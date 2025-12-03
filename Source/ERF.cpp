@@ -399,6 +399,9 @@ ERF::ERF_shared ()
     // Map factors
     mapfac.resize(nlevs_max);
 
+    // Fine mask
+    fine_mask.resize(nlevs_max);
+
     // Thin immersed body
     xflux_imask.resize(nlevs_max);
     yflux_imask.resize(nlevs_max);
@@ -1326,20 +1329,20 @@ ERF::InitData_post ()
     //
     if (restart_chkfile == "")
     {
-        if (solverChoice.project_initial_velocity) {
-            Real dummy_dt = 1.0;
-            if (verbose > 0) {
-                amrex::Print() << "Projecting initial velocity field" << std::endl;
-            }
-            for (int lev = 0; lev <= finest_level; ++lev)
-            {
+        for (int lev = 0; lev <= finest_level; ++lev)
+        {
+            if (solverChoice.project_initial_velocity[lev] == 1) {
+                Real dummy_dt = 1.0;
+                if (verbose > 0) {
+                    amrex::Print() << "Projecting initial velocity field at level " << lev << std::endl;
+                }
                 project_velocity(lev, dummy_dt);
                 pp_inc[lev].setVal(0.);
                 gradp[lev][GpVars::gpx].setVal(0.);
                 gradp[lev][GpVars::gpy].setVal(0.);
                 gradp[lev][GpVars::gpz].setVal(0.);
-            }
-        }
+            } // project
+        } // lev
     }
 
     // Copy from new into old just in case (after filling boundary conditions and possibly projecting)
