@@ -9,7 +9,39 @@
 #include <AMReX_EBCellFlag.H>
 
 #include "ERF_EBPolygon.H"
-#include "ERF_EBUtils.H"
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+int
+intersect_plane_edge ( amrex::RealVect const& a_plane_point,
+                       amrex::RealVect const& a_plane_normal,
+                       amrex::RealVect const& a_edge_point0,
+                       amrex::RealVect const& a_edge_point1,
+                       amrex::RealVect& a_intersection_point,
+                       amrex::Real& a_intersection_dist )
+{
+  amrex::RealVect const edge(a_edge_point1 - a_edge_point0);
+  amrex::Real const edge_length = edge.vectorLength();
+
+  AMREX_ALWAYS_ASSERT(edge_length > 0.);
+
+  amrex::RealVect edge_normal = edge / edge_length;
+
+  amrex::Real np_dot_ne = a_plane_normal.dotProduct(edge_normal);
+
+  // if ( amrex::Math::abs(np_dot_ne) < std::numeric_limits<amrex::Real>::min() )
+  if ( amrex::Math::abs(np_dot_ne) < 10.0 * std::numeric_limits<amrex::Real>::epsilon() )
+  { return 0; }
+
+  a_intersection_dist = a_plane_normal.dotProduct(a_plane_point)
+                      - a_plane_normal.dotProduct(a_edge_point0);
+  a_intersection_dist /= np_dot_ne;
+
+  a_intersection_point = a_edge_point0 + a_intersection_dist*edge_normal;
+
+  if (0. <= a_intersection_dist && a_intersection_dist <= edge_length) { return 1;}
+
+  return 0;
+}
 
 class eb_cut_cell_ {
 
@@ -222,7 +254,6 @@ class eb_cut_cell_ {
     amrex::Array<int const,3> m_lo_faces_id {3,4,0};
     amrex::Array<int const,3> m_hi_faces_id {1,5,2};
 
-    AMREX_GPU_HOST_DEVICE
     struct path_data;
 
     AMREX_GPU_HOST_DEVICE
@@ -360,7 +391,7 @@ struct eb_cut_cell_::path_data
     constexpr amrex::Real tol = 1.e-15;
     amrex::RealVect v_intersect;
     amrex::Real    dist_intersect;
-    intersected = utils::intersect_plane_edge(
+    intersected = intersect_plane_edge(
       eb_point, eb_normal, v_start, v_end, v_intersect, dist_intersect
     );
     vIP = v_intersect;
@@ -457,7 +488,6 @@ calc_edge_intersections ()
     for (int i = 0; i < 8; ++i) vertex_intersected[i] = false;
 
     if (p1[0].intersected) {
-
       if (p1[0].intersected_start) {
         m_F1.add_vertex(v0); if(print_F1) printf("Path 1: v0--v1: add v0 -> F1\n");
         m_F4.add_vertex(v0); if(print_F4) printf("Path 1: v0--v1: add v0 -> F4\n");
@@ -492,7 +522,6 @@ calc_edge_intersections ()
     }
 
     if (p1[1].intersected) {
-
       if (p1[1].intersected_start) {
         m_F1.add_vertex(v1); if(print_F1) printf("Path 1: v1--v4: add v1 -> F1\n");
         m_F2.add_vertex(v1); if(print_F2) printf("Path 1: v1--v4: add v1 -> F2\n");
@@ -527,7 +556,6 @@ calc_edge_intersections ()
     }
 
     if (p1[2].intersected) {
-
       if (p1[2].intersected_start) {
         m_F2.add_vertex(v4); if(print_F2) printf("Path 1: v4--v7: add v4 -> F2\n");
         m_F3.add_vertex(v4); if(print_F3) printf("Path 1: v4--v7: add v4 -> F3\n");
@@ -556,7 +584,7 @@ calc_edge_intersections ()
     } // P1: v4--v7
 
     if (cuts == 2 && add_v7) {
-      if (!utils::intersect_plane_edge(m_eb_point, m_eb_normal, v0, v7, vIP, distIP)) {
+      if (!intersect_plane_edge(m_eb_point, m_eb_normal, v0, v7, vIP, distIP)) {
         m_F2.add_vertex(v7); if(print_F2) printf("Path 1: after v4--v7, cuts == 2 && add_v7: add v7 -> F2\n");
         m_F3.add_vertex(v7); if(print_F3) printf("Path 1: after v4--v7, cuts == 2 && add_v7: add v7 -> F3\n");
         m_F6.add_vertex(v7); if(print_F6) printf("Path 1: after v4--v7, cuts == 2 && add_v7: add v7 -> F6\n");
@@ -567,7 +595,6 @@ calc_edge_intersections ()
 
   // Path 4
   if (p4.intersected) {
-
     if (p4.intersected_start) {
       m_F1.add_vertex(v1); if(print_F1) printf("Path 4: v1--v5: add v1 -> F1\n");
       m_F2.add_vertex(v1); if(print_F2) printf("Path 4: v1--v5: add v1 -> F2\n");
@@ -590,7 +617,6 @@ calc_edge_intersections ()
     for (int i = 0; i < 8; ++i) vertex_intersected[i] = false;
 
     if (p2[0].intersected) {
-
       if (p2[0].intersected_start) {
         m_F1.add_vertex(v0); if(print_F1) printf("Path 2: v0--v2: add v0 -> F1\n");
         m_F4.add_vertex(v0); if(print_F4) printf("Path 2: v0--v2: add v0 -> F4\n");
@@ -625,7 +651,6 @@ calc_edge_intersections ()
     }
 
     if (p2[1].intersected) {
-
       if (p2[1].intersected_start) {
         m_F1.add_vertex(v2); if(print_F1) printf("Path 2: v2--v5: add v2 -> F1\n");
         m_F4.add_vertex(v2); if(print_F4) printf("Path 2: v2--v5: add v2 -> F4\n");
@@ -659,7 +684,6 @@ calc_edge_intersections ()
     }
 
     if (p2[2].intersected) {
-
       if (p2[2].intersected_start) {
         m_F1.add_vertex(v5); if(print_F1) printf("Path 2: v5--v7: add v5 -> F1\n");
         m_F2.add_vertex(v5); if(print_F2) printf("Path 2: v5--v7: add v5 -> F2\n");
@@ -687,7 +711,7 @@ calc_edge_intersections ()
     } // Path 2: v5--v7
 
     if (cuts == 2 && add_v7) {
-      if (!utils::intersect_plane_edge(m_eb_point, m_eb_normal, v0, v7, vIP, distIP)) {
+      if (!intersect_plane_edge(m_eb_point, m_eb_normal, v0, v7, vIP, distIP)) {
         m_F2.add_vertex(v7); if(print_F2) printf("Path 2: after v5--v7, cuts == 2 && add_v7: add v7 -> F2\n");
         m_F3.add_vertex(v7); if(print_F3) printf("Path 2: after v5--v7, cuts == 2 && add_v7: add v7 -> F3\n");
         m_F6.add_vertex(v7); if(print_F6) printf("Path 2: after v5--v7, cuts == 2 && add_v7: add v7 -> F6\n");
@@ -699,7 +723,6 @@ calc_edge_intersections ()
 
   // Path 5
   if (p5.intersected) {
-
     if (p5.intersected_start) {
       m_F1.add_vertex(v2); if(print_F1) printf("Path 5: v2--v6: add v2 -> F1\n");
       m_F4.add_vertex(v2); if(print_F4) printf("Path 5: v2--v6: add v2 -> F4\n");
@@ -723,7 +746,6 @@ calc_edge_intersections ()
     for (int i = 0; i < 8; ++i) vertex_intersected[i] = false;
 
     if (p3[0].intersected) {
-
       if (p3[0].intersected_start) {
         m_F1.add_vertex(v0); if(print_F1) printf("Path 3: v0--v3: add v0 -> F1\n");
         m_F4.add_vertex(v0); if(print_F4) printf("Path 3: v0--v3: add v0 -> F4\n");
@@ -758,7 +780,6 @@ calc_edge_intersections ()
     }
 
     if (p3[1].intersected) {
-
       if (p3[1].intersected_start) {
         m_F3.add_vertex(v3); if(print_F3) printf("Path 3: v3--v6: add v3 -> F3\n");
         m_F4.add_vertex(v3); if(print_F4) printf("Path 3: v3--v6: add v3 -> F4\n");
@@ -793,7 +814,6 @@ calc_edge_intersections ()
     }
 
     if (p3[2].intersected) {
-
       if (p3[2].intersected_start) {
         m_F3.add_vertex(v6); if(print_F3) printf("Path 3: v6--v7: add v6 -> F3\n");
         m_F4.add_vertex(v6); if(print_F4) printf("Path 3: v6--v7: add v6 -> F4\n");
@@ -821,7 +841,7 @@ calc_edge_intersections ()
     } // P3: v6--v7
 
     if (cuts == 2 && add_v7) {
-      if (!utils::intersect_plane_edge(m_eb_point, m_eb_normal, v0, v7, vIP, distIP)) {
+      if (!intersect_plane_edge(m_eb_point, m_eb_normal, v0, v7, vIP, distIP)) {
         m_F2.add_vertex(v7); if(print_F2) printf("Path 3: after v6--v7, cuts == 2 && add_v7: add v7 -> F2\n");
         m_F3.add_vertex(v7); if(print_F3) printf("Path 3: after v6--v7, cuts == 2 && add_v7: add v7 -> F3\n");
         m_F6.add_vertex(v7); if(print_F6) printf("Path 3: after v6--v7, cuts == 2 && add_v7: add v7 -> F6\n");
@@ -833,7 +853,6 @@ calc_edge_intersections ()
 
   // Path 6
   if (p6.intersected) {
-
     if (p6.intersected_start) {
       m_F3.add_vertex(v3); if(print_F3) printf("Path 6: v3--v4: add v3 -> F3\n");
       m_F4.add_vertex(v3); if(print_F4) printf("Path 6: v3--v4: add v3 -> F4\n");
