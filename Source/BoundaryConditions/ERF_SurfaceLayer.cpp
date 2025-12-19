@@ -178,6 +178,60 @@ SurfaceLayer::update_fluxes (const int& lev,
             q_star[lev]->setVal(custom_qstar);
         }
     }
+
+    if (flux_type == FluxCalcType::CUSTOM_WATTSPERMETER) {
+        /**
+         * Convert sensible and latent heat fluxes from W/m² to model fluxes.
+         * 
+         * Sign convention: Input fluxes are POSITIVE INTO ATMOSPHERE (upward from surface).
+         * 
+         * Sensible heat flux H [W/m²]:
+         *   H = ρ·c_p·<w'θ'>  →  <w'θ'> = H/(ρ·c_p)  [K·m/s]
+         *   For storage in t_star with specified_rho_surf=true:
+         *   t_star_arr = ρ·<w'θ'> = ρ·H/(ρ·c_p) = H/c_p  [kg·K/(m²·s)]
+         * 
+         * Latent heat flux LE [W/m²]:
+         *   LE = ρ·L_v·<w'q'>  →  <w'q'> = LE/(ρ·L_v)  [kg/(kg·s)]
+         *   For storage in q_star with specified_rho_surf=true:
+         *   q_star_arr = ρ·<w'q'> = ρ·LE/(ρ·L_v) = LE/L_v  [kg/(m²·s)]
+         * 
+         * Thermodynamic constants:
+         *   c_p = Cp_d = 1005 J/(kg·K)  (dry air specific heat, use for moist too - small error)
+         *   L_v = 2.5e6 J/kg  (latent heat of vaporization)
+         * 
+         * Dry case: Only sensible heat flux is applied, latent flux ignored.
+         */
+        
+        constexpr Real Cp = 1005.0;      // Specific heat at constant pressure [J/(kg·K)]
+        constexpr Real Lv = 2.5e6;       // Latent heat of vaporization [J/kg]
+        
+        // Convert sensible heat flux: H [W/m²] → t_star [kg·K/(m²·s)]
+        Real t_star_val = custom_sens_flux / Cp;
+        
+        // Convert latent heat flux: LE [W/m²] → q_star [kg/(m²·s)]
+        Real q_star_val = use_moisture ? (custom_lat_flux / Lv) : 0.0;
+        
+        if (custom_rhosurf > 0) {
+            specified_rho_surf = true;
+            // Store ρ·flux and keep the specified friction velocity (scaled like CUSTOM)
+            u_star[lev]->setVal(std::sqrt(custom_rhosurf) * custom_ustar);
+            t_star[lev]->setVal(t_star_val);
+            q_star[lev]->setVal(q_star_val);
+        } else {
+            // Without specified rho, flux computation will multiply by local rho
+            u_star[lev]->setVal(custom_ustar);
+            t_star[lev]->setVal(t_star_val);
+            q_star[lev]->setVal(q_star_val);
+        }
+        
+        amrex::Print() << "Converted W/m² fluxes to model units:" << std::endl;
+        amrex::Print() << "  Sensible: " << custom_sens_flux << " W/m² → t_star = " 
+                       << t_star_val << " kg·K/(m²·s)" << std::endl;
+        if (use_moisture) {
+            amrex::Print() << "  Latent:   " << custom_lat_flux << " W/m² → q_star = " 
+                           << q_star_val << " kg/(m²·s)" << std::endl;
+        }
+    }
 }
 
 /**
@@ -295,6 +349,13 @@ SurfaceLayer::impose_SurfaceLayer_bcs (const int& lev,
                                  xqv_flux, yqv_flux, zqv_flux,
                                  z_phys, flux_comp);
     } else if (flux_type == FluxCalcType::CUSTOM) {
+        custom_flux flux_comp(specified_rho_surf);
+        compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
+                                 xheat_flux, yheat_flux, zheat_flux,
+                                 xqv_flux, yqv_flux, zqv_flux,
+                                 z_phys, flux_comp);
+    } else if (flux_type == FluxCalcType::CUSTOM_WATTSPERMETER) {
+        // Reuse custom_flux since we already converted W/m² to model units in update_fluxes
         custom_flux flux_comp(specified_rho_surf);
         compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
                                  xheat_flux, yheat_flux, zheat_flux,

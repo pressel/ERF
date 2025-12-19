@@ -311,13 +311,11 @@ Radiation::alloc_buffers ()
     aero_g_sw   = real3d_k("aero_g_sw"  , m_ncol, m_nlay, m_nswbands);
     aero_tau_lw = real3d_k("aero_tau_lw", m_ncol, m_nlay, m_nlwbands);
 
-    // 3d size (ncol, nlay, n[sw,lw]bnds)
-    cld_tau_sw_bnd = real3d_k("cld_tau_sw_bnd", m_ncol, m_nlay, m_nswbands);
-    cld_tau_lw_bnd = real3d_k("cld_tau_lw_bnd", m_ncol, m_nlay, m_nlwbands);
-
-    // 3d size (ncol, nlay, n[sw,lw]gpts)
-    cld_tau_sw_gpt = real3d_k("cld_tau_sw_gpt", m_ncol, m_nlay, m_nswgpts);
-    cld_tau_lw_gpt = real3d_k("cld_tau_lw_gpt", m_ncol, m_nlay, m_nlwgpts);
+    // Optional diagnostics: leave default-constructed unless explicitly requested.
+    cld_tau_sw_bnd = real3d_k();
+    cld_tau_lw_bnd = real3d_k();
+    cld_tau_sw_gpt = real3d_k();
+    cld_tau_lw_gpt = real3d_k();
 }
 
 void

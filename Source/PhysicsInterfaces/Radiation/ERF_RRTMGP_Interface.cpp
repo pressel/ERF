@@ -479,8 +479,12 @@ rrtmgp_main (const int ncol, const int nlay,
     optical_props1_t clouds_lw = get_cloud_optics_lw(ncol, nlay,
                                                      *cloud_optics_lw_k, *k_dist_lw_k,
                                                      lwp, iwp, rel, rei);
-    Kokkos::deep_copy(cld_tau_sw_bnd, clouds_sw.tau);
-    Kokkos::deep_copy(cld_tau_lw_bnd, clouds_lw.tau);
+    if (cld_tau_sw_bnd.is_allocated()) {
+        Kokkos::deep_copy(cld_tau_sw_bnd, clouds_sw.tau);
+    }
+    if (cld_tau_lw_bnd.is_allocated()) {
+        Kokkos::deep_copy(cld_tau_lw_bnd, clouds_lw.tau);
+    }
 
     // Do subcolumn sampling to map bands -> gpoints based on cloud fraction and overlap assumption;
     // This implements the Monte Carlo Independing Column Approximation by mapping only a single
@@ -495,16 +499,20 @@ rrtmgp_main (const int ncol, const int nlay,
 
     // Copy cloud properties to outputs (is this needed, or can we just use pointers?)
     // Alternatively, just compute and output a subcolumn cloud mask
-    Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {ncol, nlay, nswgpts}),
-                         KOKKOS_LAMBDA (int icol, int ilay, int igpt)
-    {
-        cld_tau_sw_gpt(icol,ilay,igpt) = clouds_sw_gpt.tau(icol,ilay,igpt);
-    });
-    Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {ncol, nlay, nlwgpts}),
-                         KOKKOS_LAMBDA (int icol, int ilay, int igpt)
-    {
-        cld_tau_lw_gpt(icol,ilay,igpt) = clouds_lw_gpt.tau(icol,ilay,igpt);
-    });
+    if (cld_tau_sw_gpt.is_allocated()) {
+        Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {ncol, nlay, nswgpts}),
+                             KOKKOS_LAMBDA (int icol, int ilay, int igpt)
+        {
+            cld_tau_sw_gpt(icol,ilay,igpt) = clouds_sw_gpt.tau(icol,ilay,igpt);
+        });
+    }
+    if (cld_tau_lw_gpt.is_allocated()) {
+        Kokkos::parallel_for(Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {ncol, nlay, nlwgpts}),
+                             KOKKOS_LAMBDA (int icol, int ilay, int igpt)
+        {
+            cld_tau_lw_gpt(icol,ilay,igpt) = clouds_lw_gpt.tau(icol,ilay,igpt);
+        });
+    }
 
   // Do shortwave
   rrtmgp_sw(ncol, nlay,
@@ -1226,4 +1234,3 @@ compute_aerocom_cloudtop (int ncol, int nlay ,
 }
 
 }  // namespace rrtmgp
-

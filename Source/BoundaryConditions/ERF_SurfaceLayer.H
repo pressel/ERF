@@ -74,6 +74,8 @@ public:
               flux_type = FluxCalcType::BULK_COEFF;
           } else if (flux_string == "custom") {
               flux_type = FluxCalcType::CUSTOM;
+          } else if (flux_string == "custom_wattspermeter" || flux_string == "custom_wm2") {
+              flux_type = FluxCalcType::CUSTOM_WATTSPERMETER;
           } else {
               amrex::Abort("Undefined MOST flux type!");
           }
@@ -126,6 +128,20 @@ public:
           amrex::Print() << "Using specified ustar, tstar, qstar for MOST = "
                          << custom_ustar << " " << custom_tstar << " "
                          << custom_qstar << std::endl;
+
+      // Custom W/m² fluxes (positive into atmosphere)
+      } else if (flux_type == FluxCalcType::CUSTOM_WATTSPERMETER) {
+          theta_type = ThetaCalcType::HEAT_FLUX;
+          moist_type = MoistCalcType::MOISTURE_FLUX;
+          pp.get("most.sens_flux", custom_sens_flux);  // Sensible heat flux [W/m²]
+          pp.query("most.lat_flux", custom_lat_flux);   // Latent heat flux [W/m²]
+          pp.query("most.rhosurf", custom_rhosurf);
+          if (custom_lat_flux != 0) {
+              AMREX_ASSERT_WITH_MESSAGE(use_moisture,
+              "Specified custom MOST latent heat flux without moisture model!");
+          }
+          amrex::Print() << "Using specified sensible and latent heat fluxes [W/m²] = "
+                         << custom_sens_flux << " " << custom_lat_flux << std::endl;
 
       // Bulk transfer coefficient (must specify coeffs and surface values)
       } else if (flux_type == FluxCalcType::BULK_COEFF) {
@@ -595,7 +611,8 @@ public:
   enum struct FluxCalcType {
     MOENG = 0,  ///< Moeng functional form
     DONELAN,    ///< Donelan functional form
-    CUSTOM,     ///< Custom constant flux functional form
+    CUSTOM,     ///< Custom constant flux functional form (uses MOST scaling parameters)
+    CUSTOM_WATTSPERMETER, ///< Custom flux specified in W/m² (positive into atmosphere)
     BULK_COEFF, ///< Bulk transfer coefficient functional form
     ROTATE      ///< Terrain rotation flux functional form
   };
@@ -651,6 +668,8 @@ private:
   amrex::Real custom_qstar{0};
   amrex::Real custom_rhosurf{0}; // use specified value instead of rho from first cell
   bool specified_rho_surf{false};
+  amrex::Real custom_sens_flux{0};  // Sensible heat flux [W/m²] (positive into atmosphere)
+  amrex::Real custom_lat_flux{0};   // Latent heat flux [W/m²] (positive into atmosphere)
   amrex::Real cnk_a{0.0185};
   bool cnk_visc{false};
   amrex::Real depth{30.0};
