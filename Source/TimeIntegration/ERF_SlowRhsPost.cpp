@@ -93,6 +93,9 @@ void erf_slow_rhs_post (int level, int finest_level,
                         Vector<Vector<FArrayBox>>& bdy_data_ylo,
                         Vector<Vector<FArrayBox>>& bdy_data_yhi,
 #endif
+#ifdef ERF_USE_SHOC
+                        std::unique_ptr<SHOCInterface>& shoc_lev,
+#endif
                         YAFluxRegister* fr_as_crse,
                         YAFluxRegister* fr_as_fine)
 {
@@ -214,9 +217,9 @@ void erf_slow_rhs_post (int level, int finest_level,
         // *************************************************************************
         for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
             if (solverChoice.terrain_type != TerrainType::EB) {
-                flux[dir].resize(surroundingNodes(tbx,dir),nvars);
+                flux[dir].resize(surroundingNodes(tbx,dir),nvars,The_Async_Arena());
             } else {
-                flux[dir].resize(surroundingNodes(tbx,dir).grow(1),nvars);
+                flux[dir].resize(surroundingNodes(tbx,dir).grow(1),nvars,The_Async_Arena());
             }
             flux[dir].setVal<RunOn::Device>(0.);
         }
@@ -474,6 +477,12 @@ void erf_slow_rhs_post (int level, int finest_level,
             moist_set_rhs(geom, tbx, old_cons_const, new_cons_const, cell_rhs, bdy_time_interval,
                           new_stage_time, dt, stop_time_elapsed, width, set_width, domain,
                           bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi);
+        }
+#endif
+
+#ifdef ERF_USE_SHOC
+        if (solverChoice.use_shoc) {
+            shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
         }
 #endif
 
