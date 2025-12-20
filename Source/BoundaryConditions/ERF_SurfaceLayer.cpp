@@ -213,8 +213,9 @@ SurfaceLayer::update_fluxes (const int& lev,
         
         if (custom_rhosurf > 0) {
             specified_rho_surf = true;
-            // Store ρ·flux and keep the specified friction velocity (scaled like CUSTOM)
+            // Keep the specified friction velocity (scaled like CUSTOM) and store fluxes in rho*<·> units
             u_star[lev]->setVal(std::sqrt(custom_rhosurf) * custom_ustar);
+            // rho*<w'θ'> = H/cp, rho*<w'q'> = LE/Lv; no extra rho factor needed here
             t_star[lev]->setVal(t_star_val);
             q_star[lev]->setVal(q_star_val);
         } else {
