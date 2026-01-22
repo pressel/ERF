@@ -69,13 +69,18 @@ function(build_erf_lib erf_lib_name)
                    ${SRC_DIR}/Initialization/ERF_InitFromWRFInput.cpp
                    ${SRC_DIR}/Initialization/ERF_InitFromMetgrid.cpp
                    ${SRC_DIR}/Initialization/ERF_InitFromNCFile.cpp
+                   ${SRC_DIR}/Initialization/ERF_InitLESForcing.cpp
                    ${SRC_DIR}/IO/ERF_NCInterface.cpp
                    ${SRC_DIR}/IO/ERF_NCPlotFile.cpp
                    ${SRC_DIR}/IO/ERF_ReadFromMetgrid.cpp
                    ${SRC_DIR}/IO/ERF_ReadFromWRFBdy.cpp
                    ${SRC_DIR}/IO/ERF_ReadFromWRFInput.cpp
                    ${SRC_DIR}/IO/ERF_ReadFromWRFLow.cpp
-                   ${SRC_DIR}/IO/ERF_NCColumnFile.cpp)
+                   ${SRC_DIR}/IO/ERF_NCColumnFile.cpp
+                   ${SRC_DIR}/IO/ERForcingReader.cpp
+                   ${SRC_DIR}/IO/ERFDiagnosticsForcingFile.cpp
+                   ${SRC_DIR}/SourceTerms/ERFAdvectionTendencies.cpp
+                   ${SRC_DIR}/SourceTerms/ERFSubsidence.cpp)
     target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_NETCDF)
   endif()
 
@@ -358,6 +363,7 @@ function(build_erf_lib erf_lib_name)
        ${SRC_DIR}/Utils/ERF_TimeAvgVel.cpp
        ${SRC_DIR}/Utils/ERF_VolWgtSum.cpp
        ${SRC_DIR}/Utils/ERF_WeatherDataInterpolation.cpp
+       ${SRC_DIR}/Utils/ERFVerticalInterpolation.cpp
        ${SRC_DIR}/WindFarmParametrization/Fitch/ERF_AdvanceFitch.cpp
        ${SRC_DIR}/WindFarmParametrization/EWP/ERF_AdvanceEWP.cpp
        ${SRC_DIR}/WindFarmParametrization/SimpleActuatorDisk/ERF_AdvanceSimpleAD.cpp

@@ -1,4 +1,5 @@
 #include "ERF_SurfaceLayer.H"
+#include "ERForcingReader.H"
 
 using namespace amrex;
 
@@ -18,6 +19,42 @@ SurfaceLayer::update_fluxes (const int& lev,
     // Update with SST/TSK data if we have a valid pointer
     if (m_sst_lev[lev][0]) {
         fill_tsurf_with_sst_and_tsk(lev, time);
+    }
+
+    // Update fluxes from forcing file if available
+    if (m_forcing_reader) {
+        // Interpolate fluxes from forcing file
+        // Units: sfc_sens_flux [W/m2], sfc_lat_flux [W/m2]
+        // ERF expects kinematic fluxes: <w'theta'> [K m/s] and <w'q'> [kg/kg m/s]
+        
+        Real sfc_sens_flux = m_forcing_reader->interpolate_scalar(m_forcing_reader->get_data().sfc_sens_flux, time);
+        Real sfc_lat_flux = m_forcing_reader->interpolate_scalar(m_forcing_reader->get_data().sfc_lat_flux, time);
+        Real sfc_pres = m_forcing_reader->interpolate_scalar(m_forcing_reader->get_data().sfc_pres, time);
+        Real sfc_temp = m_forcing_reader->interpolate_scalar(m_forcing_reader->get_data().sfc_temp, time);
+
+        // Robustness check for surface data
+        if (sfc_temp < 1.0) {
+            amrex::Print() << "WARNING: Invalid sfc_temp from forcing (" << sfc_temp << " K). Using 300 K.\n";
+            sfc_temp = 300.0;
+        }
+        if (sfc_pres < 1.0) {
+            amrex::Print() << "WARNING: Invalid sfc_pres from forcing (" << sfc_pres << " Pa). Using 101325 Pa.\n";
+            sfc_pres = 101325.0;
+        }
+
+        Real rho_sfc = sfc_pres / (R_d * sfc_temp);
+        
+        surf_temp_flux = sfc_sens_flux / (rho_sfc * Cp_d);
+        surf_moist_flux = sfc_lat_flux / (rho_sfc * L_v);
+        
+        theta_type = ThetaCalcType::HEAT_FLUX;
+        moist_type = MoistCalcType::MOISTURE_FLUX;
+
+        if (flux_type == FluxCalcType::PRESCRIBED) {
+            amrex::Print() << "PRESCRIBED FLUX: t_flux=" << surf_temp_flux
+                           << " K m/s, q_flux=" << surf_moist_flux
+                           << " kg/kg m/s\n";
+        }
     }
 
     // Apply heating rate if needed
@@ -46,7 +83,8 @@ SurfaceLayer::update_fluxes (const int& lev,
     // over land is RoughCalcType::CONSTANT
     // ***************************************************************
     if (flux_type == FluxCalcType::MOENG ||
-        flux_type == FluxCalcType::ROTATE) {
+        flux_type == FluxCalcType::ROTATE ||
+        flux_type == FluxCalcType::PRESCRIBED) {
         bool is_land = true;
         // Do we have a constant flux for moisture over land?
         bool cons_qflux = ( (moist_type == MoistCalcType::MOISTURE_FLUX) ||
@@ -84,7 +122,8 @@ SurfaceLayer::update_fluxes (const int& lev,
     // over sea are CHARNOCK, DONELAN, MODIFIED_CHARNOCK or WAVE_COUPLED
     // ***************************************************************
     if (flux_type == FluxCalcType::MOENG ||
-        flux_type == FluxCalcType::ROTATE) {
+        flux_type == FluxCalcType::ROTATE ||
+        flux_type == FluxCalcType::PRESCRIBED) {
         bool is_land = false;
         // NOTE: Do not allow default to adiabatic over sea (we have Qvs at surface)
         // Do we have a constant flux for moisture over sea?
@@ -289,6 +328,12 @@ SurfaceLayer::impose_SurfaceLayer_bcs (const int& lev,
                                  z_phys, flux_comp);
     } else if (flux_type == FluxCalcType::CUSTOM) {
         custom_flux flux_comp(specified_rho_surf);
+        compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
+                                 xheat_flux, yheat_flux, zheat_flux,
+                                 xqv_flux, yqv_flux, zqv_flux,
+                                 z_phys, flux_comp);
+    } else if (flux_type == FluxCalcType::PRESCRIBED) {
+        prescribed_flux flux_comp(surf_temp_flux, surf_moist_flux);
         compute_SurfaceLayer_bcs(lev, mfs, Tau_lev,
                                  xheat_flux, yheat_flux, zheat_flux,
                                  xqv_flux, yqv_flux, zqv_flux,

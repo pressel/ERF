@@ -1,12 +1,14 @@
 #ifndef ERF_SURFACELAYER_H
 #define ERF_SURFACELAYER_H
 
+#include <memory>
 #include "AMReX_Geometry.H"
 #include "AMReX_ParmParse.H"
 #include "AMReX_FArrayBox.H"
 #include "AMReX_MultiFab.H"
 #include "AMReX_iMultiFab.H"
 #include "AMReX_MFInterpolater.H"
+#include "AMReX_Vector.H"
 
 #include "ERF_IndexDefines.H"
 #include "ERF_Constants.H"
@@ -15,6 +17,8 @@
 #include "ERF_TerrainMetrics.H"
 #include "ERF_PBLHeight.H"
 #include "ERF_MicrophysicsUtils.H"
+
+class ERForcingReader;
 
 /** Abstraction layer for different surface layer schemes (e.g. MOST, Cd)
  *
@@ -74,6 +78,8 @@ public:
               flux_type = FluxCalcType::BULK_COEFF;
           } else if (flux_string == "custom") {
               flux_type = FluxCalcType::CUSTOM;
+          } else if (flux_string == "prescribed") {
+              flux_type = FluxCalcType::PRESCRIBED;
           } else {
               amrex::Abort("Undefined MOST flux type!");
           }
@@ -597,12 +603,15 @@ public:
       m_tsk_lev[lev][itime] = tsk_ptr;
   }
 
+  void set_forcing_reader(std::shared_ptr<ERForcingReader> reader) { m_forcing_reader = reader; }
+
   enum struct FluxCalcType {
     MOENG = 0,  ///< Moeng functional form
     DONELAN,    ///< Donelan functional form
     CUSTOM,     ///< Custom constant flux functional form
     BULK_COEFF, ///< Bulk transfer coefficient functional form
-    ROTATE      ///< Terrain rotation flux functional form
+    ROTATE,     ///< Terrain rotation flux functional form
+    PRESCRIBED  ///< Prescribed flux functional form
   };
 
   enum struct ThetaCalcType {
@@ -692,6 +701,8 @@ private:
   amrex::Vector<amrex::MultiFab*> m_Hwave_lev;
   amrex::Vector<amrex::MultiFab*> m_Lwave_lev;
   amrex::Vector<amrex::MultiFab*> m_eddyDiffs_lev;
+
+  std::shared_ptr<ERForcingReader> m_forcing_reader;
 };
 
 #endif /* SURFACELAYER_H */

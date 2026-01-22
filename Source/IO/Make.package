@@ -25,8 +25,12 @@ ifeq ($(USE_NETCDF), TRUE)
   CEXE_sources += ERF_NCInterface.cpp
   CEXE_sources += ERF_NCPlotFile.cpp
   CEXE_sources += ERF_NCColumnFile.cpp
+  CEXE_sources += ERForcingReader.cpp
+  CEXE_sources += ERFDiagnosticsForcingFile.cpp
   CEXE_headers += ERF_NCWpsFile.H
   CEXE_headers += ERF_NCInterface.H
   CEXE_headers += ERF_ReadFromWRFBdy.H
   CEXE_headers += ERF_ReadFromWRFInput.H
+  CEXE_headers += ERForcingReader.H
+  CEXE_headers += ERFDiagnosticsForcingFile.H
 endif

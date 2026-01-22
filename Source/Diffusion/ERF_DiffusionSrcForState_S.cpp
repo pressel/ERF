@@ -143,7 +143,7 @@ DiffusionSrcForState_S (const Box& bx, const Box& domain,
                                      (bc_ptr[bc_comp].lo(5) == ERFBCType::ext_dir_prim) )
                                     && k == dom_hi.z+1);
             bool SurfLayer_on_zlo = ( use_SurfLayer && k == dom_lo.z);
-
+        
             if (ext_dir_on_zlo) {
                 // Third order stencil with variable dz
                 Real dz0  = dz_ptr[k];

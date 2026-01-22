@@ -11,6 +11,8 @@ CEXE_sources += ERF_ApplyBndryForcing_Forecast.cpp
 
 ifeq ($(USE_NETCDF),TRUE)
 CEXE_sources += ERF_MoistSetRhs.cpp
+CEXE_sources += ERFAdvectionTendencies.cpp
+CEXE_sources += ERFSubsidence.cpp
 endif
 
 CEXE_headers += ERF_NumericalDiffusion.H
@@ -18,3 +20,5 @@ CEXE_headers += ERF_ImmersedForcing.H
 CEXE_headers += ERF_SrcHeaders.H
 CEXE_headers += ERF_BuoyancyUtils.H
 CEXE_headers += ERF_ForestDrag.H
+CEXE_headers += ERFAdvectionTendencies.H
+CEXE_headers += ERFSubsidence.H

@@ -16,7 +16,9 @@ endif
 
 ifeq ($(USE_NETCDF),TRUE)
 CEXE_headers += ERF_MetgridUtils.H
+CEXE_headers += ERF_InitLESForcing.H
 CEXE_sources += ERF_InitFromWRFInput.cpp
 CEXE_sources += ERF_InitFromMetgrid.cpp
 CEXE_sources += ERF_InitFromNCFile.cpp
+CEXE_sources += ERF_InitLESForcing.cpp
 endif

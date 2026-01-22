@@ -70,7 +70,6 @@ DiffusionSrcForState_N (const Box& bx, const Box& domain,
                         const Real implicit_fac)
 {
     BL_PROFILE_VAR("DiffusionSrcForState_N()",DiffusionSrcForState_N);
-
     const Real explicit_fac = 1.0 - implicit_fac;
 
 #include "ERF_SetupDiff.H"
@@ -80,7 +79,7 @@ DiffusionSrcForState_N (const Box& bx, const Box& domain,
 
     for (int n(0); n<num_comp; ++n) {
         const int qty_index = start_comp + n;
-
+    
     // Constant alpha & Turb model
     if (l_consA && l_turb) {
         ParallelFor(xbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept

@@ -5,6 +5,13 @@
 #include <ERF_WindFarm.H>
 #endif
 
+#ifdef ERF_USE_NETCDF
+#include "ERForcingReader.H"
+#include "ERFAdvectionTendencies.H"
+#include "ERFSubsidence.H"
+#include "ERFDiagnosticsForcingFile.H"
+#endif
+
 using namespace amrex;
 
 /**
@@ -165,6 +172,22 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
     // Source array for conserved cell-centered quantities -- this will be filled
     //     in the call to make_sources in ERF_TI_slow_rhs_pre.H
     MultiFab cc_source(ba,dm,nvars,1); cc_source.setVal(0.0);
+
+    // **************************************************************************************
+    // Add large-scale forcing tendencies
+    // **************************************************************************************
+#ifdef ERF_USE_NETCDF
+    if (m_adv_tend) {
+        MultiFab theta_rhs(cc_source, amrex::make_alias, RhoTheta_comp, 1);
+        MultiFab qv_rhs(cc_source, amrex::make_alias, RhoQ1_comp, 1);
+        m_adv_tend->compute_tendencies(time, Geom(lev), *z_phys_cc[lev], theta_rhs, qv_rhs);
+    }
+
+    if (m_subsidence) {
+        MultiFab theta_rhs(cc_source, amrex::make_alias, RhoTheta_comp, 1);
+        m_subsidence->compute_subsidence_tendency(time, Geom(lev), *z_phys_cc[lev], theta_rhs);
+    }
+#endif
 
     // Source arrays for momenta -- these will be filled
     //     in the call to make_mom_sources in ERF_TI_slow_rhs_pre.H
@@ -371,4 +394,23 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
     if (solverChoice.time_avg_vel) {
         Time_Avg_Vel_atCC(dt[lev], t_avg_cnt[lev], vel_t_avg[lev].get(), U_new, V_new, W_new);
     }
+
+    // **************************************************************************************
+    // Diagnostics for forcing
+    // **************************************************************************************
+#ifdef ERF_USE_NETCDF
+    if (m_diag_forcing) {
+        // We need primitive variables for diagnostics
+        MultiFab theta(S_new.boxArray(), S_new.DistributionMap(), 1, 0);
+        MultiFab qv(S_new.boxArray(), S_new.DistributionMap(), 1, 0);
+        
+        MultiFab::Copy(theta, S_new, RhoTheta_comp, 0, 1, 0);
+        MultiFab::Divide(theta, S_new, Rho_comp, 0, 1, 0);
+        
+        MultiFab::Copy(qv, S_new, RhoQ1_comp, 0, 1, 0);
+        MultiFab::Divide(qv, S_new, Rho_comp, 0, 1, 0);
+
+        m_diag_forcing->write_diagnostics(time+dt_lev, Geom(lev), *z_phys_cc[lev], theta, qv, U_new, V_new);
+    }
+#endif
 }

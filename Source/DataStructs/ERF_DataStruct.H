@@ -33,7 +33,7 @@ enum TauType {
 };
 
 AMREX_ENUM(InitType,
-    None, Input_Sounding, NCFile, WRFInput, Metgrid, Uniform, HindCast
+    None, Input_Sounding, NCFile, WRFInput, Metgrid, Uniform, HindCast, LESForcing
 );
 
 AMREX_ENUM(SoundingType,

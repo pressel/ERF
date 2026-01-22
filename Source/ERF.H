@@ -65,6 +65,11 @@
 
 #include <ERF_RadiationModels.H>
 
+class ERForcingReader;
+class ERFAdvectionTendencies;
+class ERFSubsidence;
+class ERFDiagnosticsForcingFile;
+
 #ifdef ERF_USE_SHOC
 #include "ERF_ShocInterface.H"
 #endif
@@ -948,6 +953,14 @@ private:
     amrex::Vector<std::unique_ptr<amrex::MultiFab>>   detJ_cc_new;
 
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> z_t_rk;
+
+#ifdef ERF_USE_NETCDF
+    // Forcing file reader and modules
+    std::shared_ptr<ERForcingReader> m_forcing_reader;
+    std::unique_ptr<ERFAdvectionTendencies> m_adv_tend;
+    std::unique_ptr<ERFSubsidence> m_subsidence;
+    std::unique_ptr<ERFDiagnosticsForcingFile> m_diag_forcing;
+#endif
 
     // Data structures for terrain immersed forcing
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> terrain_blanking;

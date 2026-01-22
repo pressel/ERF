@@ -10,6 +10,13 @@
 
 #include "ERF_EOS.H"
 #include "ERF.H"
+#ifdef ERF_USE_NETCDF
+#include "ERForcingReader.H"
+#include "ERF_InitLESForcing.H"
+#include "ERFAdvectionTendencies.H"
+#include "ERFSubsidence.H"
+#include "ERFDiagnosticsForcingFile.H"
+#endif
 #include "AMReX_buildInfo.H"
 #include "AMReX_Random.H"
 #include "AMReX_WriteEBSurface.H"
@@ -578,6 +585,12 @@ ERF::Evolve ()
         Print() << "\nCoarse STEP " << step+1 << " starts ..." << std::endl;
 
         ComputeDt(step);
+
+#ifdef ERF_USE_NETCDF
+        // ForcingReader interpolation is stateless and takes the current model
+        // time directly (see ERForcingReader::get_time_interp), so no global
+        // time update is required here.
+#endif
 
         // Make sure we have read enough of the boundary plane data to make it through this timestep
         if (input_bndry_planes)
@@ -1583,6 +1596,13 @@ ERF::InitData_post ()
                                                         , bdy_time_interval
 #endif
                                                         );
+
+#ifdef ERF_USE_NETCDF
+        if (m_forcing_reader) {
+            m_SurfaceLayer->set_forcing_reader(m_forcing_reader);
+        }
+#endif
+
         // This call will allocate the arrays at each level. If we regrid later, either changing
         // the number of levels or just the grids at each existing level, we will call an update routine
         // to redefine the internal arrays in m_SurfaceLayer.
@@ -2055,6 +2075,79 @@ ERF::init_only (int lev, Real time)
         // we will rebalance after interpolation
         init_from_metgrid(lev);
 #endif
+    } else if (solverChoice.init_type == InitType::LESForcing) {
+#ifdef ERF_USE_NETCDF
+        // The physbc's need the terrain but are needed for initHSE
+        make_physbcs(lev);
+
+        ERFInitLESForcing init_forcing;
+        std::string forcing_file;
+        ParmParse pp("erf");
+        pp.get("les_forcing_file", forcing_file);
+        init_forcing.define(forcing_file);
+
+        // Initialize u, v, w, cons
+        init_forcing.initialize_domain(geom[lev], *z_phys_cc[lev],
+                                       vars_new[lev][Vars::xvel],
+                                       vars_new[lev][Vars::yvel],
+                                       vars_new[lev][Vars::zvel],
+                                       vars_new[lev][Vars::cons],
+                                       start_time);
+
+        // Store reader for later use
+        if (lev == 0) {
+            m_forcing_reader = init_forcing.get_reader();
+            
+            // Initialize modules
+            bool use_advection = true;
+            bool use_subsidence = true;
+            pp.query("les_forcing_use_advection", use_advection);
+            pp.query("les_forcing_use_subsidence", use_subsidence);
+
+            if (use_advection) {
+                m_adv_tend = std::make_unique<ERFAdvectionTendencies>(m_forcing_reader);
+            }
+            if (use_subsidence) {
+                m_subsidence = std::make_unique<ERFSubsidence>(m_forcing_reader);
+            }
+            m_diag_forcing = std::make_unique<ERFDiagnosticsForcingFile>(m_forcing_reader);
+        }
+
+        // Initialize base state from current state (assuming horizontal homogeneity or just taking column 0)
+        // We can use initHSE if we set up the callback, but here we have the data already.
+        // Let's just copy the initialized state to base_state.
+        // base_state has components: r0, p0, pi0, th0, qv0
+        
+        // We need to calculate p0 and pi0 from rho and theta.
+        // p0 = p_ref * (R * theta * rho / p_ref)^gamma ? No.
+        // p = rho * R * T. theta = T * (p0/p)^(R/Cp).
+        // p = p0 * (R * theta * rho / p0)^gamma where gamma = Cp/Cv = 1.4?
+        // Actually, getPgivenRTh(rhotheta) gives pressure.
+        
+        for (MFIter mfi(base_state[lev]); mfi.isValid(); ++mfi) {
+            const Box& bx = mfi.validbox();
+            const auto& cons_arr = vars_new[lev][Vars::cons].array(mfi);
+            const auto& base_arr = base_state[lev].array(mfi);
+            
+            ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                Real rho = cons_arr(i,j,k,Rho_comp);
+                Real rhotheta = cons_arr(i,j,k,RhoTheta_comp);
+                Real qv = 0.0;
+                if (cons_arr.nComp() > RhoQ1_comp) qv = cons_arr(i,j,k,RhoQ1_comp) / rho;
+                
+                Real p = getPgivenRTh(rhotheta, qv);
+                
+                base_arr(i,j,k,BaseState::r0_comp) = rho;
+                base_arr(i,j,k,BaseState::p0_comp) = p;
+                base_arr(i,j,k,BaseState::pi0_comp) = getExnergivenP(p, solverChoice.rdOcp);
+                base_arr(i,j,k,BaseState::th0_comp) = rhotheta / rho;
+                base_arr(i,j,k,BaseState::qv0_comp) = qv;
+            });
+        }
+#else
+        amrex::Abort("LESForcing requires compiling with NetCDF enabled (ERF_USE_NETCDF=TRUE)");
+#endif
+
     } else if (solverChoice.init_type == InitType::Uniform) {
         // Initialize a uniform background field and base state based on the
         // problem-specified reference density and temperature
