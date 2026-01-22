@@ -886,7 +886,8 @@ ERF::post_timestep (int nstep, Real time, Real dt_lev0)
       }
     }
 
-    if(solverChoice.io_hurricane_eye_tracker and (nstep == 0 or (nstep+1)%m_plot3d_int_1 == 0)) {
+    if ( solverChoice.io_hurricane_eye_tracker and (nstep == 0 or (nstep+1)%m_plot3d_int_1 == 0) )
+    {
         int levc=finest_level;
 
         HurricaneEyeTracker(geom[levc],
@@ -913,9 +914,9 @@ ERF::post_timestep (int nstep, Real time, Real dt_lev0)
                                hurricane_maxvel_vs_time);
 
         std::string filename_tracker = MakeVTKFilename_TrackerCircle(nstep);
-        std::string filename_xy = MakeVTKFilename_EyeTracker_xy(nstep);
-        std::string filename_latlon = MakeFilename_EyeTracker_latlon(nstep);
-        std::string filename_maxvel = MakeFilename_EyeTracker_maxvel(nstep);
+        std::string filename_xy      = MakeVTKFilename_EyeTracker_xy(nstep);
+        std::string filename_latlon  = MakeFilename_EyeTracker_latlon(nstep);
+        std::string filename_maxvel  = MakeFilename_EyeTracker_maxvel(nstep);
         if (ParallelDescriptor::IOProcessor()) {
             WriteVTKPolyline(filename_tracker, hurricane_tracker_circle);
             WriteVTKPolyline(filename_xy, hurricane_eye_track_xy);
@@ -923,7 +924,6 @@ ERF::post_timestep (int nstep, Real time, Real dt_lev0)
             WriteLinePlot(filename_maxvel, hurricane_maxvel_vs_time);
         }
     }
-
 } // post_timestep
 
 // This is called from main.cpp and handles all initialization, whether from start or restart
@@ -957,62 +957,7 @@ ERF::InitData_pre ()
         init_bcs();
     }
 
-    // Verify solver choices
-    for (int lev(0); lev <= max_level; ++lev) {
-        // BC compatibility
-        if ( ( (solverChoice.turbChoice[lev].pbl_type == PBLType::MYNN25)   ||
-               (solverChoice.turbChoice[lev].pbl_type == PBLType::MYNNEDMF) ||
-               (solverChoice.turbChoice[lev].pbl_type == PBLType::YSU) ||
-               (solverChoice.turbChoice[lev].pbl_type == PBLType::MRF)
-                   ) &&
-            phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::surface_layer ) {
-            Abort("MYNN2.5/MYNNEDMF/YSU/MRF PBL Model requires MOST at lower boundary");
-        }
-        if ( (solverChoice.turbChoice[lev].les_type == LESType::Deardorff) &&
-             (solverChoice.turbChoice[lev].Ce_wall > 0) &&
-             (phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::surface_layer) &&
-             (phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::slip_wall) &&
-             (phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::no_slip_wall) )
-        {
-            Warning("Deardorff LES assumes wall at zlo when applying Ce_wall");
-        }
-
-        if ( (solverChoice.const_massflux_u != 0) &&
-             (phys_bc_type[Orientation(Direction::x,Orientation::low)] != ERF_BC::periodic ) )
-        {
-            Abort("Constant mass flux (in x) should be used with periodic boundaries");
-        }
-        if ( (solverChoice.const_massflux_v != 0) &&
-             (phys_bc_type[Orientation(Direction::y,Orientation::low)] != ERF_BC::periodic ) )
-        {
-            Abort("Constant mass flux (in y) should be used with periodic boundaries");
-        }
-
-        // mesoscale diffusion
-        if ((geom[lev].CellSize(0) > 2000.) || (geom[lev].CellSize(1) > 2000.))
-        {
-            if ( (solverChoice.turbChoice[lev].les_type == LESType::Smagorinsky) &&
-                 (!solverChoice.turbChoice[lev].smag2d)) {
-                Warning("Should use 2-D Smagorinsky for mesoscale resolution");
-            } else if (solverChoice.turbChoice[lev].les_type == LESType::Deardorff) {
-                Warning("Should not use Deardorff LES for mesoscale resolution");
-            }
-        }
-
-        // Turn off implicit solve if we have no diffusion
-        bool l_use_kturb   = solverChoice.turbChoice[lev].use_kturb;
-        bool l_use_diff    = ( (solverChoice.diffChoice.molec_diff_type != MolecDiffType::None) ||
-                               l_use_kturb );
-        bool l_implicit_diff = (solverChoice.vert_implicit_fac[0] > 0 ||
-                                solverChoice.vert_implicit_fac[1] > 0 ||
-                                solverChoice.vert_implicit_fac[2] > 0);
-        if (l_implicit_diff && !l_use_diff) {
-            Print() << "No molecular or turbulent diffusion, turning off implicit solve" << std::endl;
-            solverChoice.vert_implicit_fac[0] = 0;
-            solverChoice.vert_implicit_fac[1] = 0;
-            solverChoice.vert_implicit_fac[2] = 0;
-        }
-    }
+    solverChoice.check_params(max_level,geom,phys_bc_type);
 }
 
 void
@@ -1053,7 +998,7 @@ ERF::InitData_post ()
          solverChoice.vert_implicit_fac[2] > 0  )       &&
         solverChoice.implicit_momentum_diffusion)
     {
-        amrex::Warning("Doing implicit solve for u, v, and w with terrain -- this has not been tested");
+        Warning("Doing implicit solve for u, v, and w with terrain -- this has not been tested");
     }
 #endif
 
@@ -1366,7 +1311,7 @@ ERF::InitData_post ()
 
     //
     // If we are starting from scratch, we have the option to project the initial velocity field
-    //    regardless of how we initialized.  Note that project_velocity operates on vars_new.
+    //    regardless of how we initialized.  Note that project_initial_velocity operates on vars_new.
     // pp_inc is used as scratch space here; we zero it out after the projection
     //
     if (restart_chkfile == "")
@@ -1378,7 +1323,9 @@ ERF::InitData_post ()
                 if (verbose > 0) {
                     amrex::Print() << "Projecting initial velocity field at level " << lev << std::endl;
                 }
-                project_velocity(lev, dummy_dt);
+
+                project_initial_velocity(lev, t_new[lev], dummy_dt);
+
                 pp_inc[lev].setVal(0.);
                 gradp[lev][GpVars::gpx].setVal(0.);
                 gradp[lev][GpVars::gpy].setVal(0.);
@@ -1506,57 +1453,7 @@ ERF::InitData_post ()
     // If lev > 0, we need to fill bc's by interpolation from coarser grid
     for (int lev = 1; lev <= finest_level; ++lev)
     {
-        Real time_for_fp = 0.; // This is not actually used
-        Vector<Real> ftime    = {time_for_fp, time_for_fp};
-        Vector<Real> ctime    = {time_for_fp, time_for_fp};
-        if (lat_m[lev]) {
-            // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
-            Vector<MultiFab*> fmf = {lat_m[lev  ].get(), lat_m[lev  ].get()};
-            Vector<MultiFab*> cmf = {lat_m[lev-1].get(), lat_m[lev-1].get()};
-            IntVect ngv = lat_m[lev]->nGrowVect(); ngv[2] = 0;
-            Interpolater* mapper = &cell_cons_interp;
-            FillPatchTwoLevels(*lat_m[lev].get(), ngv, IntVect(0,0,0),
-                               time_for_fp, cmf, ctime, fmf, ftime,
-                               0, 0, 1, geom[lev-1], geom[lev],
-                               refRatio(lev-1), mapper, domain_bcs_type,
-                               BCVars::cons_bc);
-        }
-        if (lon_m[lev]) {
-            // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
-            Vector<MultiFab*> fmf = {lon_m[lev  ].get(), lon_m[lev  ].get()};
-            Vector<MultiFab*> cmf = {lon_m[lev-1].get(), lon_m[lev-1].get()};
-            IntVect ngv = lon_m[lev]->nGrowVect(); ngv[2] = 0;
-            Interpolater* mapper = &cell_cons_interp;
-            FillPatchTwoLevels(*lon_m[lev].get(), ngv, IntVect(0,0,0),
-                               time_for_fp, cmf, ctime, fmf, ftime,
-                               0, 0, 1, geom[lev-1], geom[lev],
-                               refRatio(lev-1), mapper, domain_bcs_type,
-                               BCVars::cons_bc);
-        } // lon_m
-        if (sinPhi_m[lev]) {
-            // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
-            Vector<MultiFab*> fmf = {sinPhi_m[lev  ].get(), sinPhi_m[lev  ].get()};
-            Vector<MultiFab*> cmf = {sinPhi_m[lev-1].get(), sinPhi_m[lev-1].get()};
-            IntVect ngv = sinPhi_m[lev]->nGrowVect(); ngv[2] = 0;
-            Interpolater* mapper = &cell_cons_interp;
-            FillPatchTwoLevels(*sinPhi_m[lev].get(), ngv, IntVect(0,0,0),
-                               time_for_fp, cmf, ctime, fmf, ftime,
-                               0, 0, 1, geom[lev-1], geom[lev],
-                               refRatio(lev-1), mapper, domain_bcs_type,
-                               BCVars::cons_bc);
-        } // sinPhi
-        if (cosPhi_m[lev]) {
-            // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
-            Vector<MultiFab*> fmf = {cosPhi_m[lev  ].get(), cosPhi_m[lev  ].get()};
-            Vector<MultiFab*> cmf = {cosPhi_m[lev-1].get(), cosPhi_m[lev-1].get()};
-            IntVect ngv = cosPhi_m[lev]->nGrowVect(); ngv[2] = 0;
-            Interpolater* mapper = &cell_cons_interp;
-            FillPatchTwoLevels(*cosPhi_m[lev].get(), ngv, IntVect(0,0,0),
-                               time_for_fp, cmf, ctime, fmf, ftime,
-                               0, 0, 1, geom[lev-1], geom[lev],
-                               refRatio(lev-1), mapper, domain_bcs_type,
-                               BCVars::cons_bc);
-        } // cosPhi
+        Interp2DArrays(lev,grids[lev],dmap[lev]);
     } // lev
 
 #ifdef ERF_USE_WW3_COUPLING
@@ -1899,6 +1796,155 @@ ERF::InitData_post ()
 
 }
 
+void
+ERF::Interp2DArrays (int lev, const BoxArray& my_ba2d, const DistributionMapping& my_dm)
+{
+    if (lon_m[lev-1] && !lon_m[lev]) {
+        auto ngv = lon_m[lev-1]->nGrowVect(); ngv[2] = 0;
+        lon_m[lev] = std::make_unique<MultiFab>(my_ba2d,my_dm,1,ngv);
+        InterpFromCoarseLevel(*lon_m[lev], ngv, IntVect(0,0,0), // do not fill ghost cells outside the domain
+                              *lon_m[lev-1], 0, 0, 1,
+                              geom[lev-1], geom[lev],
+                              refRatio(lev-1), &cell_cons_interp,
+                              domain_bcs_type, BCVars::cons_bc);
+    }
+    if (lat_m[lev-1] && !lat_m[lev]) {
+        auto ngv = lat_m[lev-1]->nGrowVect(); ngv[2] = 0;
+        lat_m[lev] = std::make_unique<MultiFab>(my_ba2d,my_dm,1,ngv);
+        InterpFromCoarseLevel(*lat_m[lev], ngv, IntVect(0,0,0), // do not fill ghost cells outside the domain
+                              *lat_m[lev-1], 0, 0, 1,
+                              geom[lev-1], geom[lev],
+                              refRatio(lev-1), &cell_cons_interp,
+                              domain_bcs_type, BCVars::cons_bc);
+    }
+    if (sinPhi_m[lev-1] && !sinPhi_m[lev]) {
+        auto ngv = sinPhi_m[lev-1]->nGrowVect(); ngv[2] = 0;
+        sinPhi_m[lev] = std::make_unique<MultiFab>(my_ba2d,my_dm,1,ngv);
+        InterpFromCoarseLevel(*sinPhi_m[lev], ngv, IntVect(0,0,0), // do not fill ghost cells outside the domain
+                              *sinPhi_m[lev-1], 0, 0, 1,
+                              geom[lev-1], geom[lev],
+                              refRatio(lev-1), &cell_cons_interp,
+                              domain_bcs_type, BCVars::cons_bc);
+    }
+    if (cosPhi_m[lev-1] && !cosPhi_m[lev]) {
+        auto ngv = cosPhi_m[lev-1]->nGrowVect(); ngv[2] = 0;
+        cosPhi_m[lev] = std::make_unique<MultiFab>(my_ba2d,my_dm,1,ngv);
+        InterpFromCoarseLevel(*cosPhi_m[lev], ngv, IntVect(0,0,0), // do not fill ghost cells outside the domain
+                              *cosPhi_m[lev-1], 0, 0, 1,
+                              geom[lev-1], geom[lev],
+                              refRatio(lev-1), &cell_cons_interp,
+                              domain_bcs_type, BCVars::cons_bc);
+    }
+    if (sst_lev[lev-1][0] && !sst_lev[lev][0]) {
+        int ntimes = sst_lev[lev-1].size();
+        sst_lev[lev].resize(ntimes);
+        auto ngv = sst_lev[lev-1][0]->nGrowVect(); ngv[2] = 0;
+        for (int n = 0; n < ntimes; n++) {
+            sst_lev[lev][n] = std::make_unique<MultiFab>(my_ba2d,my_dm,1,ngv);
+            InterpFromCoarseLevel(*sst_lev[lev][n], ngv, IntVect(0,0,0), // do not fill ghost cells outside the domain
+                                  *sst_lev[lev-1][n], 0, 0, 1,
+                                  geom[lev-1], geom[lev],
+                                  refRatio(lev-1), &cell_cons_interp,
+                                  domain_bcs_type, BCVars::cons_bc);
+        }
+    }
+    if (tsk_lev[lev-1][0] && !tsk_lev[lev][0]) {
+        int ntimes = tsk_lev[lev-1].size();
+        tsk_lev[lev].resize(ntimes);
+        auto ngv = tsk_lev[lev-1][0]->nGrowVect(); ngv[2] = 0;
+        for (int n = 0; n < ntimes; n++) {
+            tsk_lev[lev][n] = std::make_unique<MultiFab>(my_ba2d,my_dm,1,ngv);
+            InterpFromCoarseLevel(*tsk_lev[lev][n], ngv, IntVect(0,0,0), // do not fill ghost cells outside the domain
+                                  *tsk_lev[lev-1][n], 0, 0, 1,
+                                  geom[lev-1], geom[lev],
+                                  refRatio(lev-1), &cell_cons_interp,
+                                  domain_bcs_type, BCVars::cons_bc);
+        }
+    }
+
+    Real time_for_fp = 0.; // This is not actually used
+    Vector<Real> ftime    = {time_for_fp, time_for_fp};
+    Vector<Real> ctime    = {time_for_fp, time_for_fp};
+    if (lat_m[lev]) {
+        // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
+        Vector<MultiFab*> fmf = {lat_m[lev  ].get(), lat_m[lev  ].get()};
+        Vector<MultiFab*> cmf = {lat_m[lev-1].get(), lat_m[lev-1].get()};
+        IntVect ngv = lat_m[lev]->nGrowVect(); ngv[2] = 0;
+        Interpolater* mapper = &cell_cons_interp;
+        FillPatchTwoLevels(*lat_m[lev].get(), ngv, IntVect(0,0,0),
+                           time_for_fp, cmf, ctime, fmf, ftime,
+                           0, 0, 1, geom[lev-1], geom[lev],
+                           refRatio(lev-1), mapper, domain_bcs_type,
+                           BCVars::cons_bc);
+    }
+    if (lon_m[lev]) {
+        // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
+        Vector<MultiFab*> fmf = {lon_m[lev  ].get(), lon_m[lev  ].get()};
+        Vector<MultiFab*> cmf = {lon_m[lev-1].get(), lon_m[lev-1].get()};
+        IntVect ngv = lon_m[lev]->nGrowVect(); ngv[2] = 0;
+        Interpolater* mapper = &cell_cons_interp;
+        FillPatchTwoLevels(*lon_m[lev].get(), ngv, IntVect(0,0,0),
+                           time_for_fp, cmf, ctime, fmf, ftime,
+                           0, 0, 1, geom[lev-1], geom[lev],
+                           refRatio(lev-1), mapper, domain_bcs_type,
+                           BCVars::cons_bc);
+    } // lon_m
+    if (sinPhi_m[lev]) {
+        // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
+        Vector<MultiFab*> fmf = {sinPhi_m[lev  ].get(), sinPhi_m[lev  ].get()};
+        Vector<MultiFab*> cmf = {sinPhi_m[lev-1].get(), sinPhi_m[lev-1].get()};
+        IntVect ngv = sinPhi_m[lev]->nGrowVect(); ngv[2] = 0;
+        Interpolater* mapper = &cell_cons_interp;
+        FillPatchTwoLevels(*sinPhi_m[lev].get(), ngv, IntVect(0,0,0),
+                           time_for_fp, cmf, ctime, fmf, ftime,
+                           0, 0, 1, geom[lev-1], geom[lev],
+                           refRatio(lev-1), mapper, domain_bcs_type,
+                           BCVars::cons_bc);
+    } // sinPhi
+    if (cosPhi_m[lev]) {
+        // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
+        Vector<MultiFab*> fmf = {cosPhi_m[lev  ].get(), cosPhi_m[lev  ].get()};
+        Vector<MultiFab*> cmf = {cosPhi_m[lev-1].get(), cosPhi_m[lev-1].get()};
+        IntVect ngv = cosPhi_m[lev]->nGrowVect(); ngv[2] = 0;
+        Interpolater* mapper = &cell_cons_interp;
+        FillPatchTwoLevels(*cosPhi_m[lev].get(), ngv, IntVect(0,0,0),
+                           time_for_fp, cmf, ctime, fmf, ftime,
+                           0, 0, 1, geom[lev-1], geom[lev],
+                           refRatio(lev-1), mapper, domain_bcs_type,
+                           BCVars::cons_bc);
+    } // cosPhi
+    if (sst_lev[lev][0]) {
+        // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
+    int ntimes = sst_lev[lev].size();
+    for (int n = 0; n < ntimes; n++) {
+            Vector<MultiFab*> fmf = {sst_lev[lev  ][n].get(), sst_lev[lev  ][n].get()};
+            Vector<MultiFab*> cmf = {sst_lev[lev-1][n].get(), sst_lev[lev-1][n].get()};
+            IntVect ngv = sst_lev[lev][n]->nGrowVect(); ngv[2] = 0;
+            Interpolater* mapper = &cell_cons_interp;
+            FillPatchTwoLevels(*sst_lev[lev][n].get(), ngv, IntVect(0,0,0),
+                               time_for_fp, cmf, ctime, fmf, ftime,
+                               0, 0, 1, geom[lev-1], geom[lev],
+                               refRatio(lev-1), mapper, domain_bcs_type,
+                               BCVars::cons_bc);
+        } // ntimes
+    } // sst_lev
+    if (tsk_lev[lev][0]) {
+        // Call FillPatchTwoLevels which ASSUMES that all ghost cells at lev-1 have already been filled
+    int ntimes = tsk_lev[lev].size();
+    for (int n = 0; n < ntimes; n++) {
+            Vector<MultiFab*> fmf = {tsk_lev[lev  ][n].get(), tsk_lev[lev  ][n].get()};
+            Vector<MultiFab*> cmf = {tsk_lev[lev-1][n].get(), tsk_lev[lev-1][n].get()};
+            IntVect ngv = tsk_lev[lev][n]->nGrowVect(); ngv[2] = 0;
+            Interpolater* mapper = &cell_cons_interp;
+            FillPatchTwoLevels(*tsk_lev[lev][n].get(), ngv, IntVect(0,0,0),
+                               time_for_fp, cmf, ctime, fmf, ftime,
+                               0, 0, 1, geom[lev-1], geom[lev],
+                               refRatio(lev-1), mapper, domain_bcs_type,
+                               BCVars::cons_bc);
+        } // ntimes
+    } // tsk_lev
+}
+
 // Initialize microphysics object
 void
 ERF::initializeMicrophysics (const int& a_nlevsmax /*!< number of AMR levels */)
@@ -1909,7 +1955,6 @@ ERF::initializeMicrophysics (const int& a_nlevsmax /*!< number of AMR levels */)
 
     } else if (Microphysics::modelType(solverChoice.moisture_type) == MoistureModelType::Lagrangian) {
 #ifdef ERF_USE_PARTICLES
-
         micro = std::make_unique<LagrangianMicrophysics>(a_nlevsmax, solverChoice.moisture_type);
         /* Lagrangian microphysics models will have a particle container; it needs to be added
            to ERF::particleData */
@@ -2030,14 +2075,14 @@ ERF::init_only (int lev, Real time)
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(solverChoice.use_gravity,
                 "Gravity should be on to be consistent with sounding initialization.");
         } else { // SoundingType::ConstantDensity
-            AMREX_ASSERT_WITH_MESSAGE(!solverChoice.use_gravity,
-                "Constant density probably doesn't make sense with gravity");
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!solverChoice.use_gravity || (solverChoice.anelastic[lev] == 1),
+                "Constant density probably doesn't make sense for compressible flow with gravity");
             initHSE();
         }
 
 #ifdef ERF_USE_NETCDF
     }
-    else if (solverChoice.init_type == InitType::WRFInput)
+    else if (solverChoice.init_type == InitType::WRFInput && !nc_init_file[lev].empty())
     {
         // The base state is initialized from WRF wrfinput data, output by
         // ideal.exe or real.exe
@@ -2060,6 +2105,10 @@ ERF::init_only (int lev, Real time)
         if (!solverChoice.use_real_bcs) {
             make_physbcs(lev);
         }
+    }
+    else if (solverChoice.init_type == InitType::WRFInput && nc_init_file[lev].empty())
+    {
+        amrex::Abort("This pathway is not quite implemented yet");
     }
     else if (solverChoice.init_type == InitType::NCFile)
     {
@@ -2279,7 +2328,7 @@ ERF::ReadParameters ()
         pp.query("use_fft", use_fft);
 #ifndef ERF_USE_FFT
         if (use_fft) {
-            amrex::Abort("You must build with USE_FFT in order to set use_fft = true in your inputs file");
+            Abort("You must build with USE_FFT in order to set use_fft = true in your inputs file");
         }
 #endif
 
@@ -2433,12 +2482,12 @@ ERF::ReadParameters ()
             if (plotfile3d_type_1 == PlotFileType::None) {
                 plotfile3d_type_1  = plotfile3d_type_temp;
             } else {
-                amrex::Abort("You must set either plotfile_type or plotfile_type_1, not both");
+                Abort("You must set either plotfile_type or plotfile_type_1, not both");
             }
             if (plotfile3d_type_2 == PlotFileType::None) {
                 plotfile3d_type_2  = plotfile3d_type_temp;
             } else {
-                amrex::Abort("You must set either plotfile_type or plotfile_type_2, not both");
+                Abort("You must set either plotfile_type or plotfile_type_2, not both");
             }
         }
         if (plotfile2d_type_temp == PlotFileType::None) {
@@ -2452,12 +2501,12 @@ ERF::ReadParameters ()
             if (plotfile2d_type_1 == PlotFileType::None) {
                 plotfile2d_type_1  = plotfile2d_type_temp;
             } else {
-                amrex::Abort("You must set either plotfile2d_type or plotfile2d_type_1, not both");
+                Abort("You must set either plotfile2d_type or plotfile2d_type_1, not both");
             }
             if (plotfile2d_type_2 == PlotFileType::None) {
                 plotfile2d_type_2  = plotfile2d_type_temp;
             } else {
-                amrex::Abort("You must set either plotfile2d_type or plotfile2d_type_2, not both");
+                Abort("You must set either plotfile2d_type or plotfile2d_type_2, not both");
             }
         }
 #ifndef ERF_USE_NETCDF
@@ -2465,7 +2514,7 @@ ERF::ReadParameters ()
             plotfile3d_type_2 == PlotFileType::Netcdf ||
             plotfile2d_type_1 == PlotFileType::Netcdf ||
             plotfile2d_type_2 == PlotFileType::Netcdf) {
-            amrex::Abort("Plotfile type = Netcdf is not allowed without USE_NETCDF = TRUE");
+            Abort("Plotfile type = Netcdf is not allowed without USE_NETCDF = TRUE");
         }
 #endif
 
@@ -2509,10 +2558,10 @@ ERF::ReadParameters ()
             ParmParse pp_sv("erf.subvol");
             int n1 = pp_sv.countval("origin"); int n2 = pp_sv.countval("nxnynz"); int n3 = pp_sv.countval("dxdydz");
             if (n1 != n2 || n1 != n3 || n2 != n3) {
-                amrex::Abort("WriteSubvolume: must have same number of entries in origin, nxnynz, and dxdydz.");
+                Abort("WriteSubvolume: must have same number of entries in origin, nxnynz, and dxdydz.");
             }
             if ( n1%AMREX_SPACEDIM != 0) {
-                amrex::Abort("WriteSubvolume: origin, nxnynz, and dxdydz must have multiples of AMReX_SPACEDIM");
+                Abort("WriteSubvolume: origin, nxnynz, and dxdydz must have multiples of AMReX_SPACEDIM");
             }
             nsub = n1/AMREX_SPACEDIM;
             m_subvol_int.resize(nsub);
@@ -2530,7 +2579,7 @@ ERF::ReadParameters ()
             } else if ( nsi == nsub) {
                 pp.getarr("subvol_int" , m_subvol_int);
             } else {
-                amrex::Abort("There must either be a single value of subvol_int or one for every subdomain");
+                Abort("There must either be a single value of subvol_int or one for every subdomain");
             }
         }
 
@@ -2542,7 +2591,7 @@ ERF::ReadParameters ()
             } else if ( nsr == nsub) {
                 pp.getarr("subvol_per" , m_subvol_per);
             } else {
-                amrex::Abort("There must either be a single value of subvol_per or one for every subdomain");
+                Abort("There must either be a single value of subvol_per or one for every subdomain");
             }
         }
 
@@ -2631,17 +2680,16 @@ ERF::ReadParameters ()
         }
     }
 
-    // If init from WRFInput or Metgrid make sure a valid file name is present
+    // If init from WRFInput or Metgrid make sure a valid file name is present at level 0.
+    // We allow for the possibility that finer levels may use native refinement rather than reading from a file
     if ((solverChoice.init_type == InitType::WRFInput) ||
         (solverChoice.init_type == InitType::Metgrid)  ||
         (solverChoice.init_type == InitType::NCFile) ) {
-        for (int lev = 0; lev <= max_level; lev++) {
-            int num_files = nc_init_file[lev].size();
-            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(num_files>0, "A file name must be present for init type WRFInput, Metgrid or NCFile.");
-            for (int j = 0; j < num_files; j++) {
-                AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!nc_init_file[lev][j].empty(), "Valid file name must be present for init type WRFInput, Metgrid or NCFile.");
-            } //j
-        } // lev
+        int num_files = nc_init_file[0].size();
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(num_files>0, "A file name must be present at level 0 for init type WRFInput, Metgrid or NCFile.");
+        for (int j = 0; j < num_files; j++) {
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!nc_init_file[0][j].empty(), "Valid file name must be present at level 0 for init type WRFInput, Metgrid or NCFile.");
+        } //j
     } // InitType
 
     // What type of land surface model to use
@@ -3063,11 +3111,11 @@ ERF::check_for_low_temp(amrex::MultiFab& S)
 
             if (temp < t_low) {
 #ifdef AMREX_USE_GPU
-                AMREX_DEVICE_PRINTF("Temperature too low going into microphysics in cell: %d %d %d %e \n", i,j,k,temp);
+                AMREX_DEVICE_PRINTF("Temperature too low in cell: %d %d %d %e \n", i,j,k,temp);
 #else
-                printf("Temperature too low going into microphyics in cell: %d %d %d \n", i,j,k);
+                printf("Temperature too low in cell: %d %d %d \n", i,j,k);
                 printf("Based on temp / rhotheta / rho %e %e %e \n", temp,rhotheta,rho);
-                amrex::Abort();
+                Abort();
 #endif
             }
         });
@@ -3092,7 +3140,7 @@ ERF::check_for_negative_theta(amrex::MultiFab& S)
                 AMREX_DEVICE_PRINTF("RhoTheta is negative at %d %d %d %e \n", i,j,k,rhotheta);
 #else
                 printf("RhoTheta is negative at %d %d %d %e \n", i,j,k,rhotheta);
-                amrex::Abort("Bad theta in check_for_negative_theta");
+                Abort("Bad theta in check_for_negative_theta");
 #endif
             }
             });
