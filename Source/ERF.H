@@ -1145,7 +1145,9 @@ private:
                                                     "diss",
                                                     // moisture vars
                                                     "moist_density", "qv", "qc", "qi", "qrain", "qsnow", "qgraup", "qt", "qn", "qp", "qsat",
-                                                    "rain_accum", "snow_accum", "graup_accum", "reflectivity", "max_reflectivity",
+                                                    "rain_accum", "snow_accum", "graup_accum",
+                                                    "rel_humidity", "condensation_rate",
+                                                    "reflectivity", "max_reflectivity",
                                                     // Terrain IB mask
                                                     "terrain_IB_mask",
                                                     // EB variables
@@ -1290,11 +1292,8 @@ private:
     static int ng_pres_hse;
 
     // Custom source terms
-    amrex::Vector<           amrex::Vector<amrex::Real> > h_rhotheta_src;
-    amrex::Vector<amrex::Gpu::DeviceVector<amrex::Real> > d_rhotheta_src;
-
-    amrex::Vector<           amrex::Vector<amrex::Real> > h_rhoqt_src;
-    amrex::Vector<amrex::Gpu::DeviceVector<amrex::Real> > d_rhoqt_src;
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> rhotheta_src;
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> rhoqt_src;
 
     amrex::Vector<           amrex::Vector<amrex::Real> > h_w_subsid;
     amrex::Vector<amrex::Gpu::DeviceVector<amrex::Real> > d_w_subsid;
