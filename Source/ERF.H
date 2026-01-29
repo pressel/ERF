@@ -1406,7 +1406,7 @@ private:
             else
             {
                 if (sc.terrain_type == TerrainType::EB){
-                    ngrow = 3;
+                    ngrow = 4;
                 } else {
                     ngrow = 2;
                 }
