@@ -596,6 +596,9 @@ struct SolverChoice {
             }
         }
 
+        // What's the strength of the bdy nudging?
+        pp.query("bdy_nudge_factor",bdy_nudge_factor);
+
         // Are me transporting the scalar component?
         pp.query("transport_scalar",transport_scalar);
 
@@ -1216,6 +1219,9 @@ struct SolverChoice {
     amrex::Real turb_disk_angle = -1.0;
     amrex::Real windfarm_x_shift = -1.0;
     amrex::Real windfarm_y_shift = -1.0;
+
+    // Nudging factor for bdy sponging : F1 = 1/(nudge_factor * dt)
+    amrex::Real bdy_nudge_factor = 10.0;
 
     // Use forest canopy model?
     bool do_forest_drag {false};

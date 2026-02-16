@@ -1314,24 +1314,6 @@ ERF::InitData_post ()
         int ncomp_cons = lev_new[Vars::cons].nComp();
         bool do_fb     = true;
 
-#ifdef ERF_USE_NETCDF
-        // We call this here because it is an ERF routine
-        if (solverChoice.use_real_bcs && (lev==0)) {
-            int icomp_cons = 0;
-            bool cons_only = false;
-            Vector<MultiFab*> mfs_vec = {&lev_new[Vars::cons],&lev_new[Vars::xvel],
-                                         &lev_new[Vars::yvel],&lev_new[Vars::zvel]};
-            if (solverChoice.upwind_real_bcs) {
-                fill_from_realbdy_upwind(mfs_vec,t_new[lev],cons_only,icomp_cons,
-                                         ncomp_cons,ngvect_cons,ngvect_vels);
-            } else {
-                fill_from_realbdy(mfs_vec,t_new[lev],cons_only,icomp_cons,
-                                  ncomp_cons,ngvect_cons,ngvect_vels);
-            }
-            do_fb = false;
-    }
-#endif
-
         (*physbcs_cons[lev])(lev_new[Vars::cons],lev_new[Vars::xvel],lev_new[Vars::yvel],0,ncomp_cons,
                              ngvect_cons,t_new[lev],BCVars::cons_bc,do_fb);
         (   *physbcs_u[lev])(lev_new[Vars::xvel],lev_new[Vars::xvel],lev_new[Vars::yvel],
@@ -2568,9 +2550,8 @@ ERF::ReadParameters ()
         // Specify whether ingest boundary planes of data
         pp.query("input_bndry_planes", input_bndry_planes);
 
-        // Query the set and total widths for wrfbdy interior ghost cells
+        // Query the total width for wrfbdy interior ghost cells
         pp.query("real_width", real_width);
-        pp.query("real_set_width", real_set_width);
 
         // If using real boundaries, do we extrapolate w (or set to 0)
         pp.query("real_extrap_w", real_extrap_w);
@@ -2733,8 +2714,6 @@ ERF::ParameterSanityChecks ()
                         ((solverChoice.init_type == InitType::WRFInput) || (solverChoice.init_type == InitType::Metgrid)) );
 
     AMREX_ALWAYS_ASSERT(real_width >= 0);
-    AMREX_ALWAYS_ASSERT(real_set_width >= 0);
-    AMREX_ALWAYS_ASSERT(real_width >= real_set_width);
 
     if (cf_width < 0 || cf_set_width < 0 || cf_width < cf_set_width) {
         Abort("You must set cf_width >= cf_set_width >= 0");
@@ -3108,7 +3087,7 @@ ERF::check_for_low_temp(amrex::MultiFab& S)
         {
             const Real rho      = s_arr(i, j, k, Rho_comp);
             const Real rhotheta = s_arr(i, j, k, RhoTheta_comp);
-            const Real qv       = s_arr(i, j, k, RhoQ1_comp);
+            const Real qv       = s_arr(i, j, k, RhoQ1_comp) / rho;
 
             Real temp = getTgivenRandRTh(rho, rhotheta, qv);
 
@@ -3117,7 +3096,7 @@ ERF::check_for_low_temp(amrex::MultiFab& S)
                 AMREX_DEVICE_PRINTF("Temperature too low in cell: %d %d %d %e \n", i,j,k,temp);
 #else
                 printf("Temperature too low in cell: %d %d %d \n", i,j,k);
-                printf("Based on temp / rhotheta / rho %e %e %e \n", temp,rhotheta,rho);
+                printf("Based on temp / rhotheta / rho / qv %e %e %e %e \n", temp,rhotheta,rho,qv);
 #endif
                 Abort();
             }
