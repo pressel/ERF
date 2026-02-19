@@ -20,7 +20,7 @@ using namespace amrex;
 Real
 read_times_from_wrflow (const std::string& nc_low_file,
                         Vector<Vector<FArrayBox>>& low_data_zlo,
-                        Real& start_low_time)
+                        Real& start_low_time, Real& final_low_time)
 {
     Print() << "Loading lower boundary data from NetCDF file " << std::endl;
 
@@ -62,15 +62,17 @@ read_times_from_wrflow (const std::string& nc_low_file,
             epochTimes.push_back(epochTime);
 
             if (nt == 1) {
-                timeInterval = epochTimes[1] - epochTimes[0];
+                timeInterval = static_cast<Real>(epochTimes[1] - epochTimes[0]);
             } else if (nt >= 1) {
-                AMREX_ALWAYS_ASSERT(epochTimes[nt] - epochTimes[nt-1] == timeInterval);
+              AMREX_ALWAYS_ASSERT(static_cast<Real>(epochTimes[nt] - epochTimes[nt-1]) == timeInterval);
             }
         }
-        start_low_time = epochTimes[0];
+        start_low_time = static_cast<Real>(epochTimes[0]);
+        final_low_time = static_cast<Real>(epochTimes[ntimes-1]);
     }
 
     ParallelDescriptor::Bcast(&start_low_time,1,ioproc);
+    ParallelDescriptor::Bcast(&final_low_time,1,ioproc);
     ParallelDescriptor::Bcast(&ntimes,1,ioproc);
     ParallelDescriptor::Bcast(&timeInterval,1,ioproc);
 

@@ -37,12 +37,17 @@ Vector<AMRErrorTag> ERF::ref_tags;
 SolverChoice ERF::solverChoice;
 
 Real ERF::start_time    = 0.0;
+//
+// Note: stop_time is total time, NOT elapsed time
+//
 Real ERF::stop_time     = std::numeric_limits<amrex::Real>::max();
 
 #ifdef ERF_USE_NETCDF
-Real ERF::start_bdy_time     = 0.0;
+Real ERF::start_bdy_time     =  0.0;
 Real ERF::final_bdy_time     = -1.0;
-Real ERF::start_low_time     = 0.0;
+
+Real ERF::start_low_time     =  0.0;
+Real ERF::final_low_time     = -1.0;
 
 Real ERF::bdy_time_interval  = std::numeric_limits<amrex::Real>::max();
 Real ERF::low_time_interval  = std::numeric_limits<amrex::Real>::max();
@@ -578,11 +583,15 @@ ERF::Evolve ()
 {
     BL_PROFILE_VAR("ERF::Evolve()", evolve);
 
+    //
+    // cur_time = t_new is elapsed time, not total time
+    // stop_time is total time
+    //
     Real cur_time = t_new[0];
 
     // Take one coarse timestep by calling timeStep -- which recursively calls timeStep
     //      for finer levels (with or without subcycling)
-    for (int step = istep[0]; step < max_step && start_time+cur_time < stop_time; ++step)
+    for (int step = istep[0]; (step < max_step) && (start_time+cur_time < stop_time); ++step)
     {
         if (use_datetime) {
             Print() << "\n" << getTimestamp(start_time+cur_time, datetime_format)
@@ -694,7 +703,7 @@ ERF::Evolve ()
         }
 #endif
 
-        if (cur_time >= stop_time - 1.e-6*dt[0]) break;
+        if (start_time+cur_time >= stop_time - 1.e-6*dt[0]) break;
     }
 
     // Write plotfiles at final time
@@ -1081,9 +1090,9 @@ ERF::InitData_post ()
             bdy_time_interval = read_times_from_wrfbdy(nc_bdy_file,
                                                        bdy_data_xlo,bdy_data_xhi,bdy_data_ylo,bdy_data_yhi,
                                                        start_bdy_time, final_bdy_time);
-            Real dT = bdy_time_interval;
 
-            int n_time_old = static_cast<int>(t_new[0] /  dT);
+            Real time_since_start_bdy = t_new[0] + start_time - start_bdy_time;
+            int n_time_old = static_cast<int>(time_since_start_bdy /  bdy_time_interval);
 
             int lev = 0;
 
@@ -1091,6 +1100,7 @@ ERF::InitData_post ()
 
             for (int itime = n_time_old; itime < ntimes; itime++)
             {
+                amrex::Print() << "READING IN BDY " << itime << std::endl;
                 read_from_wrfbdy(itime,nc_bdy_file,geom[0].Domain(),
                                  bdy_data_xlo,bdy_data_xhi,bdy_data_ylo,bdy_data_yhi,
                                  real_width);
@@ -1103,21 +1113,20 @@ ERF::InitData_post ()
 
         if (!nc_low_file.empty())
         {
-            low_time_interval = read_times_from_wrflow(nc_low_file,
-                                                       low_data_zlo,
-                                                       start_low_time);
-            Real dT = low_time_interval;
+            low_time_interval = read_times_from_wrflow(nc_low_file, low_data_zlo, start_low_time, final_low_time);
 
             int lev = 0;
             sst_lev[lev].resize(low_data_zlo.size());
             tsk_lev[lev].resize(low_data_zlo.size());
 
-            int n_time_old = static_cast<int>(t_new[0] /  dT);
+            Real time_since_start_low = t_new[0] + start_time - start_low_time;
+            int n_time_old = static_cast<int>(time_since_start_low /  low_time_interval);
 
-            int ntimes = std::min(n_time_old+2, static_cast<int>(low_data_zlo.size()));
+            int ntimes = std::min(n_time_old+3, static_cast<int>(low_data_zlo.size()));
 
             for (int itime = n_time_old; itime < ntimes; itime++)
             {
+                amrex::Print() << "READING IN LOW " << itime << std::endl;
                 read_from_wrflow(itime, nc_low_file, geom[lev].Domain(), low_data_zlo);
 
                 // Need to read PSFC
@@ -1525,9 +1534,10 @@ ERF::InitData_post ()
                                                         solverChoice.mesh_type,
                                                         solverChoice.terrain_type,
                                                         solverChoice.turbChoice[finest_level],
-                                                        start_time, stop_time
 #ifdef ERF_USE_NETCDF
-                                                        , bdy_time_interval
+                                                        start_low_time, final_low_time, low_time_interval
+#else
+                                                        0.0, 0.0
 #endif
                                                         );
         // This call will allocate the arrays at each level. If we regrid later, either changing
@@ -1593,7 +1603,12 @@ ERF::InitData_post ()
                 // it will change u* and theta* from their previous values
                 m_SurfaceLayer->update_pblh(lev, vars_new, z_phys_cc[lev].get(),
                                             solverChoice.moisture_indices);
-                m_SurfaceLayer->update_fluxes(lev, time,
+#ifdef ERF_USE_NETCDF
+                Real elapsed_time_since_start_low = t_new[lev] + (start_time - start_low_time);
+#else
+                Real elapsed_time_since_start_low = t_new[lev] + start_time;
+#endif
+                m_SurfaceLayer->update_fluxes(lev, elapsed_time_since_start_low,
                                               vars_new[lev][Vars::cons],
                                               z_phys_nd[lev],
                                               walldist[lev]);
@@ -2079,10 +2094,10 @@ ERF::restart ()
 // If we are restarting, the base state is read from the restart file, including
 // ghost cell data.
 void
-ERF::init_only (int lev, Real time)
+ERF::init_only (int lev, Real elapsed_time)
 {
-    t_new[lev] = time;
-    t_old[lev] = time - 1.e200;
+    t_new[lev] = elapsed_time;
+    t_old[lev] = elapsed_time - 1.e200;
 
     auto& lev_new = vars_new[lev];
     auto& lev_old = vars_old[lev];
