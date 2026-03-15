@@ -128,6 +128,12 @@ Problem::init_custom_pert (
     else if  (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_InitCustomPert_Bomex.H"
     }
+    else if  (my_prob_name_ci == "rico") {
+#include "Prob/ERF_InitCustomPert_RICO.H"
+    }
+    else if  (my_prob_name_ci == "sdm_congestus3d") {
+#include "Prob/ERF_InitCustomPert_SDMCongestus3D.H"
+    }
     else if  (my_prob_name_ci == "squallline") {
 #include "Prob/ERF_InitCustomPert_SquallLine.H"
     }
@@ -206,6 +212,12 @@ Problem::init_custom_pert_vels (
     else if  (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_InitCustomPertVels_Bomex.H"
     }
+    else if  (my_prob_name_ci == "rico") {
+#include "Prob/ERF_InitCustomPertVels_RICO.H"
+    }
+    else if  (my_prob_name_ci == "sdm_congestus3d") {
+#include "Prob/ERF_InitCustomPertVels_SDMCongestus3D.H"
+    }
     else if ( (my_prob_name_ci == "squallline") ||
               (my_prob_name_ci == "supercell") ) {
 #include "Prob/ERF_InitCustomPertVels_SquallLine.H"
@@ -218,7 +230,7 @@ Problem::init_custom_pert_vels (
 }
 
 void
-Problem::update_rhotheta_sources (const Real& /*time*/,
+Problem::update_rhotheta_sources (const Real& time,
                                   amrex::MultiFab* src,
                                   const Geometry& geom,
                                   std::unique_ptr<MultiFab>& z_phys_cc)
@@ -233,11 +245,15 @@ Problem::update_rhotheta_sources (const Real& /*time*/,
 
     if (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_UpdateRhoThetaSources_Bomex.H"
+    } else if (my_prob_name_ci == "rico") {
+#include "Prob/ERF_UpdateRhoThetaSources_RICO.H"
+    } else if  (my_prob_name_ci == "sdm_congestus3d") {
+#include "Prob/ERF_UpdateRhoThetaSources_SDMCongestus3D.H"
     }
 }
 
 void
-Problem::update_rhoqt_sources (const Real& /*time*/,
+Problem::update_rhoqt_sources (const Real& time,
                                amrex::MultiFab* qsrc,
                                const Geometry& geom,
                                std::unique_ptr<MultiFab>& z_phys_cc)
@@ -250,6 +266,10 @@ Problem::update_rhoqt_sources (const Real& /*time*/,
 
     if  (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_UpdateRhoQtSources_Bomex.H"
+    } else if (my_prob_name_ci == "rico") {
+#include "Prob/ERF_UpdateRhoQtSources_RICO.H"
+    } else if  (my_prob_name_ci == "sdm_congestus3d") {
+#include "Prob/ERF_UpdateRhoQtSources_SDMCongestus3D.H"
     }
 }
 
@@ -274,6 +294,8 @@ Problem::update_w_subsidence (const Real& /*time*/,
 
     if  (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_UpdateWSubsidence_Bomex.H"
+    } else if  (my_prob_name_ci == "rico") {
+#include "Prob/ERF_UpdateWSubsidence_RICO.H"
     }
 }
 
@@ -299,5 +321,7 @@ Problem::update_geostrophic_profile (const Real& /*time*/,
 
     if  (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_UpdateGeostrophicProfile_Bomex.H"
+    } else if  (my_prob_name_ci == "rico") {
+#include "Prob/ERF_UpdateGeostrophicProfile_RICO.H"
     }
 }
