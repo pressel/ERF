@@ -305,6 +305,8 @@ public:
       amrex::Print() << "    Using YSU PBL model at level " << lev << std::endl;
     } else if (pbl_type == PBLType::MRF) {
       amrex::Print() << "    Using MRF PBL model at level " << lev << std::endl;
+    } else if (pbl_type == PBLType::SHOC) {
+      amrex::Print() << "    Using SHOC PBL model at level " << lev << std::endl;
     } else {
       amrex::Error("Unknown turbulence model");
     }

@@ -121,6 +121,7 @@ set(ERF_DIM "3" CACHE STRING "Number of physical dimensions")
 option(ERF_ENABLE_DOCUMENTATION "Build documentation" OFF)
 option(ERF_ENABLE_ALL_WARNINGS "Enable all compiler warnings" OFF)
 option(ERF_ENABLE_TESTS "Enable regression and unit tests" OFF)
+option(ERF_ENABLE_UNIT_TESTS "Enable gtest-based unit tests" ${ERF_ENABLE_TESTS})
 option(ERF_ENABLE_REGRESSION_TESTS_ONLY "Enable only regression tests" OFF)
 set(_erf_enable_unit_tests_default OFF)
 if(ERF_ENABLE_TESTS AND NOT ERF_ENABLE_REGRESSION_TESTS_ONLY)
@@ -308,7 +309,7 @@ list(POP_BACK CMAKE_MESSAGE_CONTEXT)
 
 ########################## EKAT ##################################
 
-if(ERF_ENABLE_RRTMGP OR ERF_ENABLE_SHOC OR ERF_ENABLE_P3)
+if(ERF_ENABLE_RRTMGP OR ERF_ENABLE_P3)
   set(ERF_ENABLE_EKAT ON)
 else()
   set(ERF_ENABLE_EKAT OFF)
@@ -596,39 +597,7 @@ if(ERF_ENABLE_SHOC)
   list(APPEND CMAKE_MESSAGE_CONTEXT "SHOC")
 
   message(STATUS "Configuring SHOC")
-
-  if(NOT ERF_ENABLE_EKAT)
-      message(FATAL_ERROR "EKAT must be enabled if SHOC is enabled")
-  endif()
-
-  # NOTE: We compile shoc src files directly
-  message(VERBOSE "SHOC source files will be compiled directly")
-
-  # E3SM Cloned Check
-  if(ERF_ENABLE_SHOC OR ERF_ENABLE_P3)
-    message(VERBOSE "Checking EAMxx files from E3SM")
-
-    set(E3SM_EXPECTED_PATH "${PROJECT_SOURCE_DIR}/external/E3SM")
-
-    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/E3SM/components/eamxx/src/physics")
-        message(FATAL_ERROR
-            "E3SM provides eamxx required for SHOC/P3 but not found.\n"
-            "\n"
-            "This requires specific EAMxx physics source files from E3SM at commit 2eb52d9.\n"
-            "\n"
-            "Option 1 - Use provided script (recommended):\n"
-            "  ${PROJECT_SOURCE_DIR}/Build/eamxx_clone.sh\n"
-            "\n"
-            "Option 2 - Symlink existing E3SM (not tested, must be at commit 2eb52d9b3d):\n"
-            "  ln -s /path/to/your/E3SM ${PROJECT_SOURCE_DIR}/external/E3SM\n"
-            "\n"
-            "Or disable features:\n"
-            "  cmake -DERF_ENABLE_SHOC=OFF -DERF_ENABLE_P3=OFF ..\n")
-    endif()
-  else()
-    message(DEBUG "EKAT physics not enabled, skipping E3SM check")
-  endif()
-
+  message(VERBOSE "Using native AMReX SHOC sources in Source/PBL/Shoc")
 
   message(STATUS "SHOC configuration complete")
   list(POP_BACK CMAKE_MESSAGE_CONTEXT)

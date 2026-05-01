@@ -45,3 +45,7 @@ gtest_discover_tests(${erf_exe_name}
   PROPERTIES
     LABELS "unit"
 )
+
+if(ERF_ENABLE_SHOC)
+  add_subdirectory(Shoc)
+endif()

@@ -12,7 +12,7 @@
 #include "ERF_EB.H"
 
 #ifdef ERF_USE_SHOC
-#include "ERF_ShocInterface.H"
+#include "ERF_ShocDriver.H"
 #endif
 
 void

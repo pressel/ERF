@@ -999,6 +999,17 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
         if (containerHasElement(plot_var_names, "nut")) {
             MultiFab dmf(mf[lev], make_alias, mf_comp, 1);
             MultiFab cmf(vars_new[lev][Vars::cons], make_alias, 0, 1); // to provide rho only
+            const MultiFab* eta_src = nullptr;
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                eta_src = &shoc_interface[lev]->native_diagnostics();
+            } else
+#endif
+            {
+                eta_src = eddyDiffs_lev[lev].get();
+            }
 #ifdef _OPENMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
@@ -1007,7 +1018,7 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
                 const Box& bx = mfi.tilebox();
                 auto       prim = dmf[mfi].array();
                 auto const cons = cmf[mfi].const_array();
-                auto const diff = (*eddyDiffs_lev[lev])[mfi].const_array();
+                auto const diff = (*eta_src)[mfi].const_array();
                 ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
                 {
                     const Real rho = cons(i, j, k, Rho_comp);
@@ -1019,8 +1030,20 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             mf_comp++;
         }
 
+        const MultiFab* shoc_or_host_eddy = nullptr;
+#ifdef ERF_USE_SHOC
+        if (solverChoice.use_shoc && shoc_interface[lev] &&
+            shoc_interface[lev]->uses_shoc_tendencies() &&
+            shoc_interface[lev]->has_native_diagnostics()) {
+            shoc_or_host_eddy = &shoc_interface[lev]->native_diagnostics();
+        } else
+#endif
+        {
+            shoc_or_host_eddy = eddyDiffs_lev[lev].get();
+        }
+
         if (containerHasElement(plot_var_names, "Kmv")) {
-            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Mom_v,mf_comp,1,0);
+            MultiFab::Copy(mf[lev],*shoc_or_host_eddy,EddyDiff::Mom_v,mf_comp,1,0);
             mf_comp ++;
         }
         if (containerHasElement(plot_var_names, "Kmh")) {
@@ -1028,7 +1051,7 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             mf_comp ++;
         }
         if (containerHasElement(plot_var_names, "Khv")) {
-            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Theta_v,mf_comp,1,0);
+            MultiFab::Copy(mf[lev],*shoc_or_host_eddy,EddyDiff::Theta_v,mf_comp,1,0);
             mf_comp ++;
         }
         if (containerHasElement(plot_var_names, "Khh")) {
@@ -1036,7 +1059,111 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             mf_comp ++;
         }
         if (containerHasElement(plot_var_names, "Lturb")) {
-            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Turb_lengthscale,mf_comp,1,0);
+            MultiFab::Copy(mf[lev],*shoc_or_host_eddy,EddyDiff::Turb_lengthscale,mf_comp,1,0);
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "shoc_cldfrac")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->shoc_cldfrac_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "shoc_ql")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->shoc_ql_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "shoc_cond")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->shoc_cond_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "brunt")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->brunt_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "isotropy")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->isotropy_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "shear_prod")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->shear_prod_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "buoy_prod")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->buoy_prod_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "diss_tke")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->diss_tke_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
             mf_comp ++;
         }
         if (containerHasElement(plot_var_names, "walldist")) {

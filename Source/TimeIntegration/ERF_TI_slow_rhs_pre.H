@@ -1,4 +1,5 @@
 #include "ERF_SrcHeaders.H"
+#include <AMReX_ParReduce.H>
 
 /**
  *  Wrapper for calling the routine that creates the slow RHS
@@ -168,6 +169,63 @@
 #endif
                          fr_as_crse, fr_as_fine);
 
+        Real host_theta_rhs_avg = 0.0;
+#ifdef ERF_USE_SHOC
+        if (solverChoice.use_shoc && shoc_interface[level]->debug_summary_enabled()) {
+            const int klo = fine_geom.Domain().smallEnd(2);
+            auto const& rhs_arrs = S_rhs[IntVars::cons].const_arrays();
+            auto const& cons_arrs = S_data[IntVars::cons].const_arrays();
+            auto const& znd_arrs = zpn_to_use->const_arrays();
+            auto const& hfx_arrs = Hfx3->const_arrays();
+
+            GpuTuple<Real,Real,Real,Real,Long> sums =
+                ParReduce(TypeList<ReduceOpSum,ReduceOpSum,ReduceOpSum,ReduceOpSum,ReduceOpSum>{},
+                          TypeList<Real,Real,Real,Real,Long>{},
+                          S_rhs[IntVars::cons], IntVect(0),
+                [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
+                    -> GpuTuple<Real,Real,Real,Real,Long>
+                {
+                    if (k == klo) {
+                        const Real rho = cons_arrs[box_no](i,j,k,Rho_comp);
+                        const Real dz = znd_arrs[box_no](i,j,k+1) - znd_arrs[box_no](i,j,k);
+                        const Real theta_rhs = rhs_arrs[box_no](i,j,k,RhoTheta_comp) /
+                                               amrex::max(rho, 1.0e-12_rt);
+                        const Real hfx = hfx_arrs[box_no](i,j,klo);
+                        return {theta_rhs, rho, dz, hfx, 1L};
+                    } else {
+                        return {0.0_rt, 0.0_rt, 0.0_rt, 0.0_rt, 0L};
+                    }
+                });
+
+            const Real theta_rhs_sum = amrex::get<0>(sums);
+            const Real rho_sum = amrex::get<1>(sums);
+            const Real dz_sum = amrex::get<2>(sums);
+            const Real hfx_sum = amrex::get<3>(sums);
+            const Long npts = amrex::get<4>(sums);
+
+            if (npts > 0) {
+                const Real inv_n = 1.0_rt / static_cast<Real>(npts);
+                host_theta_rhs_avg = theta_rhs_sum * inv_n;
+                const Real rho_avg = rho_sum * inv_n;
+                const Real dz_avg = dz_sum * inv_n;
+                const Real hfx_avg = hfx_sum * inv_n;
+                const Real expected_heat_rate = hfx_avg /
+                    amrex::max(rho_avg * dz_avg, 1.0e-12_rt);
+
+                amrex::Print() << "SHOC bottom heat budget (host-only pre-fast):"
+                               << " level=" << level
+                               << " time=" << old_stage_time
+                               << " slow_dt=" << slow_dt
+                               << " rho_avg=" << rho_avg
+                               << " dz_avg=" << dz_avg
+                               << " hfx3_avg=" << hfx_avg
+                               << " rhs_theta_avg=" << host_theta_rhs_avg
+                               << " flux_theta_est=" << expected_heat_rate
+                               << "\n";
+            }
+        }
+#endif
+
         if ((solverChoice.vert_implicit_fac[nrk] > zero) && solverChoice.implicit_before_substep) {
             MultiFab scratch(S_data[IntVars::cons].boxArray(),S_data[IntVars::cons].DistributionMap(), 2,
                              S_data[IntVars::cons].nGrowVect());
@@ -225,7 +283,46 @@
 
 #ifdef ERF_USE_SHOC
         if (solverChoice.use_shoc) {
-            shoc_interface[level]->add_fast_tend(S_rhs);
+            if (shoc_interface[level]->uses_shoc_tendencies()) {
+                shoc_interface[level]->add_fast_tend(S_rhs);
+                if (shoc_interface[level]->debug_summary_enabled()) {
+                    const int klo = fine_geom.Domain().smallEnd(2);
+                    auto const& rhs_arrs = S_rhs[IntVars::cons].const_arrays();
+                    auto const& cons_arrs = S_data[IntVars::cons].const_arrays();
+
+                    GpuTuple<Real,Long> sums =
+                        ParReduce(TypeList<ReduceOpSum,ReduceOpSum>{},
+                                  TypeList<Real,Long>{},
+                                  S_rhs[IntVars::cons], IntVect(0),
+                        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
+                            -> GpuTuple<Real,Long>
+                        {
+                            if (k == klo) {
+                                const Real rho = cons_arrs[box_no](i,j,k,Rho_comp);
+                                const Real theta_rhs = rhs_arrs[box_no](i,j,k,RhoTheta_comp) /
+                                                       amrex::max(rho, 1.0e-12_rt);
+                                return {theta_rhs, 1L};
+                            } else {
+                                return {0.0_rt, 0L};
+                            }
+                        });
+
+                    const Real theta_rhs_sum = amrex::get<0>(sums);
+                    const Long npts = amrex::get<1>(sums);
+                    if (npts > 0) {
+                        const Real total_theta_rhs_avg =
+                            theta_rhs_sum / static_cast<Real>(npts);
+                        amrex::Print() << "SHOC bottom heat budget (with-fast):"
+                                       << " level=" << level
+                                       << " time=" << old_stage_time
+                                       << " slow_dt=" << slow_dt
+                                       << " rhs_theta_avg=" << total_theta_rhs_avg
+                                       << " shoc_fast_avg="
+                                       << (total_theta_rhs_avg - host_theta_rhs_avg)
+                                       << "\n";
+                    }
+                }
+            }
         }
 #endif
 

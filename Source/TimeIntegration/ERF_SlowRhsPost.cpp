@@ -133,8 +133,9 @@ void erf_slow_rhs_post (int level, int finest_level,
                                     tc.pbl_type  == PBLType::MYJ         ||
                                     tc.pbl_type  == PBLType::MYNN25      ||
                                     tc.pbl_type  == PBLType::MYNNEDMF    ||
-                                    tc.pbl_type  == PBLType::YSU ||
-                                    tc.pbl_type  == PBLType::MRF );
+                                    tc.pbl_type  == PBLType::YSU         ||
+                                    tc.pbl_type  == PBLType::MRF         ||
+                                    tc.pbl_type  == PBLType::SHOC );
     const bool l_rotate         = (solverChoice.use_rotate_surface_flux);
     const bool do_upwind        = solverChoice.upwind_real_bcs;
     const bool l_do_scalar      = (solverChoice.transport_scalar);
@@ -495,7 +496,9 @@ void erf_slow_rhs_post (int level, int finest_level,
 
 #ifdef ERF_USE_SHOC
         if (solverChoice.use_shoc) {
-            shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
+            if (shoc_lev->uses_shoc_tendencies()) {
+                shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
+            }
         }
 #endif
 

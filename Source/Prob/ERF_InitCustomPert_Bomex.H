@@ -66,7 +66,7 @@
         if (custom_TKE) {
             state_pert(i, j, k, RhoKE_comp) = (one - z/prob_hi[2]) * r_hse(i,j,k);
         } else {
-            state_pert(i, j, k, RhoKE_comp) = KE_0;
+            state_pert(i, j, k, RhoKE_comp) = r_hse(i,j,k) * KE_0;
         }
 
         if (use_moisture) {

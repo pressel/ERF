@@ -194,7 +194,8 @@ void erf_slow_rhs_pre (int level, int finest_level,
     if (l_use_diff) {
 #ifdef ERF_USE_SHOC
         if (solverChoice.use_shoc) {
-            // Populate vertical component of eddyDiffs
+            // SHOC either supplies host-applied vertical SGS coefficients or
+            // clears them so the host does not re-apply SHOC transport.
             shoc_lev->set_eddy_diffs();
         }
 #endif
@@ -212,8 +213,20 @@ void erf_slow_rhs_pre (int level, int finest_level,
 
 #ifdef ERF_USE_SHOC
         if (solverChoice.use_shoc) {
-            // Zero out the surface stresses of tau13/tau23
-            shoc_lev->set_diff_stresses();
+            if (shoc_lev->uses_shoc_tendencies()) {
+                // SHOC has already consumed the lower-boundary fluxes inside
+                // its own tendency solve, so prevent the host diffusion path
+                // from applying them a second time.
+                shoc_lev->set_diff_stresses();
+            } else if (l_use_SurfLayer) {
+                // In host-diffusion mode, leave the surface-layer fluxes and
+                // stresses on the generic ERF diffusion path.
+                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
+                SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
+                                                   Hfx1, Hfx2, Hfx3,
+                                                   Q1fx1, Q1fx2, Q1fx3,
+                                                   &z_phys_nd);
+            }
         } else if (l_use_SurfLayer) {
             // Set surface shear stresses, update heat and moisture fluxes
             // (fluxes will be later applied in the diffusion source update)

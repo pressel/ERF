@@ -300,7 +300,59 @@
         apply_bcs(S_sum, time_for_fp, S_sum[IntVars::cons].nGrow(), S_sum[IntVars::xmom].nGrow(),
                   fast_only=true, vel_and_mom_synced=false);
 
+#ifdef ERF_USE_SHOC
+        if (solverChoice.use_shoc && shoc_interface[level]->debug_summary_enabled()) {
+            auto print_minmax = [] (const char* name, const MultiFab& mf, int comp) {
+                amrex::Print() << "    " << name
+                               << " min=" << mf.min(comp)
+                               << " max=" << mf.max(comp) << "\n";
+            };
+
+            amrex::Print() << "SHOC dycore handoff:"
+                           << " level=" << level
+                           << " time_for_fp=" << time_for_fp
+                           << " slow_dt=" << slow_dt
+                           << " anelastic=" << solverChoice.anelastic[level]
+                           << "\n";
+            print_minmax("Fslow_rho",      F_slow[IntVars::cons], Rho_comp);
+            print_minmax("Fslow_rhotheta", F_slow[IntVars::cons], RhoTheta_comp);
+            print_minmax("Fslow_xmom",     F_slow[IntVars::xmom], 0);
+            print_minmax("Fslow_ymom",     F_slow[IntVars::ymom], 0);
+            print_minmax("Fslow_zmom",     F_slow[IntVars::zmom], 0);
+            print_minmax("Ssum_rho",       S_sum[IntVars::cons], Rho_comp);
+            print_minmax("Ssum_rhotheta",  S_sum[IntVars::cons], RhoTheta_comp);
+            print_minmax("Ssum_xmom",      S_sum[IntVars::xmom], 0);
+            print_minmax("Ssum_ymom",      S_sum[IntVars::ymom], 0);
+            print_minmax("Ssum_zmom",      S_sum[IntVars::zmom], 0);
+        }
+#endif
+
         if (solverChoice.anelastic[level]) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[level]->debug_summary_enabled()) {
+                auto print_minmax = [] (const char* name, const MultiFab& mf, int comp) {
+                    amrex::Print() << "    " << name
+                                   << " min=" << mf.min(comp)
+                                   << " max=" << mf.max(comp) << "\n";
+                };
+
+                amrex::Print() << "SHOC projection handoff:"
+                               << " level=" << level
+                               << " time_for_fp=" << time_for_fp
+                               << " slow_dt=" << slow_dt
+                               << "\n";
+                print_minmax("Fslow_rho",      F_slow[IntVars::cons], Rho_comp);
+                print_minmax("Fslow_rhotheta", F_slow[IntVars::cons], RhoTheta_comp);
+                print_minmax("Fslow_xmom",     F_slow[IntVars::xmom], 0);
+                print_minmax("Fslow_ymom",     F_slow[IntVars::ymom], 0);
+                print_minmax("Fslow_zmom",     F_slow[IntVars::zmom], 0);
+                print_minmax("Ssum_rho",       S_sum[IntVars::cons], Rho_comp);
+                print_minmax("Ssum_rhotheta",  S_sum[IntVars::cons], RhoTheta_comp);
+                print_minmax("Ssum_xmom",      S_sum[IntVars::xmom], 0);
+                print_minmax("Ssum_ymom",      S_sum[IntVars::ymom], 0);
+                print_minmax("Ssum_zmom",      S_sum[IntVars::zmom], 0);
+            }
+#endif
             bool have_tb = (thin_xforce[0] || thin_yforce[0] || thin_zforce[0]);
             if (have_tb) {
                 project_velocity_tb(level, slow_dt, S_sum);

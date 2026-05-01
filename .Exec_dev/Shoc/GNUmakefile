@@ -10,7 +10,7 @@ MEM_PROFILE   = FALSE
 USE_GPROF     = FALSE
 
 # Performance
-USE_MPI   = TRUE
+USE_MPI   = FALSE
 USE_OMP   = FALSE
 USE_CUDA  = FALSE
 USE_HIP   = FALSE
@@ -28,6 +28,6 @@ USE_SHOC = TRUE
 Bpack := ./Make.package
 Blocs := .
 
-ERF_HOME := ../../..
+ERF_HOME := ../..
 ERF_PROBLEM_DIR = $(ERF_HOME)/.Exec_dev/Shoc
 include $(ERF_HOME)/Exec/Make.ERF

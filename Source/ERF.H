@@ -66,7 +66,7 @@
 #include <ERF_RadiationModels.H>
 
 #ifdef ERF_USE_SHOC
-#include "ERF_ShocInterface.H"
+#include "ERF_ShocDriver.H"
 #endif
 
 #ifdef ERF_USE_P3
@@ -284,7 +284,15 @@ public:
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_kw,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_p,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_pu, amrex::Gpu::HostVector<amrex::Real>& h_avg_pv,
-                               amrex::Gpu::HostVector<amrex::Real>& h_avg_pw, amrex::Gpu::HostVector<amrex::Real>& h_avg_wthv);
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_pw, amrex::Gpu::HostVector<amrex::Real>& h_avg_wthv,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_cldfrac,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_ql,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_cond,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_brunt,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_isotropy,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_shear_prod,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_buoy_prod,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_diss_tke);
     void derive_diag_profiles_stag (amrex::Real time,
                                     amrex::Gpu::HostVector<amrex::Real>& h_avg_u   , amrex::Gpu::HostVector<amrex::Real>& h_avg_v,
                                     amrex::Gpu::HostVector<amrex::Real>& h_avg_w   , amrex::Gpu::HostVector<amrex::Real>& h_avg_rho,
@@ -896,7 +904,7 @@ private:
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> qheating_rates;  // radiation heating rate source terms (SW, LW) (DYCORE)
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> rad_fluxes;      // radiation fluxes (SW up/dn, LW up/dn) (OUTPUT ONLY)
 #ifdef ERF_USE_SHOC
-    amrex::Vector<std::unique_ptr<SHOCInterface>> shoc_interface; // SHOC model at each level
+    amrex::Vector<std::unique_ptr<SHOCInterface>> shoc_interface; // Native SHOC model at each level
 #endif
 
 #ifdef ERF_USE_P3
@@ -1152,6 +1160,9 @@ private:
                                                     "Khv","Khh",
                                                     // turbulence lengthscale
                                                     "Lturb",
+                                                    // native SHOC diagnostics
+                                                    "shoc_cldfrac", "shoc_ql", "shoc_cond", "brunt", "isotropy",
+                                                    "shear_prod", "buoy_prod", "diss_tke",
                                                     // wall distance
                                                     "walldist",
                                                     // dissipation

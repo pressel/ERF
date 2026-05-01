@@ -24,6 +24,8 @@ ERF::write_1D_profiles (Real time)
         Gpu::HostVector<Real> h_avg_u, h_avg_v, h_avg_w;
         Gpu::HostVector<Real> h_avg_rho, h_avg_th, h_avg_ksgs, h_avg_Kmv, h_avg_Khv;
         Gpu::HostVector<Real> h_avg_qv, h_avg_qc, h_avg_qr, h_avg_wqv, h_avg_wqc, h_avg_wqr, h_avg_qi, h_avg_qs, h_avg_qg;
+        Gpu::HostVector<Real> h_avg_shoc_cldfrac, h_avg_shoc_ql, h_avg_shoc_cond, h_avg_brunt, h_avg_isotropy;
+        Gpu::HostVector<Real> h_avg_shear_prod, h_avg_buoy_prod, h_avg_diss_tke;
         Gpu::HostVector<Real> h_avg_wthv;
         Gpu::HostVector<Real> h_avg_uth, h_avg_vth, h_avg_wth, h_avg_thth;
         Gpu::HostVector<Real> h_avg_uu, h_avg_uv, h_avg_uw, h_avg_vv, h_avg_vw, h_avg_ww;
@@ -44,7 +46,10 @@ ERF::write_1D_profiles (Real time)
                                  h_avg_uth, h_avg_vth, h_avg_wth, h_avg_thth,
                                  h_avg_uiuiu, h_avg_uiuiv, h_avg_uiuiw,
                                  h_avg_p, h_avg_pu, h_avg_pv, h_avg_pw,
-                                 h_avg_wthv);
+                                 h_avg_wthv,
+                                 h_avg_shoc_cldfrac, h_avg_shoc_ql, h_avg_shoc_cond,
+                                 h_avg_brunt, h_avg_isotropy,
+                                 h_avg_shear_prod, h_avg_buoy_prod, h_avg_diss_tke);
         }
 
         if (NumDataLogs() > 3 && time > zero) {
@@ -76,6 +81,14 @@ ERF::write_1D_profiles (Real time)
                                 << h_avg_Kmv[k] << " " << h_avg_Khv[k] << " "
                                 << h_avg_qv[k]  << " " << h_avg_qc[k]  << " " << h_avg_qr[k]    << " "
                                 << h_avg_qi[k]  << " " << h_avg_qs[k]  << " " << h_avg_qg[k]
+                                << " " << h_avg_shoc_cldfrac[k]
+                                << " " << h_avg_shoc_ql[k]
+                                << " " << h_avg_shoc_cond[k]
+                                << " " << h_avg_brunt[k]
+                                << " " << h_avg_isotropy[k]
+                                << " " << h_avg_shear_prod[k]
+                                << " " << h_avg_buoy_prod[k]
+                                << " " << h_avg_diss_tke[k]
                                 << std::endl;
                   } // loop over z
                 } // if good
@@ -201,7 +214,15 @@ ERF::derive_diag_profiles(Real /*time*/,
                           Gpu::HostVector<Real>& h_avg_uiuiu, Gpu::HostVector<Real>& h_avg_uiuiv, Gpu::HostVector<Real>& h_avg_uiuiw,
                           Gpu::HostVector<Real>& h_avg_p,
                           Gpu::HostVector<Real>& h_avg_pu  , Gpu::HostVector<Real>& h_avg_pv , Gpu::HostVector<Real>& h_avg_pw,
-                          Gpu::HostVector<Real>& h_avg_wthv)
+                          Gpu::HostVector<Real>& h_avg_wthv,
+                          Gpu::HostVector<Real>& h_avg_shoc_cldfrac,
+                          Gpu::HostVector<Real>& h_avg_shoc_ql,
+                          Gpu::HostVector<Real>& h_avg_shoc_cond,
+                          Gpu::HostVector<Real>& h_avg_brunt,
+                          Gpu::HostVector<Real>& h_avg_isotropy,
+                          Gpu::HostVector<Real>& h_avg_shear_prod,
+                          Gpu::HostVector<Real>& h_avg_buoy_prod,
+                          Gpu::HostVector<Real>& h_avg_diss_tke)
 {
     // We assume that this is always called at level 0
     int lev = 0;
@@ -261,6 +282,35 @@ ERF::derive_diag_profiles(Real /*time*/,
     MultiFab p_hse (base_state[lev], make_alias, BaseState::p0_comp, 1);
 
     bool use_moisture = (solverChoice.moisture_type != MoistureType::None);
+    const MultiFab* eta_src = nullptr;
+    const MultiFab* shoc_cldfrac_src = nullptr;
+    const MultiFab* shoc_ql_src = nullptr;
+    const MultiFab* shoc_cond_src = nullptr;
+    const MultiFab* shoc_brunt_src = nullptr;
+    const MultiFab* shoc_isotropy_src = nullptr;
+    const MultiFab* shoc_shear_prod_src = nullptr;
+    const MultiFab* shoc_buoy_prod_src = nullptr;
+    const MultiFab* shoc_diss_tke_src = nullptr;
+    if (l_use_kturb) {
+#ifdef ERF_USE_SHOC
+        if (solverChoice.use_shoc && shoc_interface[lev] &&
+            shoc_interface[lev]->uses_shoc_tendencies() &&
+            shoc_interface[lev]->has_native_diagnostics()) {
+            eta_src = &shoc_interface[lev]->native_diagnostics();
+            shoc_cldfrac_src = &shoc_interface[lev]->shoc_cldfrac_diagnostics();
+            shoc_ql_src = &shoc_interface[lev]->shoc_ql_diagnostics();
+            shoc_cond_src = &shoc_interface[lev]->shoc_cond_diagnostics();
+            shoc_brunt_src = &shoc_interface[lev]->brunt_diagnostics();
+            shoc_isotropy_src = &shoc_interface[lev]->isotropy_diagnostics();
+            shoc_shear_prod_src = &shoc_interface[lev]->shear_prod_diagnostics();
+            shoc_buoy_prod_src = &shoc_interface[lev]->buoy_prod_diagnostics();
+            shoc_diss_tke_src = &shoc_interface[lev]->diss_tke_diagnostics();
+        } else
+#endif
+        {
+            eta_src = eddyDiffs_lev[lev].get();
+        }
+    }
 
     for ( MFIter mfi(mf_cons,TilingIfNotGPU()); mfi.isValid(); ++mfi)
     {
@@ -271,7 +321,7 @@ ERF::derive_diag_profiles(Real /*time*/,
         const Array4<Real>& w_cc_arr =  w_cc.array(mfi);
         const Array4<Real>& cons_arr = mf_cons.array(mfi);
         const Array4<Real>&   p0_arr = p_hse.array(mfi);
-        const Array4<const Real>& eta_arr = (l_use_kturb) ? eddyDiffs_lev[lev]->const_array(mfi) :
+        const Array4<const Real>& eta_arr = (eta_src) ? eta_src->const_array(mfi) :
                                                             Array4<const Real>{};
 
         ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
@@ -423,8 +473,29 @@ ERF::derive_diag_profiles(Real /*time*/,
     h_avg_qg    = sumToLine(mf_out,30,1,domain,zdir);
     h_avg_wthv  = sumToLine(mf_out,31,1,domain,zdir);
 
-    // Divide by the total number of cells we are averaging over
     int h_avg_u_size = static_cast<int>(h_avg_u.size());
+
+    if (shoc_cldfrac_src) {
+        h_avg_shoc_cldfrac = sumToLine(*shoc_cldfrac_src, 0, 1, domain, zdir);
+        h_avg_shoc_ql      = sumToLine(*shoc_ql_src,      0, 1, domain, zdir);
+        h_avg_shoc_cond    = sumToLine(*shoc_cond_src,    0, 1, domain, zdir);
+        h_avg_brunt        = sumToLine(*shoc_brunt_src,   0, 1, domain, zdir);
+        h_avg_isotropy     = sumToLine(*shoc_isotropy_src,0, 1, domain, zdir);
+        h_avg_shear_prod   = sumToLine(*shoc_shear_prod_src,0,1,domain,zdir);
+        h_avg_buoy_prod    = sumToLine(*shoc_buoy_prod_src,0,1,domain,zdir);
+        h_avg_diss_tke     = sumToLine(*shoc_diss_tke_src,0,1,domain,zdir);
+    } else {
+        h_avg_shoc_cldfrac.resize(h_avg_u_size, 0.0);
+        h_avg_shoc_ql.resize(h_avg_u_size, 0.0);
+        h_avg_shoc_cond.resize(h_avg_u_size, 0.0);
+        h_avg_brunt.resize(h_avg_u_size, 0.0);
+        h_avg_isotropy.resize(h_avg_u_size, 0.0);
+        h_avg_shear_prod.resize(h_avg_u_size, 0.0);
+        h_avg_buoy_prod.resize(h_avg_u_size, 0.0);
+        h_avg_diss_tke.resize(h_avg_u_size, 0.0);
+    }
+
+    // Divide by the total number of cells we are averaging over
     for (int k = 0; k < h_avg_u_size; ++k) {
         h_avg_rho[k] /= area_z;
         h_avg_ksgs[k]  /= area_z;
@@ -458,6 +529,14 @@ ERF::derive_diag_profiles(Real /*time*/,
         h_avg_qs[k]    /= area_z;
         h_avg_qg[k]    /= area_z;
         h_avg_wthv[k]  /= area_z;
+        h_avg_shoc_cldfrac[k] /= area_z;
+        h_avg_shoc_ql[k]      /= area_z;
+        h_avg_shoc_cond[k]    /= area_z;
+        h_avg_brunt[k]        /= area_z;
+        h_avg_isotropy[k]     /= area_z;
+        h_avg_shear_prod[k]   /= area_z;
+        h_avg_buoy_prod[k]    /= area_z;
+        h_avg_diss_tke[k]     /= area_z;
     }
 
 #if 0

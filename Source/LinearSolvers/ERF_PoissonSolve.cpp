@@ -102,6 +102,11 @@ void ERF::project_initial_velocity (int lev, Real time, Real l_dt)
 void ERF::project_momenta (int lev, Real l_time, Real l_dt, Vector<MultiFab>& mom_mf)
 {
     BL_PROFILE("ERF::project_momenta()");
+    bool shoc_debug_summary = false;
+    if (solverChoice.use_shoc) {
+        ParmParse pp("erf.shoc");
+        pp.query("debug_summary", shoc_debug_summary);
+    }
     //
     // If at lev > 0 we must first fill the momenta at the c/f interface with interpolated coarse values
     //
@@ -179,6 +184,24 @@ void ERF::project_momenta (int lev, Real l_time, Real l_dt, Vector<MultiFab>& mo
                              mom_mf[IntVars::zmom],
                              Geom(lev).Domain(),
                              domain_bcs_type);
+    }
+
+    if (shoc_debug_summary) {
+        auto print_minmax = [] (const char* name, const MultiFab& mf, int comp) {
+            amrex::Print() << "    " << name
+                           << " min=" << mf.min(comp)
+                           << " max=" << mf.max(comp) << "\n";
+        };
+        amrex::Print() << "SHOC projection input:"
+                       << " level=" << lev
+                       << " time=" << l_time
+                       << " dt=" << l_dt
+                       << "\n";
+        print_minmax("proj_rho",      mom_mf[Vars::cons], Rho_comp);
+        print_minmax("proj_rhotheta", mom_mf[Vars::cons], RhoTheta_comp);
+        print_minmax("proj_xmom",     mom_mf[IntVars::xmom], 0);
+        print_minmax("proj_ymom",     mom_mf[IntVars::ymom], 0);
+        print_minmax("proj_zmom",     mom_mf[IntVars::zmom], 0);
     }
 
     //
@@ -552,6 +575,17 @@ void ERF::project_momenta (int lev, Real l_time, Real l_dt, Vector<MultiFab>& mo
         } // if is_singular
 
         rhsnorm = rhs_sub[0].norm0();
+
+        if (shoc_debug_summary) {
+            amrex::Print() << "SHOC projection rhs:"
+                           << " level=" << lev
+                           << " subdomain=" << isub
+                           << " min=" << rhs_sub[0].min(0)
+                           << " max=" << rhs_sub[0].max(0)
+                           << " norm0=" << rhsnorm
+                           << " norm2=" << rhs_sub[0].norm2()
+                           << "\n";
+        }
 
         // ****************************************************************************
         // No need to build the solver if RHS == 0

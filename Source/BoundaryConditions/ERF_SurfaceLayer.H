@@ -115,7 +115,9 @@ public:
       if (use_moisture) { erf_sq = pp.query("most.surf_moist", surf_moist); }
       if (erf_sq) { default_land_surf_moist = surf_moist; }
 
-      // Custom type user must specify the fluxes
+      // Custom type user must specify the surface inputs directly. In this
+      // branch, custom_tstar/custom_qstar are carried as the imposed heat and
+      // moisture flux inputs rather than classical MOST scaling variables.
       if (flux_type == FluxCalcType::CUSTOM ||
           flux_type == FluxCalcType::RICO) {
           theta_type = ThetaCalcType::HEAT_FLUX;
@@ -128,7 +130,8 @@ public:
               AMREX_ASSERT_WITH_MESSAGE(use_moisture,
               "Specified custom MOST qv flux without moisture model!");
           }
-          amrex::Print() << "Using specified ustar, tstar, qstar for MOST = "
+          amrex::Print() << "Using specified custom surface inputs"
+                         << " (ustar, heat_flux, moisture_flux) = "
                          << custom_ustar << " " << custom_tstar << " "
                          << custom_qstar << std::endl;
 
