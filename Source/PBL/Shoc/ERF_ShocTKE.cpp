@@ -50,6 +50,25 @@ namespace
         return std::max(zt(ic,k,0) - zt(ic,k-1,0), 1.0e-12);
     }
 
+    AMREX_FORCE_INLINE
+    Real top_taper_factor (const ShocColumnData& col,
+                           const ShocRuntimeOptions& opts,
+                           int ic,
+                           int k)
+    {
+        if (opts.top_taper_depth <= 0.0) {
+            return 1.0;
+        }
+
+        const auto zt = col.zt.const_array();
+        const auto zi = col.zi.const_array();
+        const Real ztop = zi(ic,col.layout.nlev,0);
+        const Real distance_from_top = std::max(0.0, ztop - zt(ic,k,0));
+        const Real x = std::clamp(distance_from_top / opts.top_taper_depth, 0.0, 1.0);
+        const Real smooth = x * x * (3.0 - 2.0 * x);
+        return opts.top_taper_min_factor + (1.0 - opts.top_taper_min_factor) * smooth;
+    }
+
     void interpolate_iface_to_cc (const ShocColumnData& col,
                                   const FArrayBox& iface_in,
                                   FArrayBox& cc_out,
@@ -161,13 +180,17 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
             const Real net_prod = opts.signed_tke_production
                 ? (shear_prod + buoy_prod)
                 : std::max(0.0, shear_prod + buoy_prod);
-            const Real new_tke = std::clamp(old_tke + dt * (net_prod - diss),
+            const Real raw_new_tke = std::clamp(old_tke + dt * (net_prod - diss),
+                                                k_shoc_min_tke, k_shoc_max_tke);
+            const Real top_factor = top_taper_factor(col, opts, ic, k);
+            const Real new_tke = std::clamp(k_shoc_min_tke +
+                                            top_factor * (raw_new_tke - k_shoc_min_tke),
                                             k_shoc_min_tke, k_shoc_max_tke);
 
-            a_diss_arr(ic,k,0) = diss;
-            shear_prod_arr(ic,k,0) = shear_prod;
-            buoy_prod_arr(ic,k,0) = buoy_prod;
-            diss_arr(ic,k,0) = diss;
+            a_diss_arr(ic,k,0) = top_factor * diss;
+            shear_prod_arr(ic,k,0) = top_factor * shear_prod;
+            buoy_prod_arr(ic,k,0) = top_factor * buoy_prod;
+            diss_arr(ic,k,0) = top_factor * diss;
             tke_tend(ic,k,0) = new_tke - old_tke;
             tke(ic,k,0) = new_tke;
         }
@@ -193,8 +216,10 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
                 tk(ic,k,0) = opts.coeff_km * isotropy(ic,k,0) * tke(ic,k,0);
             }
 
-            tkh(ic,k,0) = std::max(0.0, tkh(ic,k,0));
-            tk(ic,k,0) = std::max(0.0, tk(ic,k,0));
+            const Real top_factor = top_taper_factor(col, opts, ic, k);
+            isotropy(ic,k,0) *= top_factor;
+            tkh(ic,k,0) = top_factor * std::max(0.0, tkh(ic,k,0));
+            tk(ic,k,0) = top_factor * std::max(0.0, tk(ic,k,0));
         }
     }
 }

@@ -332,6 +332,51 @@ TEST(ShocImplicit, PdfDiagnosedLiquidFeedsHostWriteback)
     }
 }
 
+TEST(ShocImplicit, FinalWritebackDoesNotCreateLiquidBeyondPdfDiagnosis)
+{
+    auto col = shoc_test::make_column(3);
+    ShocRuntimeOptions opts;
+
+    auto thetal = col.thetal.array();
+    auto theta = col.theta.array();
+    auto qv = col.qv.array();
+    auto qc = col.qc.array();
+    auto qi = col.qi.array();
+    auto qw = col.qw.array();
+    auto tk = col.tk.array();
+    auto tkh = col.tkh.array();
+    auto exner = col.exner.array();
+    auto shoc_ql = col.shoc_ql.array();
+
+    for (int k = 0; k < col.layout.nlev; ++k) {
+        thetal(0,k,0) = 286.0;
+        theta(0,k,0) = 286.0;
+        qv(0,k,0) = 0.020;
+        qc(0,k,0) = 0.0;
+        qi(0,k,0) = 0.0;
+        qw(0,k,0) = 0.020;
+        tk(0,k,0) = 0.0;
+        tkh(0,k,0) = 0.0;
+        exner(0,k,0) = 1.0;
+        shoc_ql(0,k,0) = 0.0;
+        col.tke_tend.array()(0,k,0) = 0.0;
+    }
+
+    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
+    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
+    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
+    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+
+    ShocImplicit::update_prognostics(col, opts, 1.0);
+
+    for (int k = 0; k < col.layout.nlev; ++k) {
+        EXPECT_NEAR(col.shoc_ql.const_array()(0,k,0), 0.0, 1.0e-12);
+        EXPECT_NEAR(col.qc.const_array()(0,k,0), 0.0, 1.0e-12);
+        EXPECT_NEAR(col.qi.const_array()(0,k,0), 0.0, 1.0e-12);
+        EXPECT_NEAR(col.qv.const_array()(0,k,0), col.qw.const_array()(0,k,0), 1.0e-12);
+    }
+}
+
 TEST(ShocImplicit, SurfaceFluxesDriveBottomCellAndKeepMoistureBounded)
 {
     auto col = shoc_test::make_column(6);
@@ -403,6 +448,7 @@ TEST(ShocImplicit, CloudLiquidRaisesThetaAboveThetal)
     auto qv = col.qv.array();
     auto qc = col.qc.array();
     auto qw = col.qw.array();
+    auto shoc_ql = col.shoc_ql.array();
     auto tk = col.tk.array();
     auto tkh = col.tkh.array();
     auto exner = col.exner.array();
@@ -413,6 +459,7 @@ TEST(ShocImplicit, CloudLiquidRaisesThetaAboveThetal)
         qv(0,k,0) = (k == 0) ? 0.03 : 0.011;
         qc(0,k,0) = (k == 0) ? 2.0e-3 : 0.0;
         qw(0,k,0) = qv(0,k,0) + qc(0,k,0);
+        shoc_ql(0,k,0) = qc(0,k,0);
         tk(0,k,0) = 0.1;
         tkh(0,k,0) = 0.1;
         exner(0,k,0) = 1.0;

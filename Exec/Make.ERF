@@ -312,15 +312,12 @@ ifeq ($(USE_RRTMGP), TRUE)
   endif
 endif
 
-# If using SHOC, compile relevant source and headers
-ifeq ($(USE_SHOC), TRUE)
+# Native SHOC is always built in-tree.
+DEFINES += -DERF_USE_SHOC
 
-    DEFINES += -DERF_USE_SHOC
-
-    ERF_NATIVE_SHOC_DIR = $(ERF_SOURCE_DIR)/PBL/Shoc
-    VPATH_LOCATIONS   += $(ERF_NATIVE_SHOC_DIR)
-    INCLUDE_LOCATIONS += $(ERF_NATIVE_SHOC_DIR)
-endif
+ERF_NATIVE_SHOC_DIR = $(ERF_SOURCE_DIR)/PBL/Shoc
+VPATH_LOCATIONS   += $(ERF_NATIVE_SHOC_DIR)
+INCLUDE_LOCATIONS += $(ERF_NATIVE_SHOC_DIR)
 
 # If using P3, compile relevant source and headers
 ifeq ($(USE_P3), TRUE)

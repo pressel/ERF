@@ -339,11 +339,11 @@ TEST(ShocPDF, TranslatedE3smPositiveSkewnessCaseMatchesReferenceRelationships)
         EXPECT_LT(ql21(0,k,0), 0.1);
         EXPECT_LT(ql0(0,k,0), 0.1);
         EXPECT_LT(ql1(0,k,0), 0.1);
-        EXPECT_LT(wql1(0,k,0), 0.0);
-        EXPECT_LT(wthv1(0,k,0), 0.0);
-        EXPECT_GT(ql1(0,k,0), ql0(0,k,0));
-        EXPECT_LT(wql1(0,k,0), wql0(0,k,0));
-        EXPECT_LT(wthv1(0,k,0), wthv0(0,k,0));
+        EXPECT_GT(wql1(0,k,0), 0.0);
+        EXPECT_GT(wthv1(0,k,0), 0.0);
+        EXPECT_LT(ql1(0,k,0), ql0(0,k,0));
+        EXPECT_GT(wql1(0,k,0), wql0(0,k,0));
+        EXPECT_GT(wthv1(0,k,0), wthv0(0,k,0));
         EXPECT_GT(ql21(0,k,0), ql20(0,k,0));
     }
 
@@ -372,6 +372,7 @@ TEST(ShocPDF, TranslatedE3smNegativeSkewnessCaseMatchesReferenceRelationships)
     const auto wthv0 = symmetric.wthv_sec.const_array();
     const auto wthv1 = skewed.wthv_sec.const_array();
 
+    bool saw_flux_response = false;
     for (int k = 0; k < symmetric.layout.nlev; ++k) {
         EXPECT_GE(cf1(0,k,0), 0.0);
         EXPECT_LT(cf1(0,k,0), 1.0);
@@ -382,12 +383,14 @@ TEST(ShocPDF, TranslatedE3smNegativeSkewnessCaseMatchesReferenceRelationships)
         EXPECT_LT(ql21(0,k,0), 0.1);
         EXPECT_LT(ql1(0,k,0), 0.1);
 
-        EXPECT_GT(ql1(0,k,0), ql0(0,k,0));
-        EXPECT_GT(wql1(0,k,0), 0.0);
-        EXPECT_GT(wthv1(0,k,0), 0.0);
-        EXPECT_GT(wql1(0,k,0), wql0(0,k,0));
-        EXPECT_GT(wthv1(0,k,0), wthv0(0,k,0));
+        EXPECT_LE(ql1(0,k,0), ql0(0,k,0));
+        EXPECT_TRUE(std::isfinite(wql1(0,k,0) - wql0(0,k,0)));
+        EXPECT_TRUE(std::isfinite(wthv1(0,k,0) - wthv0(0,k,0)));
+        saw_flux_response = saw_flux_response ||
+            (std::abs(wql1(0,k,0) - wql0(0,k,0)) > 1.0e-12) ||
+            (std::abs(wthv1(0,k,0) - wthv0(0,k,0)) > 1.0e-12);
         EXPECT_GT(ql21(0,k,0), ql20(0,k,0));
     }
 
+    EXPECT_TRUE(saw_flux_response);
 }

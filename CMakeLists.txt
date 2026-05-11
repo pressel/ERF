@@ -143,7 +143,7 @@ option(ERF_ENABLE_ML_UPHYS_DIAGNOSTICS "Enable ML UPHYS diagnostics in SDM" OFF)
 if(ERF_ENABLE_ML_UPHYS_DIAGNOSTICS AND NOT ERF_ENABLE_PARTICLES)
   message(FATAL_ERROR "ERF_ENABLE_ML_UPHYS_DIAGNOSTICS requires particles be enabled")
 endif()
-option(ERF_ENABLE_SHOC "Enable SHOC" OFF)
+set(ERF_ENABLE_SHOC ON)
 
 #Options for performance
 option(ERF_ENABLE_MPI "Enable MPI" OFF)
@@ -593,15 +593,13 @@ endif()
 
 ########################### SHOC #################################
 
-if(ERF_ENABLE_SHOC)
-  list(APPEND CMAKE_MESSAGE_CONTEXT "SHOC")
+list(APPEND CMAKE_MESSAGE_CONTEXT "SHOC")
 
-  message(STATUS "Configuring SHOC")
-  message(VERBOSE "Using native AMReX SHOC sources in Source/PBL/Shoc")
+message(STATUS "Configuring SHOC")
+message(VERBOSE "Using native AMReX SHOC sources in Source/PBL/Shoc")
 
-  message(STATUS "SHOC configuration complete")
-  list(POP_BACK CMAKE_MESSAGE_CONTEXT)
-endif()
+message(STATUS "SHOC configuration complete")
+list(POP_BACK CMAKE_MESSAGE_CONTEXT)
 
 ########################### ERF #####################################
 

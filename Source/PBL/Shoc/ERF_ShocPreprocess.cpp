@@ -57,6 +57,7 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
     auto qc_arr = col.qc.array();
     auto qi_arr = col.qi.array();
     auto qw_arr = col.qw.array();
+    auto shoc_ql_arr = col.shoc_ql.array();
     auto tabs_arr = col.tabs.array();
     auto tke_arr = col.tke.array();
     auto ucol_arr = col.u.array();
@@ -99,9 +100,10 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
                 const Real p = getPgivenRTh(cons_arr(i,j,k,RhoTheta_comp), qv);
                 const Real tabs = getTgivenRandRTh(rho, cons_arr(i,j,k,RhoTheta_comp), qv);
                 const Real ql_np = qc + qi;
-                // E3SM SHOC carries liquid-water potential temperature:
-                // theta_l = theta - (L_v / c_p) * q_l.
-                const Real thetal = theta - (L_v / Cp_d) * ql_np;
+                const Real exner = tabs / std::max(theta, 1.0e-12);
+                // SHOC carries liquid-water potential temperature.  E3SM's
+                // "inv_exner" is 1/exner, so theta = theta_l + Lv/Cp*q_l/exner.
+                const Real thetal = theta - (L_v / Cp_d) * ql_np / std::max(exner, 1.0e-12);
                 const Real theta_v = theta * (1.0_rt + 0.61_rt * qv - ql_np);
                 const Real qke = cons_arr(i,j,k,RhoKE_comp) / rho;
 
@@ -112,13 +114,14 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
                 p_mid_arr(ic,kk,0) = p;
                 rho_arr(ic,kk,0) = rho;
                 theta_arr(ic,kk,0) = theta;
-                exner_arr(ic,kk,0) = tabs / std::max(theta, 1.0e-12);
+                exner_arr(ic,kk,0) = exner;
                 theta_v_arr(ic,kk,0) = theta_v;
                 thetal_arr(ic,kk,0) = thetal;
                 qv_arr(ic,kk,0) = qv;
                 qc_arr(ic,kk,0) = qc;
                 qi_arr(ic,kk,0) = qi;
                 qw_arr(ic,kk,0) = qv + qc + qi;
+                shoc_ql_arr(ic,kk,0) = ql_np;
                 tabs_arr(ic,kk,0) = tabs;
                 tke_arr(ic,kk,0) = qke;
                 dse_arr(ic,kk,0) = Cp_d * tabs + CONST_GRAV * zc;

@@ -123,6 +123,7 @@ make_column (int nlev)
     auto p_int = col.p_int.array();
     auto rho = col.rho.array();
     auto theta = col.theta.array();
+    auto exner = col.exner.array();
     auto theta_v = col.theta_v.array();
     auto thetal = col.thetal.array();
     auto qv = col.qv.array();
@@ -148,6 +149,7 @@ make_column (int nlev)
         p_mid(0,k,0) = 99500.0 - 1000.0 * k;
         rho(0,k,0) = 1.15 - 0.05 * k;
         theta(0,k,0) = 300.0 + 0.5 * k;
+        exner(0,k,0) = 1.0;
         theta_v(0,k,0) = 301.0 + 0.8 * k;
         thetal(0,k,0) = 299.0 + 0.4 * k;
         qv(0,k,0) = 0.010 - 0.001 * k;

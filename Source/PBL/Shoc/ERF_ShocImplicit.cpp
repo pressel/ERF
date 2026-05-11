@@ -2,7 +2,6 @@
 
 #include "ERF_Constants.H"
 #include "ERF_ShocEnergyFixer.H"
-#include "ERF_MicrophysicsUtils.H"
 
 #include <algorithm>
 #include <cmath>
@@ -32,49 +31,9 @@ namespace
         return y0 + (y1 - y0) * (x - x0) / denom;
     }
 
-    void repartition_moisture_from_thl_qw (Real thetal,
-                                           Real qw,
-                                           Real exner,
-                                           Real p_mid,
-                                           Real qi_seed,
-                                           Real& tabs,
-                                           Real& qv,
-                                           Real& qc,
-                                           Real& qi)
-    {
-        Real ql = std::clamp(qw, 0.0_rt, qw);
-
-        for (int iter = 0; iter < 6; ++iter) {
-            tabs = ShocImplicit::compute_temperature(thetal, ql, exner);
-
-            Real qsat = 0.0;
-            if (tabs < k_shoc_freezing_temp && qi_seed > 0.0) {
-                erf_qsati(tabs, 0.01 * p_mid, qsat);
-            } else {
-                erf_qsatw(tabs, 0.01 * p_mid, qsat);
-            }
-            qsat = std::max(0.0_rt, qsat);
-
-            const Real ql_next = std::clamp(qw - qsat, 0.0_rt, qw);
-            if (std::abs(ql_next - ql) < 1.0e-12_rt) {
-                ql = ql_next;
-                break;
-            }
-            ql = ql_next;
-        }
-
-        tabs = ShocImplicit::compute_temperature(thetal, ql, exner);
-        const bool use_ice = (tabs < k_shoc_freezing_temp && qi_seed > 0.0);
-
-        qc = use_ice ? 0.0_rt : ql;
-        qi = use_ice ? ql : 0.0_rt;
-        qv = ShocImplicit::compute_vapor(qw, ql);
-    }
-
     void reconstruct_moisture_from_pdf_and_mean_state (Real thetal,
                                                        Real qw,
                                                        Real exner,
-                                                       Real p_mid,
                                                        Real qi_seed,
                                                        Real pdf_ql,
                                                        Real& tabs,
@@ -82,16 +41,7 @@ namespace
                                                        Real& qc,
                                                        Real& qi)
     {
-        Real tabs_sat = 0.0;
-        Real qv_sat = 0.0;
-        Real qc_sat = 0.0;
-        Real qi_sat = 0.0;
-        repartition_moisture_from_thl_qw(thetal, qw, exner, p_mid, qi_seed,
-                                         tabs_sat, qv_sat, qc_sat, qi_sat);
-
-        const Real mean_ql = qc_sat + qi_sat;
-        const Real ql_total = std::clamp(std::max(std::max(0.0_rt, pdf_ql), mean_ql),
-                                         0.0_rt, std::max(0.0_rt, qw));
+        const Real ql_total = std::clamp(pdf_ql, 0.0_rt, std::max(0.0_rt, qw));
         tabs = ShocImplicit::compute_temperature(thetal, ql_total, exner);
 
         const bool use_ice = (tabs < k_shoc_freezing_temp && qi_seed > 0.0);
@@ -438,7 +388,6 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
     auto tke_tend = col.tke_tend.array();
 
     const auto zt = col.zt.const_array();
-    const auto p_mid = col.p_mid.const_array();
     const auto exner = col.exner.const_array();
     const auto shoc_ql_pdf = col.shoc_ql.const_array();
     const auto thetal_base = col.thetal_base.const_array();
@@ -484,8 +433,7 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
             const Real pdf_ql = std::clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
             Real tabs_new = 0.0;
             reconstruct_moisture_from_pdf_and_mean_state(thl_new[k], qw_new_loc,
-                                                         exner(ic,k,0), p_mid(ic,k,0),
-                                                         qi_old[k], pdf_ql,
+                                                         exner(ic,k,0), qi_old[k], pdf_ql,
                                                          tabs_new, qv_new[k], qc_new[k], qi_new[k]);
         }
 
@@ -503,8 +451,7 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
             Real qc_new_loc = 0.0;
             Real qi_new_loc = 0.0;
             reconstruct_moisture_from_pdf_and_mean_state(thl_new[k], qw_new_loc,
-                                                         exner(ic,k,0), p_mid(ic,k,0),
-                                                         qi_old[k], pdf_ql,
+                                                         exner(ic,k,0), qi_old[k], pdf_ql,
                                                          tabs_new, qv_new_loc, qc_new_loc, qi_new_loc);
 
             const Real ql_total = qc_new_loc + qi_new_loc;

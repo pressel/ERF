@@ -39,7 +39,17 @@ public:
     const amrex::MultiFab& pblh_diagnostics () const { return m_pblh_cc; }
     const amrex::MultiFab& shoc_cldfrac_diagnostics () const { return m_shoc_cldfrac_cc; }
     const amrex::MultiFab& shoc_ql_diagnostics () const { return m_shoc_ql_cc; }
+    const amrex::MultiFab& shoc_ql2_diagnostics () const { return m_shoc_ql2_cc; }
     const amrex::MultiFab& shoc_cond_diagnostics () const { return m_shoc_cond_cc; }
+    const amrex::MultiFab& w_sec_diagnostics () const { return m_w_sec_cc; }
+    const amrex::MultiFab& wqls_sec_diagnostics () const { return m_wqls_sec_cc; }
+    const amrex::MultiFab& wthv_sec_diagnostics () const { return m_wthv_sec_cc; }
+    const amrex::MultiFab& thl_sec_diagnostics () const { return m_thl_sec_cc; }
+    const amrex::MultiFab& qw_sec_diagnostics () const { return m_qw_sec_cc; }
+    const amrex::MultiFab& qwthl_sec_diagnostics () const { return m_qwthl_sec_cc; }
+    const amrex::MultiFab& wthl_sec_diagnostics () const { return m_wthl_sec_cc; }
+    const amrex::MultiFab& wqw_sec_diagnostics () const { return m_wqw_sec_cc; }
+    const amrex::MultiFab& w3_diagnostics () const { return m_w3_cc; }
     const amrex::MultiFab& brunt_diagnostics () const { return m_brunt_cc; }
     const amrex::MultiFab& isotropy_diagnostics () const { return m_isotropy_cc; }
     const amrex::MultiFab& shear_prod_diagnostics () const { return m_shear_prod_cc; }
@@ -57,6 +67,8 @@ private:
     amrex::MultiFab m_qc_tend_cc;
     amrex::MultiFab m_qi_tend_cc;
     amrex::MultiFab m_tke_tend_cc;
+    amrex::MultiFab m_u_tend_cc;
+    amrex::MultiFab m_v_tend_cc;
     amrex::MultiFab m_u_tend_fc;
     amrex::MultiFab m_v_tend_fc;
     amrex::MultiFab m_eddy_coeffs_cc;
@@ -65,8 +77,11 @@ private:
     amrex::MultiFab m_pblh_cc;
     amrex::MultiFab m_shoc_cldfrac_cc;
     amrex::MultiFab m_shoc_ql_cc;
+    amrex::MultiFab m_shoc_ql2_cc;
     amrex::MultiFab m_shoc_cond_cc;
     amrex::MultiFab m_w_sec_cc;
+    amrex::MultiFab m_wqls_sec_cc;
+    amrex::MultiFab m_wthv_sec_cc;
     amrex::MultiFab m_thl_sec_cc;
     amrex::MultiFab m_qw_sec_cc;
     amrex::MultiFab m_qwthl_sec_cc;

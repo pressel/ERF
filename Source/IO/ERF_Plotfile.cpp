@@ -1088,12 +1088,142 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             }
             mf_comp ++;
         }
+        if (containerHasElement(plot_var_names, "shoc_ql2")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->shoc_ql2_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
         if (containerHasElement(plot_var_names, "shoc_cond")) {
 #ifdef ERF_USE_SHOC
             if (solverChoice.use_shoc && shoc_interface[lev] &&
                 shoc_interface[lev]->uses_shoc_tendencies() &&
                 shoc_interface[lev]->has_native_diagnostics()) {
                 MultiFab::Copy(mf[lev], shoc_interface[lev]->shoc_cond_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "wqls_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->wqls_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "wthv_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->wthv_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "w_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->w_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "thl_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->thl_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "qw_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->qw_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "qwthl_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->qwthl_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "wthl_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->wthl_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "wqw_sec")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->wqw_sec_diagnostics(), 0, mf_comp, 1, 0);
+            } else
+#endif
+            {
+                mf[lev].setVal(-999, mf_comp, 1, 0);
+            }
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "w3")) {
+#ifdef ERF_USE_SHOC
+            if (solverChoice.use_shoc && shoc_interface[lev] &&
+                shoc_interface[lev]->uses_shoc_tendencies() &&
+                shoc_interface[lev]->has_native_diagnostics()) {
+                MultiFab::Copy(mf[lev], shoc_interface[lev]->w3_diagnostics(), 0, mf_comp, 1, 0);
             } else
 #endif
             {

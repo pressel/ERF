@@ -56,6 +56,8 @@ struct ShocRuntimeOptions
     amrex::Real c_diag_3rd_mom = 7.0;
     amrex::Real coeff_kh = 0.1;
     amrex::Real coeff_km = 0.1;
+    amrex::Real top_taper_depth = 0.0;
+    amrex::Real top_taper_min_factor = 0.0;
 
     bool shoc_1p5tke = false;
     bool extra_shoc_diags = false;
@@ -174,6 +176,8 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
     pp.query("c_diag_3rd_mom", opts.c_diag_3rd_mom);
     pp.query("coeff_kh", opts.coeff_kh);
     pp.query("coeff_km", opts.coeff_km);
+    pp.query("top_taper_depth", opts.top_taper_depth);
+    pp.query("top_taper_min_factor", opts.top_taper_min_factor);
     pp.query("shoc_1p5tke", opts.shoc_1p5tke);
     pp.query("extra_shoc_diags", opts.extra_shoc_diags);
     pp.query("apply_tms", opts.apply_tms);
@@ -206,6 +210,11 @@ validate_shoc_runtime_options (const ShocRuntimeOptions& opts)
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.length_fac > 0.0, "erf.shoc.length_fac must be positive");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.coeff_kh >= 0.0, "erf.shoc.coeff_kh must be non-negative");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.coeff_km >= 0.0, "erf.shoc.coeff_km must be non-negative");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.top_taper_depth >= 0.0,
+                                     "erf.shoc.top_taper_depth must be non-negative");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.top_taper_min_factor >= 0.0 &&
+                                     opts.top_taper_min_factor <= 1.0,
+                                     "erf.shoc.top_taper_min_factor must be in [0, 1]");
 }
 
 AMREX_FORCE_INLINE

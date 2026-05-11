@@ -88,6 +88,37 @@ TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
     }
 }
 
+TEST(ShocStructure, SurfaceLayerThermodynamicMappingUsesExner)
+{
+    auto col = shoc_test::make_column(4);
+    auto thetal = col.thetal.array();
+    auto qv = col.qv.array();
+    auto qc = col.qc.array();
+    auto qi = col.qi.array();
+    auto qw = col.qw.array();
+    auto exner = col.exner.array();
+
+    thetal(0,0,0) = 298.0;
+    qv(0,0,0) = 0.010;
+    qc(0,0,0) = 1.0e-3;
+    qi(0,0,0) = 0.0;
+    qw(0,0,0) = 0.011;
+    exner(0,0,0) = 0.8;
+    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.04);
+    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.03);
+    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
+    col.surf_lat_flux.setVal<amrex::RunOn::Host>(2.0e-4);
+
+    ShocStructure::diagnose_surface_layer(col);
+
+    const amrex::Real cldliq = 1.0e-3;
+    const amrex::Real theta_sfc = 298.0 + (L_v / Cp_d) * cldliq / 0.8;
+    const amrex::Real kbfs = 0.02 + 0.61 * theta_sfc * 2.0e-4;
+
+    EXPECT_NEAR(col.wthv_sec.const_array()(0,0,0), kbfs, 1.0e-12)
+        << "SHOC theta_l to theta conversion must divide the latent term by ERF exner.";
+}
+
 TEST(ShocStructure, SurfaceLayerMatchesTranslatedE3smFixture)
 {
     auto col = shoc_test::make_column(4);

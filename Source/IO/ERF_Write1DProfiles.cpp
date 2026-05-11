@@ -24,7 +24,8 @@ ERF::write_1D_profiles (Real time)
         Gpu::HostVector<Real> h_avg_u, h_avg_v, h_avg_w;
         Gpu::HostVector<Real> h_avg_rho, h_avg_th, h_avg_ksgs, h_avg_Kmv, h_avg_Khv;
         Gpu::HostVector<Real> h_avg_qv, h_avg_qc, h_avg_qr, h_avg_wqv, h_avg_wqc, h_avg_wqr, h_avg_qi, h_avg_qs, h_avg_qg;
-        Gpu::HostVector<Real> h_avg_shoc_cldfrac, h_avg_shoc_ql, h_avg_shoc_cond, h_avg_brunt, h_avg_isotropy;
+        Gpu::HostVector<Real> h_avg_shoc_cldfrac, h_avg_shoc_ql, h_avg_shoc_ql2, h_avg_shoc_cond;
+        Gpu::HostVector<Real> h_avg_wqls_sec, h_avg_wthv_sec, h_avg_brunt, h_avg_isotropy;
         Gpu::HostVector<Real> h_avg_shear_prod, h_avg_buoy_prod, h_avg_diss_tke;
         Gpu::HostVector<Real> h_avg_wthv;
         Gpu::HostVector<Real> h_avg_uth, h_avg_vth, h_avg_wth, h_avg_thth;
@@ -47,7 +48,8 @@ ERF::write_1D_profiles (Real time)
                                  h_avg_uiuiu, h_avg_uiuiv, h_avg_uiuiw,
                                  h_avg_p, h_avg_pu, h_avg_pv, h_avg_pw,
                                  h_avg_wthv,
-                                 h_avg_shoc_cldfrac, h_avg_shoc_ql, h_avg_shoc_cond,
+                                 h_avg_shoc_cldfrac, h_avg_shoc_ql, h_avg_shoc_ql2,
+                                 h_avg_shoc_cond, h_avg_wqls_sec, h_avg_wthv_sec,
                                  h_avg_brunt, h_avg_isotropy,
                                  h_avg_shear_prod, h_avg_buoy_prod, h_avg_diss_tke);
         }
@@ -83,7 +85,10 @@ ERF::write_1D_profiles (Real time)
                                 << h_avg_qi[k]  << " " << h_avg_qs[k]  << " " << h_avg_qg[k]
                                 << " " << h_avg_shoc_cldfrac[k]
                                 << " " << h_avg_shoc_ql[k]
+                                << " " << h_avg_shoc_ql2[k]
                                 << " " << h_avg_shoc_cond[k]
+                                << " " << h_avg_wqls_sec[k]
+                                << " " << h_avg_wthv_sec[k]
                                 << " " << h_avg_brunt[k]
                                 << " " << h_avg_isotropy[k]
                                 << " " << h_avg_shear_prod[k]
@@ -217,7 +222,10 @@ ERF::derive_diag_profiles(Real /*time*/,
                           Gpu::HostVector<Real>& h_avg_wthv,
                           Gpu::HostVector<Real>& h_avg_shoc_cldfrac,
                           Gpu::HostVector<Real>& h_avg_shoc_ql,
+                          Gpu::HostVector<Real>& h_avg_shoc_ql2,
                           Gpu::HostVector<Real>& h_avg_shoc_cond,
+                          Gpu::HostVector<Real>& h_avg_wqls_sec,
+                          Gpu::HostVector<Real>& h_avg_wthv_sec,
                           Gpu::HostVector<Real>& h_avg_brunt,
                           Gpu::HostVector<Real>& h_avg_isotropy,
                           Gpu::HostVector<Real>& h_avg_shear_prod,
@@ -285,7 +293,10 @@ ERF::derive_diag_profiles(Real /*time*/,
     const MultiFab* eta_src = nullptr;
     const MultiFab* shoc_cldfrac_src = nullptr;
     const MultiFab* shoc_ql_src = nullptr;
+    const MultiFab* shoc_ql2_src = nullptr;
     const MultiFab* shoc_cond_src = nullptr;
+    const MultiFab* shoc_wqls_sec_src = nullptr;
+    const MultiFab* shoc_wthv_sec_src = nullptr;
     const MultiFab* shoc_brunt_src = nullptr;
     const MultiFab* shoc_isotropy_src = nullptr;
     const MultiFab* shoc_shear_prod_src = nullptr;
@@ -299,7 +310,10 @@ ERF::derive_diag_profiles(Real /*time*/,
             eta_src = &shoc_interface[lev]->native_diagnostics();
             shoc_cldfrac_src = &shoc_interface[lev]->shoc_cldfrac_diagnostics();
             shoc_ql_src = &shoc_interface[lev]->shoc_ql_diagnostics();
+            shoc_ql2_src = &shoc_interface[lev]->shoc_ql2_diagnostics();
             shoc_cond_src = &shoc_interface[lev]->shoc_cond_diagnostics();
+            shoc_wqls_sec_src = &shoc_interface[lev]->wqls_sec_diagnostics();
+            shoc_wthv_sec_src = &shoc_interface[lev]->wthv_sec_diagnostics();
             shoc_brunt_src = &shoc_interface[lev]->brunt_diagnostics();
             shoc_isotropy_src = &shoc_interface[lev]->isotropy_diagnostics();
             shoc_shear_prod_src = &shoc_interface[lev]->shear_prod_diagnostics();
@@ -478,7 +492,10 @@ ERF::derive_diag_profiles(Real /*time*/,
     if (shoc_cldfrac_src) {
         h_avg_shoc_cldfrac = sumToLine(*shoc_cldfrac_src, 0, 1, domain, zdir);
         h_avg_shoc_ql      = sumToLine(*shoc_ql_src,      0, 1, domain, zdir);
+        h_avg_shoc_ql2     = sumToLine(*shoc_ql2_src,     0, 1, domain, zdir);
         h_avg_shoc_cond    = sumToLine(*shoc_cond_src,    0, 1, domain, zdir);
+        h_avg_wqls_sec     = sumToLine(*shoc_wqls_sec_src,0, 1, domain, zdir);
+        h_avg_wthv_sec     = sumToLine(*shoc_wthv_sec_src,0, 1, domain, zdir);
         h_avg_brunt        = sumToLine(*shoc_brunt_src,   0, 1, domain, zdir);
         h_avg_isotropy     = sumToLine(*shoc_isotropy_src,0, 1, domain, zdir);
         h_avg_shear_prod   = sumToLine(*shoc_shear_prod_src,0,1,domain,zdir);
@@ -487,7 +504,10 @@ ERF::derive_diag_profiles(Real /*time*/,
     } else {
         h_avg_shoc_cldfrac.resize(h_avg_u_size, 0.0);
         h_avg_shoc_ql.resize(h_avg_u_size, 0.0);
+        h_avg_shoc_ql2.resize(h_avg_u_size, 0.0);
         h_avg_shoc_cond.resize(h_avg_u_size, 0.0);
+        h_avg_wqls_sec.resize(h_avg_u_size, 0.0);
+        h_avg_wthv_sec.resize(h_avg_u_size, 0.0);
         h_avg_brunt.resize(h_avg_u_size, 0.0);
         h_avg_isotropy.resize(h_avg_u_size, 0.0);
         h_avg_shear_prod.resize(h_avg_u_size, 0.0);
@@ -531,7 +551,10 @@ ERF::derive_diag_profiles(Real /*time*/,
         h_avg_wthv[k]  /= area_z;
         h_avg_shoc_cldfrac[k] /= area_z;
         h_avg_shoc_ql[k]      /= area_z;
+        h_avg_shoc_ql2[k]     /= area_z;
         h_avg_shoc_cond[k]    /= area_z;
+        h_avg_wqls_sec[k]     /= area_z;
+        h_avg_wthv_sec[k]     /= area_z;
         h_avg_brunt[k]        /= area_z;
         h_avg_isotropy[k]     /= area_z;
         h_avg_shear_prod[k]   /= area_z;

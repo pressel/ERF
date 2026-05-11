@@ -11,6 +11,11 @@ using namespace amrex;
 void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
 {
     bool do_cond = m_do_cond;
+    // SHOC owns the non-precipitating phase partition (qv/qc/qi), but warm-rain
+    // microphysics must still be allowed to convert cloud water to rain and to
+    // evolve precipitating water thereafter. Otherwise SHOC-coupled Kessler runs
+    // can form cloud water without ever producing rain.
+    const bool do_warm_rain_phase_changes = true;
     auto tabs    = mic_fab_vars[MicVar_Kess::tabs];
     auto domain  = m_geom.Domain();
     int i_lo = domain.smallEnd(0);
@@ -93,7 +98,7 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                     dq_clwater_to_vapor = std::min(qc_array(i,j,k), (qsat - qv_array(i,j,k))/(Real(1) + fac));
                 }
 
-                if (( qp_array(i,j,k) > Real(0)) && (qv_array(i,j,k) < qsat) ) {
+                if (do_warm_rain_phase_changes && (qp_array(i,j,k) > Real(0)) && (qv_array(i,j,k) < qsat) ) {
                     Real C = Real(1.6) + Real(124.9)*std::pow(Real(0.001)*rho_array(i,j,k)*qp_array(i,j,k),Real(0.2046));
                     dq_rain_to_vapor = Real(1)/(Real(0.001)*rho_array(i,j,k))*(Real(1) - qv_array(i,j,k)/qsat)*C*std::pow(Real(0.001)*rho_array(i,j,k)*qp_array(i,j,k),Real(0.525))/
                         (Real(5.4e5) + Real(2.55e6)/(pressure*qsat))*dtn;
@@ -105,7 +110,7 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                 }
 
                 // If there is cloud water present then do accretion and autoconversion to rain
-                if (qc_array(i,j,k) > Real(0)) {
+                if (do_warm_rain_phase_changes && qc_array(i,j,k) > Real(0)) {
                     qcc = qc_array(i,j,k);
 
                     auto_r = Real(0);
@@ -152,8 +157,11 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                     rho_avg = rho_array(i,j,k);
                     qp_avg  = qp_array(i,j,k);
                 } else if (k==k_hi+1) {
+                    // No rain inflow through the model top. Using the top
+                    // cell value here creates precipitating water in the
+                    // column when the sedimentation update clips negatives.
                     rho_avg = rho_array(i,j,k-1);
-                    qp_avg  = qp_array(i,j,k-1);
+                    qp_avg  = 0.0;
                 } else {
                     rho_avg = myhalf*(rho_array(i,j,k-1) + rho_array(i,j,k)); // Convert to g/cm^3
                     qp_avg = myhalf*(qp_array(i,j,k-1)  + qp_array(i,j,k));
@@ -213,8 +221,10 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                         rho_avg = rho_array(i,j,k);
                         qp_avg  = qp_array(i,j,k);
                     } else if (k==k_hi+1) {
+                        // No rain inflow through the model top. Bottom-up ERF
+                        // indexing uses k_hi+1 as the upper boundary face.
                         rho_avg = rho_array(i,j,k-1);
-                        qp_avg  = qp_array(i,j,k-1);
+                        qp_avg  = 0.0;
                     } else {
                         rho_avg = myhalf*(rho_array(i,j,k-1) + rho_array(i,j,k)); // Convert to g/cm^3
                         qp_avg = myhalf*(qp_array(i,j,k-1)  + qp_array(i,j,k));

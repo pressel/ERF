@@ -84,6 +84,36 @@ TEST(ShocMoments, SurfaceMomentBoundaryConditionsMatchTranslatedE3smSemantics)
     EXPECT_NEAR(wtke(0,0,0), expected_wtke, 1.0e-12);
 }
 
+TEST(ShocMoments, TopTaperDampsUpperMomentDiagnosticsOnly)
+{
+    auto col_base = shoc_test::make_column(6);
+    auto col_taper = shoc_test::make_column(6);
+    ShocRuntimeOptions opts_base;
+    ShocRuntimeOptions opts_taper;
+    opts_taper.top_taper_depth = 150.0;
+
+    ShocStructure::diagnose_surface_layer(col_base);
+    ShocStructure::diagnose_pblh(col_base);
+    ShocStructure::diagnose_length_and_brunt(col_base, opts_base, 400.0, 400.0);
+    ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 300.0);
+    ShocMoments::diagnose_moments(col_base, opts_base);
+
+    ShocStructure::diagnose_surface_layer(col_taper);
+    ShocStructure::diagnose_pblh(col_taper);
+    ShocStructure::diagnose_length_and_brunt(col_taper, opts_taper, 400.0, 400.0);
+    ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 300.0);
+    ShocMoments::diagnose_moments(col_taper, opts_taper);
+
+    const int ktop_cell = col_base.layout.nlev - 1;
+    const int ktop_iface = col_base.layout.nlev - 1;
+    EXPECT_LT(col_taper.w_sec.const_array()(0,ktop_cell,0),
+              col_base.w_sec.const_array()(0,ktop_cell,0));
+    EXPECT_LT(std::abs(col_taper.wthl_sec.const_array()(0,ktop_iface,0)),
+              std::abs(col_base.wthl_sec.const_array()(0,ktop_iface,0)));
+    EXPECT_NEAR(col_taper.w_sec.const_array()(0,0,0),
+                col_base.w_sec.const_array()(0,0,0), 1.0e-12);
+}
+
 TEST(ShocMoments, VarianceAndFluxHelpersMatchDowngradientForm)
 {
     auto col = shoc_test::make_column(5);

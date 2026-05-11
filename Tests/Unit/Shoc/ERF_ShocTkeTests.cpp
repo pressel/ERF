@@ -143,6 +143,44 @@ TEST(ShocTke, TimestepControlsTkeGrowth)
     EXPECT_GT(col_large.tke.const_array()(0,0,0), col_small.tke.const_array()(0,0,0));
 }
 
+TEST(ShocTke, TopTaperDampsUpperActiveLayerOnly)
+{
+    ShocRuntimeOptions opts_base;
+    ShocRuntimeOptions opts_taper;
+    opts_taper.top_taper_depth = 150.0;
+
+    auto col_base = shoc_test::make_column(6);
+    auto col_taper = shoc_test::make_column(6);
+
+    ShocStructure::diagnose_surface_layer(col_base);
+    ShocStructure::diagnose_pblh(col_base);
+    ShocStructure::diagnose_length_and_brunt(col_base, opts_base, 500.0, 500.0);
+
+    ShocStructure::diagnose_surface_layer(col_taper);
+    ShocStructure::diagnose_pblh(col_taper);
+    ShocStructure::diagnose_length_and_brunt(col_taper, opts_taper, 500.0, 500.0);
+
+    auto wthv_base = col_base.wthv_sec.array();
+    auto wthv_taper = col_taper.wthv_sec.array();
+    auto tk_base = col_base.tk.array();
+    auto tk_taper = col_taper.tk.array();
+    for (int k = 0; k < col_base.layout.nlev; ++k) {
+        wthv_base(0,k,0) = 0.03;
+        wthv_taper(0,k,0) = 0.03;
+        tk_base(0,k,0) = 1.0;
+        tk_taper(0,k,0) = 1.0;
+    }
+
+    ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 120.0);
+    ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 120.0);
+
+    const int ktop = col_base.layout.nlev - 1;
+    EXPECT_LT(col_taper.tke.const_array()(0,ktop,0), col_base.tke.const_array()(0,ktop,0));
+    EXPECT_LT(col_taper.tk.const_array()(0,ktop,0), col_base.tk.const_array()(0,ktop,0));
+    EXPECT_LT(col_taper.tkh.const_array()(0,ktop,0), col_base.tkh.const_array()(0,ktop,0));
+    EXPECT_NEAR(col_taper.tke.const_array()(0,0,0), col_base.tke.const_array()(0,0,0), 1.0e-12);
+}
+
 TEST(ShocTke, PreviousDiffusivityFeedsShearProduction)
 {
     ShocRuntimeOptions opts;

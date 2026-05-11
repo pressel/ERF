@@ -287,7 +287,10 @@ public:
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_pw, amrex::Gpu::HostVector<amrex::Real>& h_avg_wthv,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_cldfrac,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_ql,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_ql2,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_shoc_cond,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_wqls_sec,
+                               amrex::Gpu::HostVector<amrex::Real>& h_avg_wthv_sec,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_brunt,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_isotropy,
                                amrex::Gpu::HostVector<amrex::Real>& h_avg_shear_prod,
@@ -1161,8 +1164,12 @@ private:
                                                     // turbulence lengthscale
                                                     "Lturb",
                                                     // native SHOC diagnostics
-                                                    "shoc_cldfrac", "shoc_ql", "shoc_cond", "brunt", "isotropy",
-                                                    "shear_prod", "buoy_prod", "diss_tke",
+                                                    "shoc_cldfrac", "shoc_ql", "shoc_ql2", "shoc_cond",
+                                                    "wqls_sec", "wthv_sec",
+                                                    "w_sec", "thl_sec", "qw_sec", "qwthl_sec",
+                                                    "wthl_sec", "wqw_sec", "w3",
+                                                    "brunt", "isotropy", "shear_prod",
+                                                    "buoy_prod", "diss_tke",
                                                     // wall distance
                                                     "walldist",
                                                     // dissipation

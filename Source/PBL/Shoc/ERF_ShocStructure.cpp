@@ -45,9 +45,15 @@ namespace
     }
 
     AMREX_FORCE_INLINE
-    Real virtual_theta_from_shoc_state (Real thetal, Real ql, Real qv)
+    Real theta_from_shoc_state (Real thetal, Real ql, Real exner)
     {
-        const Real theta = thetal + (L_v / Cp_d) * ql;
+        return thetal + (L_v / Cp_d) * ql / std::max(exner, 1.0e-12);
+    }
+
+    AMREX_FORCE_INLINE
+    Real virtual_theta_from_shoc_state (Real thetal, Real ql, Real qv, Real exner)
+    {
+        const Real theta = theta_from_shoc_state(thetal, ql, exner);
         return theta * (1.0 + k_shoc_zvir * qv - ql);
     }
 }
@@ -63,6 +69,7 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
     const auto qc = col.qc.const_array();
     const auto qi = col.qi.const_array();
     const auto qv = col.qv.const_array();
+    const auto exner = col.exner.const_array();
     const auto sflux = col.surf_sens_flux.const_array();
     const auto lflux = col.surf_lat_flux.const_array();
     const auto tauu = col.surf_tau_u.const_array();
@@ -72,7 +79,7 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
 
     for (int ic = 0; ic < col.layout.ncell; ++ic) {
         const Real cldliq_sfc = qc(ic,0,0) + qi(ic,0,0);
-        const Real th_sfc = thetal(ic,0,0) + (L_v / Cp_d) * cldliq_sfc;
+        const Real th_sfc = theta_from_shoc_state(thetal(ic,0,0), cldliq_sfc, exner(ic,0,0));
         const Real thv_sfc = th_sfc * (1.0 + k_shoc_zvir * qv(ic,0,0) - cldliq_sfc);
         const Real stress_mag = std::sqrt(tauu(ic,0,0) * tauu(ic,0,0) +
                                           tauv(ic,0,0) * tauv(ic,0,0));
@@ -108,6 +115,7 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
     const auto qc = col.qc.const_array();
     const auto qi = col.qi.const_array();
     const auto qv = col.qv.const_array();
+    const auto exner = col.exner.const_array();
 
     for (int ic = 0; ic < col.layout.ncell; ++ic) {
         const int npbl = diagnose_npbl(col, ic);
@@ -117,7 +125,8 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
         Vector<Real> thv(col.layout.nlev, 0.0);
 
         for (int k = 0; k < col.layout.nlev; ++k) {
-            thv[k] = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0), qv(ic,k,0));
+            thv[k] = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
+                                                   qv(ic,k,0), exner(ic,k,0));
         }
 
         bool found_pblh = false;
@@ -194,6 +203,7 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
     const auto qc = col.qc.const_array();
     const auto qi = col.qi.const_array();
     const auto qv = col.qv.const_array();
+    const auto exner = col.exner.const_array();
     const auto tke = col.tke.const_array();
     const Real max_horiz_len = std::sqrt(dx * dy);
 
@@ -201,7 +211,8 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
         Vector<Real> theta_v_cc(col.layout.nlev, 0.0);
         Vector<Real> theta_v_iface(col.layout.nlev + 1, 0.0);
         for (int k = 0; k < col.layout.nlev; ++k) {
-            theta_v_cc[k] = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0), qv(ic,k,0));
+            theta_v_cc[k] = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
+                                                          qv(ic,k,0), exner(ic,k,0));
         }
         if (col.layout.nlev == 1) {
             theta_v_iface[0] = theta_v_cc[0];

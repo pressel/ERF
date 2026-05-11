@@ -28,6 +28,15 @@ namespace
     Real clamp01 (Real x) { return std::clamp(x, 0.0, 1.0); }
 
     AMREX_FORCE_INLINE
+    Real signed_denominator (Real value, Real eps = 1.0e-12)
+    {
+        if (std::abs(value) >= eps) {
+            return value;
+        }
+        return std::copysign(eps, value == 0.0 ? 1.0 : value);
+    }
+
+    AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
     {
         const Real denom = x1 - x0;
@@ -115,12 +124,12 @@ namespace
             thl2_1 = std::min(100.0, std::max(0.0,
                 (3.0 * tmp1 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
                  - (skew_thl - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                std::max(3.0 * a * (tmp1 - tmp2), 1.0e-12))) * thlsec;
+                signed_denominator(3.0 * a * (tmp1 - tmp2)))) * thlsec;
 
             thl2_2 = std::min(100.0, std::max(0.0,
                 (-3.0 * tmp2 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
                  + (skew_thl - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                std::max(3.0 * (1.0 - a) * (tmp1 - tmp2), 1.0e-12))) * thlsec;
+                signed_denominator(3.0 * (1.0 - a) * (tmp1 - tmp2)))) * thlsec;
 
             thl1_1 = tmp2 * sqrtthl + thl_first;
             thl1_2 = tmp1 * sqrtthl + thl_first;
@@ -159,12 +168,12 @@ namespace
             qw2_1 = std::min(100.0, std::max(0.0,
                 (3.0 * tmp1 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
                  - (skew_qw - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                std::max(3.0 * a * (tmp1 - tmp2), 1.0e-12))) * qwsec;
+                signed_denominator(3.0 * a * (tmp1 - tmp2)))) * qwsec;
 
             qw2_2 = std::min(100.0, std::max(0.0,
                 (-3.0 * tmp2 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
                  + (skew_qw - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                std::max(3.0 * (1.0 - a) * (tmp1 - tmp2), 1.0e-12))) * qwsec;
+                signed_denominator(3.0 * (1.0 - a) * (tmp1 - tmp2)))) * qwsec;
 
             qw1_1 = tmp2 * sqrtqt + qw_first;
             qw1_2 = tmp1 * sqrtqt + qw_first;
@@ -342,8 +351,8 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
                                 sqrtthl2_2, sqrtqw2_2, r_qwthl_1, s2, std_s2, qn2, c2);
             }
 
-            const Real ql1 = std::min(qn1, std::max(qw1_1, 0.0));
-            const Real ql2 = std::min(qn2, std::max(qw1_2, 0.0));
+            const Real ql1 = std::min(qn1, qw1_1);
+            const Real ql2 = std::min(qn2, qw1_2);
             const Real old_ql = shoc_ql(ic,k,0);
             const Real cldfrac = std::min(1.0, a * c1 + (1.0 - a) * c2);
             const Real ql = std::max(0.0, a * ql1 + (1.0 - a) * ql2);

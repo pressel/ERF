@@ -21,6 +21,12 @@ namespace
         }
         return y0 + (y1 - y0) * (x - x0) / denom;
     }
+
+    AMREX_FORCE_INLINE
+    int face_neighbor_cell (int idx, int domlo, int domhi, bool periodic)
+    {
+        return periodic ? idx : std::clamp(idx, domlo, domhi);
+    }
 }
 
 ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
@@ -44,6 +50,8 @@ ShocDriver::ensure_storage (const MultiFab& cons,
         m_qc_tend_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_qi_tend_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_tke_tend_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
+        m_u_tend_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 1);
+        m_v_tend_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 1);
         m_u_tend_fc.define(xvel.boxArray(), xvel.DistributionMap(), 1, 0);
         m_v_tend_fc.define(yvel.boxArray(), yvel.DistributionMap(), 1, 0);
         m_eddy_coeffs_cc.define(eddy_diffs.boxArray(), eddy_diffs.DistributionMap(),
@@ -53,8 +61,11 @@ ShocDriver::ensure_storage (const MultiFab& cons,
         m_pblh_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_shoc_cldfrac_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_shoc_ql_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
+        m_shoc_ql2_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_shoc_cond_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_w_sec_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
+        m_wqls_sec_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
+        m_wthv_sec_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_thl_sec_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_qw_sec_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
         m_qwthl_sec_cc.define(cons.boxArray(), cons.DistributionMap(), 1, 0);
@@ -74,14 +85,19 @@ ShocDriver::ensure_storage (const MultiFab& cons,
     m_qc_tend_cc.setVal(0.0);
     m_qi_tend_cc.setVal(0.0);
     m_tke_tend_cc.setVal(0.0);
+    m_u_tend_cc.setVal(0.0);
+    m_v_tend_cc.setVal(0.0);
     m_u_tend_fc.setVal(0.0);
     m_v_tend_fc.setVal(0.0);
     m_eddy_coeffs_cc.setVal(0.0);
     m_pblh_cc.setVal(0.0);
     m_shoc_cldfrac_cc.setVal(0.0);
     m_shoc_ql_cc.setVal(0.0);
+    m_shoc_ql2_cc.setVal(0.0);
     m_shoc_cond_cc.setVal(0.0);
     m_w_sec_cc.setVal(0.0);
+    m_wqls_sec_cc.setVal(0.0);
+    m_wthv_sec_cc.setVal(0.0);
     m_thl_sec_cc.setVal(0.0);
     m_qw_sec_cc.setVal(0.0);
     m_qwthl_sec_cc.setVal(0.0);
@@ -238,13 +254,16 @@ ShocDriver::advance (MultiFab& cons,
         auto qc_tend = m_qc_tend_cc.array(mfi);
         auto qi_tend = m_qi_tend_cc.array(mfi);
         auto tke_tend = m_tke_tend_cc.array(mfi);
-        auto u_tend_fc = m_u_tend_fc.array(mfi);
-        auto v_tend_fc = m_v_tend_fc.array(mfi);
+        auto u_tend_cc = m_u_tend_cc.array(mfi);
+        auto v_tend_cc = m_v_tend_cc.array(mfi);
         auto pblh_arr = m_pblh_cc.array(mfi);
         auto shoc_cldfrac_arr = m_shoc_cldfrac_cc.array(mfi);
         auto shoc_ql_arr = m_shoc_ql_cc.array(mfi);
+        auto shoc_ql2_arr = m_shoc_ql2_cc.array(mfi);
         auto shoc_cond_arr = m_shoc_cond_cc.array(mfi);
         auto w_sec_arr = m_w_sec_cc.array(mfi);
+        auto wqls_sec_arr = m_wqls_sec_cc.array(mfi);
+        auto wthv_sec_arr = m_wthv_sec_cc.array(mfi);
         auto thl_sec_arr = m_thl_sec_cc.array(mfi);
         auto qw_sec_arr = m_qw_sec_cc.array(mfi);
         auto qwthl_sec_arr = m_qwthl_sec_cc.array(mfi);
@@ -261,8 +280,11 @@ ShocDriver::advance (MultiFab& cons,
         const auto pblh = col.pblh.const_array();
         const auto shoc_cldfrac = col.shoc_cldfrac.const_array();
         const auto shoc_ql = col.shoc_ql.const_array();
+        const auto shoc_ql2 = col.shoc_ql2.const_array();
         const auto shoc_cond = col.shoc_cond.const_array();
         const auto w_sec = col.w_sec.const_array();
+        const auto wqls_sec = col.wqls_sec.const_array();
+        const auto wthv_sec = col.wthv_sec.const_array();
         const auto thl_sec = col.thl_sec.const_array();
         const auto qw_sec = col.qw_sec.const_array();
         const auto qwthl_sec = col.qwthl_sec.const_array();
@@ -309,11 +331,16 @@ ShocDriver::advance (MultiFab& cons,
                     qc_tend(i,j,k) = col_qc_tend(ic,kk,0);
                     qi_tend(i,j,k) = col_qi_tend(ic,kk,0);
                     tke_tend(i,j,k) = col_tke_tend(ic,kk,0);
+                    u_tend_cc(i,j,k) = col_u_tend(ic,kk,0);
+                    v_tend_cc(i,j,k) = col_v_tend(ic,kk,0);
                     pblh_arr(i,j,k) = pblh(ic,0,0);
                     shoc_cldfrac_arr(i,j,k) = shoc_cldfrac(ic,kk,0);
                     shoc_ql_arr(i,j,k) = shoc_ql(ic,kk,0);
+                    shoc_ql2_arr(i,j,k) = shoc_ql2(ic,kk,0);
                     shoc_cond_arr(i,j,k) = shoc_cond(ic,kk,0);
                     w_sec_arr(i,j,k) = w_sec(ic,kk,0);
+                    wqls_sec_arr(i,j,k) = wqls_sec(ic,kk,0);
+                    wthv_sec_arr(i,j,k) = wthv_sec(ic,kk,0);
                     brunt_arr(i,j,k) = brunt(ic,kk,0);
                     isotropy_arr(i,j,k) = isotropy(ic,kk,0);
                     thl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
@@ -341,28 +368,44 @@ ShocDriver::advance (MultiFab& cons,
             }
         }
 
-        for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-            for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx + 1; ++i) {
-                const int il = std::clamp(i - 1, col.layout.imin, col.layout.imin + col.layout.nx - 1);
-                const int ir = std::clamp(i,     col.layout.imin, col.layout.imin + col.layout.nx - 1);
-                const int icl = shoc_column_index(col.layout, il, j);
-                const int icr = shoc_column_index(col.layout, ir, j);
-                for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                    const int k = col.layout.kmin + kk;
-                    u_tend_fc(i,j,k) = 0.5 * (col_u_tend(icl,kk,0) + col_u_tend(icr,kk,0));
+    }
+
+    m_u_tend_cc.FillBoundary(geom.periodicity());
+    m_v_tend_cc.FillBoundary(geom.periodicity());
+
+    const auto dom = geom.Domain();
+    const int ilo = dom.smallEnd(0);
+    const int ihi = dom.bigEnd(0);
+    const int jlo = dom.smallEnd(1);
+    const int jhi = dom.bigEnd(1);
+    const bool xper = geom.isPeriodic(0);
+    const bool yper = geom.isPeriodic(1);
+
+    for (MFIter mfi(m_u_tend_cc, false); mfi.isValid(); ++mfi) {
+        const Box& cc_bx = mfi.validbox();
+        const Box xface_bx = amrex::surroundingNodes(cc_bx, 0);
+        const Box yface_bx = amrex::surroundingNodes(cc_bx, 1);
+        const auto u_cc = m_u_tend_cc.const_array(mfi);
+        const auto v_cc = m_v_tend_cc.const_array(mfi);
+        auto u_fc = m_u_tend_fc.array(mfi);
+        auto v_fc = m_v_tend_fc.array(mfi);
+
+        for (int k = xface_bx.smallEnd(2); k <= xface_bx.bigEnd(2); ++k) {
+            for (int j = xface_bx.smallEnd(1); j <= xface_bx.bigEnd(1); ++j) {
+                for (int i = xface_bx.smallEnd(0); i <= xface_bx.bigEnd(0); ++i) {
+                    const int il = face_neighbor_cell(i - 1, ilo, ihi, xper);
+                    const int ir = face_neighbor_cell(i,     ilo, ihi, xper);
+                    u_fc(i,j,k) = 0.5 * (u_cc(il,j,k) + u_cc(ir,j,k));
                 }
             }
         }
 
-        for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny + 1; ++j) {
-            for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-                const int jb = std::clamp(j - 1, col.layout.jmin, col.layout.jmin + col.layout.ny - 1);
-                const int jt = std::clamp(j,     col.layout.jmin, col.layout.jmin + col.layout.ny - 1);
-                const int icb = shoc_column_index(col.layout, i, jb);
-                const int ict = shoc_column_index(col.layout, i, jt);
-                for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                    const int k = col.layout.kmin + kk;
-                    v_tend_fc(i,j,k) = 0.5 * (col_v_tend(icb,kk,0) + col_v_tend(ict,kk,0));
+        for (int k = yface_bx.smallEnd(2); k <= yface_bx.bigEnd(2); ++k) {
+            for (int j = yface_bx.smallEnd(1); j <= yface_bx.bigEnd(1); ++j) {
+                for (int i = yface_bx.smallEnd(0); i <= yface_bx.bigEnd(0); ++i) {
+                    const int jb = face_neighbor_cell(j - 1, jlo, jhi, yper);
+                    const int jt = face_neighbor_cell(j,     jlo, jhi, yper);
+                    v_fc(i,j,k) = 0.5 * (v_cc(i,jb,k) + v_cc(i,jt,k));
                 }
             }
         }
@@ -566,7 +609,10 @@ ShocDriver::print_debug_summary (Real dt) const
     print_minmax("diss_tke", m_diss_tke_cc, 0);
     print_minmax("cldfrac", m_shoc_cldfrac_cc, 0);
     print_minmax("shoc_ql", m_shoc_ql_cc, 0);
+    print_minmax("shoc_ql2", m_shoc_ql2_cc, 0);
     print_minmax("shoc_cond", m_shoc_cond_cc, 0);
+    print_minmax("wqls_sec", m_wqls_sec_cc, 0);
+    print_minmax("wthv_sec", m_wthv_sec_cc, 0);
 
     if (m_hfx3_ptr)  print_minmax("hfx3_in", *m_hfx3_ptr, 0);
     if (m_qfx3_ptr)  print_minmax("qfx3_in", *m_qfx3_ptr, 0);

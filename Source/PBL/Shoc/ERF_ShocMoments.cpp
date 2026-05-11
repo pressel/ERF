@@ -26,6 +26,15 @@ namespace
         return y0 + (y1 - y0) * (x - x0) / denom;
     }
 
+    AMREX_FORCE_INLINE
+    Real signed_denominator (Real value, Real eps = 1.0e-12)
+    {
+        if (std::abs(value) >= eps) {
+            return value;
+        }
+        return std::copysign(eps, value == 0.0 ? 1.0 : value);
+    }
+
     void interpolate_cc_to_iface (const ShocColumnData& col,
                                   const FArrayBox& cc_in,
                                   FArrayBox& iface_out,
@@ -73,6 +82,41 @@ namespace
             return std::max(col.zi.const_array()(ic,col.layout.nlev,0) - zt(ic,col.layout.nlev-1,0), 1.0e-12);
         }
         return std::max(zt(ic,k,0) - zt(ic,k-1,0), 1.0e-12);
+    }
+
+    AMREX_FORCE_INLINE
+    Real top_taper_from_distance (const ShocRuntimeOptions& opts,
+                                  Real distance_from_top)
+    {
+        if (opts.top_taper_depth <= 0.0) {
+            return 1.0;
+        }
+
+        const Real x = std::clamp(std::max(0.0, distance_from_top) / opts.top_taper_depth,
+                                  0.0, 1.0);
+        const Real smooth = x * x * (3.0 - 2.0 * x);
+        return opts.top_taper_min_factor + (1.0 - opts.top_taper_min_factor) * smooth;
+    }
+
+    AMREX_FORCE_INLINE
+    Real top_taper_cell (const ShocColumnData& col,
+                         const ShocRuntimeOptions& opts,
+                         int ic,
+                         int k)
+    {
+        const auto zt = col.zt.const_array();
+        const auto zi = col.zi.const_array();
+        return top_taper_from_distance(opts, zi(ic,col.layout.nlev,0) - zt(ic,k,0));
+    }
+
+    AMREX_FORCE_INLINE
+    Real top_taper_iface (const ShocColumnData& col,
+                          const ShocRuntimeOptions& opts,
+                          int ic,
+                          int k)
+    {
+        const auto zi = col.zi.const_array();
+        return top_taper_from_distance(opts, zi(ic,col.layout.nlev,0) - zi(ic,k,0));
     }
 
     void diagnose_surface_moment_scales (const ShocColumnData& col,
@@ -137,6 +181,56 @@ namespace
             uw_sec(ic,col.layout.nlev,0) = 0.0;
             vw_sec(ic,col.layout.nlev,0) = 0.0;
             wtke_sec(ic,col.layout.nlev,0) = 0.0;
+        }
+    }
+
+    void apply_top_taper_to_second_moments (ShocColumnData& col,
+                                            const ShocRuntimeOptions& opts)
+    {
+        if (opts.top_taper_depth <= 0.0) {
+            return;
+        }
+
+        auto thl_sec = col.thl_sec.array();
+        auto qw_sec = col.qw_sec.array();
+        auto qwthl_sec = col.qwthl_sec.array();
+        auto wthl_sec = col.wthl_sec.array();
+        auto wqw_sec = col.wqw_sec.array();
+        auto uw_sec = col.uw_sec.array();
+        auto vw_sec = col.vw_sec.array();
+        auto wtke_sec = col.wtke_sec.array();
+        auto w_sec = col.w_sec.array();
+
+        for (int ic = 0; ic < col.layout.ncell; ++ic) {
+            for (int k = 0; k < col.layout.nlev; ++k) {
+                w_sec(ic,k,0) *= top_taper_cell(col, opts, ic, k);
+            }
+            for (int k = 0; k <= col.layout.nlev; ++k) {
+                const Real factor = top_taper_iface(col, opts, ic, k);
+                thl_sec(ic,k,0) *= factor;
+                qw_sec(ic,k,0) *= factor;
+                qwthl_sec(ic,k,0) *= factor;
+                wthl_sec(ic,k,0) *= factor;
+                wqw_sec(ic,k,0) *= factor;
+                uw_sec(ic,k,0) *= factor;
+                vw_sec(ic,k,0) *= factor;
+                wtke_sec(ic,k,0) *= factor;
+            }
+        }
+    }
+
+    void apply_top_taper_to_third_moments (ShocColumnData& col,
+                                           const ShocRuntimeOptions& opts)
+    {
+        if (opts.top_taper_depth <= 0.0) {
+            return;
+        }
+
+        auto w3 = col.w3.array();
+        for (int ic = 0; ic < col.layout.ncell; ++ic) {
+            for (int k = 0; k <= col.layout.nlev; ++k) {
+                w3(ic,k,0) *= top_taper_iface(col, opts, ic, k);
+            }
         }
     }
 }
@@ -244,6 +338,7 @@ ShocMoments::diagnose_second_moments (ShocColumnData& col,
     calc_vertflux(col, tk_zi, col.v, col.vw_sec);
 
     apply_second_moment_boundary_conditions(col);
+    apply_top_taper_to_second_moments(col, opts);
 }
 
 void
@@ -340,25 +435,26 @@ ShocMoments::diagnose_third_moments (ShocColumnData& col,
             const Real f4 = thedz * iso * w_sec_i(ic,k,0) * (wsec_diff + tke_diff);
             const Real f5 = thedz * iso * w_sec_i(ic,k,0) * wsec_diff;
 
-            const Real denom0 = std::max(1.0 - (a1 + a3) * buoy_sgs2, 1.0e-12);
-            const Real omega0 = a4 / std::max(1.0 - a5 * buoy_sgs2, 1.0e-12);
+            const Real denom0 = signed_denominator(1.0 - (a1 + a3) * buoy_sgs2);
+            const Real omega0 = a4 / signed_denominator(1.0 - a5 * buoy_sgs2);
             const Real omega1 = omega0 / (2.0 * c);
             const Real omega2 = omega1 * f3 + 1.25 * omega0 * f4;
             const Real x0 = (a2 * buoy_sgs2 * (1.0 - a3 * buoy_sgs2)) / denom0;
-            const Real y0 = (2.0 * a2 * buoy_sgs2 * x0) / std::max(1.0 - a3 * buoy_sgs2, 1.0e-12);
+            const Real y0 = (2.0 * a2 * buoy_sgs2 * x0) / signed_denominator(1.0 - a3 * buoy_sgs2);
             const Real x1 = (a0 * f0 + a1 * f1 + a2 * (1.0 - a3 * buoy_sgs2) * f2) / denom0;
             const Real y1 = (2.0 * a2 * (buoy_sgs2 * x1 + (a0 / std::max(a1, 1.0e-12)) * f0 + f1)) /
-                            std::max(1.0 - a3 * buoy_sgs2, 1.0e-12);
+                            signed_denominator(1.0 - a3 * buoy_sgs2);
             const Real aa0 = omega0 * x0 + omega1 * y0;
             const Real aa1 = omega0 * x1 + omega1 * y1 + omega2;
 
-            const Real denom = std::max(c - 1.2 * x0 + aa0, 1.0e-12);
+            const Real denom = signed_denominator(c - 1.2 * x0 + aa0);
             Real w3_val = (aa1 - 1.2 * x1 - 1.5 * f5) / denom;
             w3(ic,k,0) = w3_val;
         }
     }
 
     clip_third_moments(col, w_sec_zi, col.w3);
+    apply_top_taper_to_third_moments(col, opts);
 }
 
 void
