@@ -8,7 +8,7 @@ using namespace amrex;
 
 namespace
 {
-AMREX_FORCE_INLINE
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 Real load_q (const Array4<const Real>& cons_arr,
              int i, int j, int k,
              int comp, Real rho, int ncomp)
@@ -73,70 +73,73 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
     const auto dx = geom.CellSizeArray();
     const int klo = col.layout.kmin;
     const int khi = col.layout.kmax;
+    const int ncomp = cons.nComp();
+    const auto layout = col.layout;
+    amrex::ignore_unused(problo, dx);
+    const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, klo);
 
-    for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-        for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-            const int ic = shoc_column_index(col.layout, i, j);
-            const Real rho_sfc = std::max(cons_arr(i,j,klo,Rho_comp), 1.0e-12_rt);
+    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+    {
+        const int ic = shoc_column_index(layout, i, j);
+        const Real rho_sfc = amrex::max(cons_arr(i,j,klo,Rho_comp), 1.0e-12_rt);
 
-            // ERF host fluxes/stresses are stored as density-weighted lower
-            // boundary fluxes. SHOC consumes kinematic surface fluxes.
-            if (hfx3) sflux_arr(ic,0,0) = hfx_arr(i,j,klo) / rho_sfc;
-            if (qfx3) lflux_arr(ic,0,0) = qfx_arr(i,j,klo) / rho_sfc;
-            if (tau13) tauu_arr(ic,0,0) = t13_arr(i,j,klo) / rho_sfc;
-            if (tau23) tauv_arr(ic,0,0) = t23_arr(i,j,klo) / rho_sfc;
+        // ERF host fluxes/stresses are stored as density-weighted lower
+        // boundary fluxes. SHOC consumes kinematic surface fluxes.
+        if (hfx3) sflux_arr(ic,0,0) = hfx_arr(i,j,klo) / rho_sfc;
+        if (qfx3) lflux_arr(ic,0,0) = qfx_arr(i,j,klo) / rho_sfc;
+        if (tau13) tauu_arr(ic,0,0) = t13_arr(i,j,klo) / rho_sfc;
+        if (tau23) tauv_arr(ic,0,0) = t23_arr(i,j,klo) / rho_sfc;
 
-            for (int k = klo; k <= khi; ++k) {
-                const int kk = k - klo;
-                const Real zlo = z_arr(i,j,k);
-                const Real zhi = z_arr(i,j,k+1);
-                const Real zc = 0.5 * (zlo + zhi);
-                const Real dz = zhi - zlo;
-                const Real rho = cons_arr(i,j,k,Rho_comp);
-                const Real theta = cons_arr(i,j,k,RhoTheta_comp) / rho;
-                const Real qv = load_q(cons_arr, i, j, k, moisture_indices.qv, rho, cons.nComp());
-                const Real qc = load_q(cons_arr, i, j, k, moisture_indices.qc, rho, cons.nComp());
-                const Real qi = load_q(cons_arr, i, j, k, moisture_indices.qi, rho, cons.nComp());
-                const Real p = getPgivenRTh(cons_arr(i,j,k,RhoTheta_comp), qv);
-                const Real tabs = getTgivenRandRTh(rho, cons_arr(i,j,k,RhoTheta_comp), qv);
-                const Real ql_np = qc + qi;
-                const Real exner = tabs / std::max(theta, 1.0e-12);
-                // SHOC carries liquid-water potential temperature.  E3SM's
-                // "inv_exner" is 1/exner, so theta = theta_l + Lv/Cp*q_l/exner.
-                const Real thetal = theta - (L_v / Cp_d) * ql_np / std::max(exner, 1.0e-12);
-                const Real theta_v = theta * (1.0_rt + 0.61_rt * qv - ql_np);
-                const Real qke = cons_arr(i,j,k,RhoKE_comp) / rho;
+        for (int k = klo; k <= khi; ++k) {
+            const int kk = k - klo;
+            const Real zlo = z_arr(i,j,k);
+            const Real zhi = z_arr(i,j,k+1);
+            const Real zc = 0.5_rt * (zlo + zhi);
+            const Real dz = zhi - zlo;
+            const Real rho = cons_arr(i,j,k,Rho_comp);
+            const Real theta = cons_arr(i,j,k,RhoTheta_comp) / rho;
+            const Real qv = load_q(cons_arr, i, j, k, moisture_indices.qv, rho, ncomp);
+            const Real qc = load_q(cons_arr, i, j, k, moisture_indices.qc, rho, ncomp);
+            const Real qi = load_q(cons_arr, i, j, k, moisture_indices.qi, rho, ncomp);
+            const Real p = getPgivenRTh(cons_arr(i,j,k,RhoTheta_comp), qv);
+            const Real tabs = getTgivenRandRTh(rho, cons_arr(i,j,k,RhoTheta_comp), qv);
+            const Real ql_np = qc + qi;
+            const Real exner = tabs / amrex::max(theta, 1.0e-12_rt);
+            // SHOC carries liquid-water potential temperature. E3SM's
+            // "inv_exner" is 1/exner, so theta = theta_l + Lv/Cp*q_l/exner.
+            const Real thetal = theta - (L_v / Cp_d) * ql_np / amrex::max(exner, 1.0e-12_rt);
+            const Real theta_v = theta * (1.0_rt + 0.61_rt * qv - ql_np);
+            const Real qke = cons_arr(i,j,k,RhoKE_comp) / rho;
 
-                zt_arr(ic,kk,0) = zc;
-                zi_arr(ic,kk,0) = zlo;
-                zi_arr(ic,kk+1,0) = zhi;
-                dz_arr(ic,kk,0) = dz;
-                p_mid_arr(ic,kk,0) = p;
-                rho_arr(ic,kk,0) = rho;
-                theta_arr(ic,kk,0) = theta;
-                exner_arr(ic,kk,0) = exner;
-                theta_v_arr(ic,kk,0) = theta_v;
-                thetal_arr(ic,kk,0) = thetal;
-                qv_arr(ic,kk,0) = qv;
-                qc_arr(ic,kk,0) = qc;
-                qi_arr(ic,kk,0) = qi;
-                qw_arr(ic,kk,0) = qv + qc + qi;
-                shoc_ql_arr(ic,kk,0) = ql_np;
-                tabs_arr(ic,kk,0) = tabs;
-                tke_arr(ic,kk,0) = qke;
-                dse_arr(ic,kk,0) = Cp_d * tabs + CONST_GRAV * zc;
+            zt_arr(ic,kk,0) = zc;
+            zi_arr(ic,kk,0) = zlo;
+            zi_arr(ic,kk+1,0) = zhi;
+            dz_arr(ic,kk,0) = dz;
+            p_mid_arr(ic,kk,0) = p;
+            rho_arr(ic,kk,0) = rho;
+            theta_arr(ic,kk,0) = theta;
+            exner_arr(ic,kk,0) = exner;
+            theta_v_arr(ic,kk,0) = theta_v;
+            thetal_arr(ic,kk,0) = thetal;
+            qv_arr(ic,kk,0) = qv;
+            qc_arr(ic,kk,0) = qc;
+            qi_arr(ic,kk,0) = qi;
+            qw_arr(ic,kk,0) = qv + qc + qi;
+            shoc_ql_arr(ic,kk,0) = ql_np;
+            tabs_arr(ic,kk,0) = tabs;
+            tke_arr(ic,kk,0) = qke;
+            dse_arr(ic,kk,0) = Cp_d * tabs + CONST_GRAV * zc;
 
-                ucol_arr(ic,kk,0) = 0.5 * (u_arr(i,j,k) + u_arr(i+1,j,k));
-                vcol_arr(ic,kk,0) = 0.5 * (v_arr(i,j,k) + v_arr(i,j+1,k));
-                wcol_arr(ic,kk,0) = 0.5 * (w_arr(i,j,k) + w_arr(i,j,k+1));
-            }
-
-            p_int_arr(ic,0,0) = p_mid_arr(ic,0,0);
-            for (int k = klo+1; k <= khi; ++k) {
-                const int kk = k - klo;
-                p_int_arr(ic,kk,0) = 0.5 * (p_mid_arr(ic,kk-1,0) + p_mid_arr(ic,kk,0));
-            }
-            p_int_arr(ic,col.layout.nlev,0) = p_mid_arr(ic,col.layout.nlev-1,0);
+            ucol_arr(ic,kk,0) = 0.5_rt * (u_arr(i,j,k) + u_arr(i+1,j,k));
+            vcol_arr(ic,kk,0) = 0.5_rt * (v_arr(i,j,k) + v_arr(i,j+1,k));
+            wcol_arr(ic,kk,0) = 0.5_rt * (w_arr(i,j,k) + w_arr(i,j,k+1));
         }
-    }
+
+        p_int_arr(ic,0,0) = p_mid_arr(ic,0,0);
+        for (int k = klo+1; k <= khi; ++k) {
+            const int kk = k - klo;
+            p_int_arr(ic,kk,0) = 0.5_rt * (p_mid_arr(ic,kk-1,0) + p_mid_arr(ic,kk,0));
+        }
+        p_int_arr(ic,layout.nlev,0) = p_mid_arr(ic,layout.nlev-1,0);
+    });
 }

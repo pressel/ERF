@@ -5,6 +5,7 @@
 
 #include <AMReX_FArrayBox.H>
 #include <AMReX_Geometry.H>
+#include <AMReX_GpuQualifiers.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_Vector.H>
 
@@ -217,11 +218,19 @@ validate_shoc_runtime_options (const ShocRuntimeOptions& opts)
                                      "erf.shoc.top_taper_min_factor must be in [0, 1]");
 }
 
-AMREX_FORCE_INLINE
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 bool
 shoc_valid_comp (int comp, int ncomp)
 {
     return comp >= 0 && comp < ncomp;
+}
+
+template <typename T>
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+T
+shoc_clamp (T value, T lo, T hi)
+{
+    return amrex::max(lo, amrex::min(value, hi));
 }
 
 #endif

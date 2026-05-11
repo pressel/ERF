@@ -8,6 +8,11 @@ class ShocEnergyFixer
 public:
     static int diagnose_active_top (const amrex::Vector<amrex::Real>& tke);
 
+    AMREX_GPU_HOST_DEVICE
+    static int diagnose_active_top (const amrex::Array4<const amrex::Real>& tke,
+                                    int ic,
+                                    int nlev);
+
     static void apply_column (const ShocColumnData& col,
                               int ic,
                               amrex::Real dt,
@@ -25,6 +30,11 @@ public:
                               const amrex::Vector<amrex::Real>& u_new,
                               const amrex::Vector<amrex::Real>& v_new,
                               const amrex::Vector<amrex::Real>& tke_new);
+
+    AMREX_GPU_HOST_DEVICE
+    static void apply_column_in_place (ShocColumnData& col,
+                                       int ic,
+                                       amrex::Real dt);
 };
 
 #endif

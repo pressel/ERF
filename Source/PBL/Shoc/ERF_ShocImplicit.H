@@ -18,10 +18,12 @@ public:
                                     int ic,
                                     amrex::Vector<amrex::Real>& rdp_zt);
 
+    AMREX_GPU_HOST_DEVICE
     static amrex::Real compute_temperature (amrex::Real thetal,
                                             amrex::Real ql,
                                             amrex::Real exner);
 
+    AMREX_GPU_HOST_DEVICE
     static amrex::Real compute_vapor (amrex::Real qw,
                                       amrex::Real ql);
 

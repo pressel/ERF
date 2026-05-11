@@ -12,20 +12,20 @@ namespace
     constexpr int k_shoc_vertical_diff_comp = EddyDiff::Mom_v;
     constexpr int k_shoc_vertical_diff_count = EddyDiff::Q_v - EddyDiff::Mom_v + 1;
 
-    AMREX_FORCE_INLINE
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
     {
         const Real denom = x1 - x0;
-        if (std::abs(denom) <= 1.0e-12_rt) {
+        if (amrex::Math::abs(denom) <= 1.0e-12_rt) {
             return 0.5_rt * (y0 + y1);
         }
         return y0 + (y1 - y0) * (x - x0) / denom;
     }
 
-    AMREX_FORCE_INLINE
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     int face_neighbor_cell (int idx, int domlo, int domhi, bool periodic)
     {
-        return periodic ? idx : std::clamp(idx, domlo, domhi);
+        return periodic ? idx : shoc_clamp(idx, domlo, domhi);
     }
 }
 
@@ -122,23 +122,24 @@ ShocDriver::seed_carried_turbulence (ShocColumnData& col,
     const auto host_diff = eddy_diffs.const_array(mfi);
     auto tk = col.tk.array();
     auto tkh = col.tkh.array();
+    const auto layout = col.layout;
+    const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-        for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-            const int ic = shoc_column_index(col.layout, i, j);
-            for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                const int k = col.layout.kmin + kk;
-                if (m_prev_turb_valid) {
-                    tk(ic,kk,0) = carried(i,j,k,0);
-                    tkh(ic,kk,0) = carried(i,j,k,1);
-                } else {
-                    const Real rho = std::max(rho_host(i,j,k,Rho_comp), 1.0e-12_rt);
-                    tk(ic,kk,0) = std::max(0.0_rt, host_diff(i,j,k,EddyDiff::Mom_v) / rho);
-                    tkh(ic,kk,0) = std::max(0.0_rt, host_diff(i,j,k,EddyDiff::Theta_v) / rho);
-                }
+    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+    {
+        const int ic = shoc_column_index(layout, i, j);
+        for (int kk = 0; kk < layout.nlev; ++kk) {
+            const int k = layout.kmin + kk;
+            if (m_prev_turb_valid) {
+                tk(ic,kk,0) = carried(i,j,k,0);
+                tkh(ic,kk,0) = carried(i,j,k,1);
+            } else {
+                const Real rho = amrex::max(rho_host(i,j,k,Rho_comp), 1.0e-12_rt);
+                tk(ic,kk,0) = amrex::max(0.0_rt, host_diff(i,j,k,EddyDiff::Mom_v) / rho);
+                tkh(ic,kk,0) = amrex::max(0.0_rt, host_diff(i,j,k,EddyDiff::Theta_v) / rho);
             }
         }
-    }
+    });
 }
 
 void
@@ -148,17 +149,18 @@ ShocDriver::store_carried_turbulence (const ShocColumnData& col,
     auto carried = m_prev_turb_cc.array(mfi);
     const auto tk = col.tk.const_array();
     const auto tkh = col.tkh.const_array();
+    const auto layout = col.layout;
+    const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-        for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-            const int ic = shoc_column_index(col.layout, i, j);
-            for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                const int k = col.layout.kmin + kk;
-                carried(i,j,k,0) = tk(ic,kk,0);
-                carried(i,j,k,1) = tkh(ic,kk,0);
-            }
+    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+    {
+        const int ic = shoc_column_index(layout, i, j);
+        for (int kk = 0; kk < layout.nlev; ++kk) {
+            const int k = layout.kmin + kk;
+            carried(i,j,k,0) = tk(ic,kk,0);
+            carried(i,j,k,1) = tkh(ic,kk,0);
         }
-    }
+    });
 }
 
 void
@@ -171,16 +173,17 @@ ShocDriver::seed_carried_buoyancy_flux (ShocColumnData& col,
 
     const auto carried = m_prev_wthv_sec_cc.const_array(mfi);
     auto wthv_sec = col.wthv_sec.array();
+    const auto layout = col.layout;
+    const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-        for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-            const int ic = shoc_column_index(col.layout, i, j);
-            for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                const int k = col.layout.kmin + kk;
-                wthv_sec(ic,kk,0) = carried(i,j,k,0);
-            }
+    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+    {
+        const int ic = shoc_column_index(layout, i, j);
+        for (int kk = 0; kk < layout.nlev; ++kk) {
+            const int k = layout.kmin + kk;
+            wthv_sec(ic,kk,0) = carried(i,j,k,0);
         }
-    }
+    });
 }
 
 void
@@ -189,16 +192,17 @@ ShocDriver::store_carried_buoyancy_flux (const ShocColumnData& col,
 {
     auto carried = m_prev_wthv_sec_cc.array(mfi);
     const auto wthv_sec = col.wthv_sec.const_array();
+    const auto layout = col.layout;
+    const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-        for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-            const int ic = shoc_column_index(col.layout, i, j);
-            for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                const int k = col.layout.kmin + kk;
-                carried(i,j,k,0) = wthv_sec(ic,kk,0);
-            }
+    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+    {
+        const int ic = shoc_column_index(layout, i, j);
+        for (int kk = 0; kk < layout.nlev; ++kk) {
+            const int k = layout.kmin + kk;
+            carried(i,j,k,0) = wthv_sec(ic,kk,0);
         }
-    }
+    });
 }
 
 void
@@ -309,64 +313,64 @@ ShocDriver::advance (MultiFab& cons,
         const auto col_tke_tend = col.tke_tend.const_array();
         const auto col_u_tend = col.u_tend.const_array();
         const auto col_v_tend = col.v_tend.const_array();
+        const auto layout = col.layout;
+        const Box xy_box = amrex::makeSlab(vbx, 2, layout.kmin);
+        ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+        {
+            const int ic = shoc_column_index(layout, i, j);
+            for (int kk = 0; kk < layout.nlev; ++kk) {
+                const int k = layout.kmin + kk;
+                const Real l = shoc_mix(ic,kk,0);
+                const Real km = tk(ic,kk,0);
+                const Real kh = tkh(ic,kk,0);
 
-        for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
-            for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
-                const int ic = shoc_column_index(col.layout, i, j);
-                for (int kk = 0; kk < col.layout.nlev; ++kk) {
-                    const int k = col.layout.kmin + kk;
-                    const Real l = shoc_mix(ic,kk,0);
-                    const Real km = tk(ic,kk,0);
-                    const Real kh = tkh(ic,kk,0);
+                tk_arr(i,j,k,EddyDiff::Mom_v) = rho(ic,kk,0) * km;
+                tk_arr(i,j,k,EddyDiff::Theta_v) = rho(ic,kk,0) * kh;
+                tk_arr(i,j,k,EddyDiff::KE_v) = rho(ic,kk,0) * kh;
+                tk_arr(i,j,k,EddyDiff::Scalar_v) = rho(ic,kk,0) * kh;
+                tk_arr(i,j,k,EddyDiff::Q_v) = rho(ic,kk,0) * kh;
+                tk_arr(i,j,k,EddyDiff::Turb_lengthscale) = l;
 
-                    tk_arr(i,j,k,EddyDiff::Mom_v) = rho(ic,kk,0) * km;
-                    tk_arr(i,j,k,EddyDiff::Theta_v) = rho(ic,kk,0) * kh;
-                    tk_arr(i,j,k,EddyDiff::KE_v) = rho(ic,kk,0) * kh;
-                    tk_arr(i,j,k,EddyDiff::Scalar_v) = rho(ic,kk,0) * kh;
-                    tk_arr(i,j,k,EddyDiff::Q_v) = rho(ic,kk,0) * kh;
-                    tk_arr(i,j,k,EddyDiff::Turb_lengthscale) = l;
-
-                    th_tend(i,j,k) = col_theta_tend(ic,kk,0);
-                    qv_tend(i,j,k) = col_qv_tend(ic,kk,0);
-                    qc_tend(i,j,k) = col_qc_tend(ic,kk,0);
-                    qi_tend(i,j,k) = col_qi_tend(ic,kk,0);
-                    tke_tend(i,j,k) = col_tke_tend(ic,kk,0);
-                    u_tend_cc(i,j,k) = col_u_tend(ic,kk,0);
-                    v_tend_cc(i,j,k) = col_v_tend(ic,kk,0);
-                    pblh_arr(i,j,k) = pblh(ic,0,0);
-                    shoc_cldfrac_arr(i,j,k) = shoc_cldfrac(ic,kk,0);
-                    shoc_ql_arr(i,j,k) = shoc_ql(ic,kk,0);
-                    shoc_ql2_arr(i,j,k) = shoc_ql2(ic,kk,0);
-                    shoc_cond_arr(i,j,k) = shoc_cond(ic,kk,0);
-                    w_sec_arr(i,j,k) = w_sec(ic,kk,0);
-                    wqls_sec_arr(i,j,k) = wqls_sec(ic,kk,0);
-                    wthv_sec_arr(i,j,k) = wthv_sec(ic,kk,0);
-                    brunt_arr(i,j,k) = brunt(ic,kk,0);
-                    isotropy_arr(i,j,k) = isotropy(ic,kk,0);
-                    thl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
-                                                                thl_sec(ic,kk,0), thl_sec(ic,kk+1,0),
-                                                                zt(ic,kk,0));
-                    qw_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
-                                                               qw_sec(ic,kk,0), qw_sec(ic,kk+1,0),
-                                                               zt(ic,kk,0));
-                    qwthl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
-                                                                  qwthl_sec(ic,kk,0), qwthl_sec(ic,kk+1,0),
-                                                                  zt(ic,kk,0));
-                    wthl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
-                                                                 wthl_sec(ic,kk,0), wthl_sec(ic,kk+1,0),
-                                                                 zt(ic,kk,0));
-                    wqw_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
-                                                                wqw_sec(ic,kk,0), wqw_sec(ic,kk+1,0),
-                                                                zt(ic,kk,0));
-                    w3_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
-                                                           w3(ic,kk,0), w3(ic,kk+1,0),
+                th_tend(i,j,k) = col_theta_tend(ic,kk,0);
+                qv_tend(i,j,k) = col_qv_tend(ic,kk,0);
+                qc_tend(i,j,k) = col_qc_tend(ic,kk,0);
+                qi_tend(i,j,k) = col_qi_tend(ic,kk,0);
+                tke_tend(i,j,k) = col_tke_tend(ic,kk,0);
+                u_tend_cc(i,j,k) = col_u_tend(ic,kk,0);
+                v_tend_cc(i,j,k) = col_v_tend(ic,kk,0);
+                pblh_arr(i,j,k) = pblh(ic,0,0);
+                shoc_cldfrac_arr(i,j,k) = shoc_cldfrac(ic,kk,0);
+                shoc_ql_arr(i,j,k) = shoc_ql(ic,kk,0);
+                shoc_ql2_arr(i,j,k) = shoc_ql2(ic,kk,0);
+                shoc_cond_arr(i,j,k) = shoc_cond(ic,kk,0);
+                w_sec_arr(i,j,k) = w_sec(ic,kk,0);
+                wqls_sec_arr(i,j,k) = wqls_sec(ic,kk,0);
+                wthv_sec_arr(i,j,k) = wthv_sec(ic,kk,0);
+                brunt_arr(i,j,k) = brunt(ic,kk,0);
+                isotropy_arr(i,j,k) = isotropy(ic,kk,0);
+                thl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
+                                                            thl_sec(ic,kk,0), thl_sec(ic,kk+1,0),
+                                                            zt(ic,kk,0));
+                qw_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
+                                                           qw_sec(ic,kk,0), qw_sec(ic,kk+1,0),
                                                            zt(ic,kk,0));
-                    shear_prod_arr(i,j,k) = shear_prod(ic,kk,0);
-                    buoy_prod_arr(i,j,k) = buoy_prod(ic,kk,0);
-                    diss_tke_arr(i,j,k) = diss_tke(ic,kk,0);
-                }
+                qwthl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
+                                                              qwthl_sec(ic,kk,0), qwthl_sec(ic,kk+1,0),
+                                                              zt(ic,kk,0));
+                wthl_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
+                                                             wthl_sec(ic,kk,0), wthl_sec(ic,kk+1,0),
+                                                             zt(ic,kk,0));
+                wqw_sec_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
+                                                            wqw_sec(ic,kk,0), wqw_sec(ic,kk+1,0),
+                                                            zt(ic,kk,0));
+                w3_arr(i,j,k) = weighted_linear_interp(zi(ic,kk,0), zi(ic,kk+1,0),
+                                                       w3(ic,kk,0), w3(ic,kk+1,0),
+                                                       zt(ic,kk,0));
+                shear_prod_arr(i,j,k) = shear_prod(ic,kk,0);
+                buoy_prod_arr(i,j,k) = buoy_prod(ic,kk,0);
+                diss_tke_arr(i,j,k) = diss_tke(ic,kk,0);
             }
-        }
+        });
 
     }
 
@@ -390,25 +394,19 @@ ShocDriver::advance (MultiFab& cons,
         auto u_fc = m_u_tend_fc.array(mfi);
         auto v_fc = m_v_tend_fc.array(mfi);
 
-        for (int k = xface_bx.smallEnd(2); k <= xface_bx.bigEnd(2); ++k) {
-            for (int j = xface_bx.smallEnd(1); j <= xface_bx.bigEnd(1); ++j) {
-                for (int i = xface_bx.smallEnd(0); i <= xface_bx.bigEnd(0); ++i) {
-                    const int il = face_neighbor_cell(i - 1, ilo, ihi, xper);
-                    const int ir = face_neighbor_cell(i,     ilo, ihi, xper);
-                    u_fc(i,j,k) = 0.5 * (u_cc(il,j,k) + u_cc(ir,j,k));
-                }
-            }
-        }
+        ParallelFor(xface_bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            const int il = face_neighbor_cell(i - 1, ilo, ihi, xper);
+            const int ir = face_neighbor_cell(i,     ilo, ihi, xper);
+            u_fc(i,j,k) = 0.5_rt * (u_cc(il,j,k) + u_cc(ir,j,k));
+        });
 
-        for (int k = yface_bx.smallEnd(2); k <= yface_bx.bigEnd(2); ++k) {
-            for (int j = yface_bx.smallEnd(1); j <= yface_bx.bigEnd(1); ++j) {
-                for (int i = yface_bx.smallEnd(0); i <= yface_bx.bigEnd(0); ++i) {
-                    const int jb = face_neighbor_cell(j - 1, jlo, jhi, yper);
-                    const int jt = face_neighbor_cell(j,     jlo, jhi, yper);
-                    v_fc(i,j,k) = 0.5 * (v_cc(i,jb,k) + v_cc(i,jt,k));
-                }
-            }
-        }
+        ParallelFor(yface_bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            const int jb = face_neighbor_cell(j - 1, jlo, jhi, yper);
+            const int jt = face_neighbor_cell(j,     jlo, jhi, yper);
+            v_fc(i,j,k) = 0.5_rt * (v_cc(i,jb,k) + v_cc(i,jt,k));
+        });
     }
 
     m_prev_turb_valid = true;

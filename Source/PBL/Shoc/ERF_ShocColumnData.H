@@ -3,6 +3,7 @@
 
 #include "ERF_ShocTypes.H"
 
+#include <AMReX_Arena.H>
 #include <AMReX_Box.H>
 
 inline ShocColumnLayout
@@ -32,9 +33,9 @@ define_shoc_column_data (ShocColumnData& col, const ShocColumnLayout& layout)
     const amrex::Box scal_box(amrex::IntVect(0,0,0),
                               amrex::IntVect(layout.ncell-1, 0, 0));
 
-    auto make2 = [&] (amrex::FArrayBox& fab) { fab.resize(cell_box, 1); };
-    auto make2i = [&] (amrex::FArrayBox& fab) { fab.resize(iface_box, 1); };
-    auto make1 = [&] (amrex::FArrayBox& fab) { fab.resize(scal_box, 1); };
+    auto make2 = [&] (amrex::FArrayBox& fab) { fab.resize(cell_box, 1, amrex::The_Async_Arena()); };
+    auto make2i = [&] (amrex::FArrayBox& fab) { fab.resize(iface_box, 1, amrex::The_Async_Arena()); };
+    auto make1 = [&] (amrex::FArrayBox& fab) { fab.resize(scal_box, 1, amrex::The_Async_Arena()); };
 
     make2(col.zt); make2i(col.zi); make2(col.dz); make2(col.p_mid); make2i(col.p_int);
     make2(col.rho); make2(col.theta); make2(col.exner); make2(col.theta_v); make2(col.thetal);
@@ -65,11 +66,12 @@ define_shoc_column_data (ShocColumnData& col, const ShocColumnLayout& layout)
                                   &col.theta_tend,
                                   &col.qv_tend,&col.qc_tend,&col.qi_tend,&col.u_tend,&col.v_tend,&col.tke_tend,
                                   &col.surf_sens_flux,&col.surf_lat_flux,&col.surf_tau_u,&col.surf_tau_v}) {
-        fab->setVal<amrex::RunOn::Host>(0.0);
+        fab->setVal(0.0);
     }
 }
 
-inline int
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+int
 shoc_column_index (const ShocColumnLayout& layout, int i, int j)
 {
     return (j - layout.jmin) * layout.nx + (i - layout.imin);

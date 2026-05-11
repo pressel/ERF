@@ -2,6 +2,7 @@
 
 #include "ERF_Constants.H"
 #include "ERF_ShocEnergyFixer.H"
+#include "ERF_SolveTridiag.H"
 
 #include <algorithm>
 #include <cmath>
@@ -21,16 +22,17 @@ namespace
     constexpr Real k_shoc_lat_ice = 3.34e5;
     constexpr Real k_shoc_freezing_temp = 273.15;
 
-    AMREX_FORCE_INLINE
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
     {
         const Real denom = x1 - x0;
-        if (std::abs(denom) <= 1.0e-12) {
-            return 0.5 * (y0 + y1);
+        if (amrex::Math::abs(denom) <= 1.0e-12_rt) {
+            return 0.5_rt * (y0 + y1);
         }
         return y0 + (y1 - y0) * (x - x0) / denom;
     }
 
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     void reconstruct_moisture_from_pdf_and_mean_state (Real thetal,
                                                        Real qw,
                                                        Real exner,
@@ -41,13 +43,14 @@ namespace
                                                        Real& qc,
                                                        Real& qi)
     {
-        const Real ql_total = std::clamp(pdf_ql, 0.0_rt, std::max(0.0_rt, qw));
-        tabs = ShocImplicit::compute_temperature(thetal, ql_total, exner);
+        const Real ql_total = shoc_clamp(pdf_ql, 0.0_rt, amrex::max(0.0_rt, qw));
+        tabs = amrex::max(k_shoc_min_temp,
+                          thetal * amrex::max(exner, 1.0e-12_rt) + (L_v / Cp_d) * ql_total);
 
-        const bool use_ice = (tabs < k_shoc_freezing_temp && qi_seed > 0.0);
+        const bool use_ice = (tabs < k_shoc_freezing_temp && qi_seed > 0.0_rt);
         qc = use_ice ? 0.0_rt : ql_total;
         qi = use_ice ? ql_total : 0.0_rt;
-        qv = ShocImplicit::compute_vapor(qw, ql_total);
+        qv = amrex::max(0.0_rt, qw - amrex::max(0.0_rt, ql_total));
     }
 
     void interpolate_cc_to_iface (const ShocColumnData& col,
@@ -58,41 +61,44 @@ namespace
         const auto zi = col.zi.const_array();
         const auto in = cc_in.const_array();
         auto out = iface_out.array();
-
-        for (int ic = 0; ic < col.layout.ncell; ++ic) {
-            if (col.layout.nlev == 1) {
+        const auto layout = col.layout;
+        const Box col_box(IntVect(0,0,0), IntVect(layout.ncell - 1, 0, 0));
+        ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
+        {
+            if (layout.nlev == 1) {
                 out(ic,0,0) = in(ic,0,0);
                 out(ic,1,0) = in(ic,0,0);
-                continue;
+                return;
             }
 
             out(ic,0,0) = weighted_linear_interp(zt(ic,0,0), zt(ic,1,0),
                                                  in(ic,0,0), in(ic,1,0),
                                                  zi(ic,0,0));
-            for (int k = 1; k < col.layout.nlev; ++k) {
+            for (int k = 1; k < layout.nlev; ++k) {
                 out(ic,k,0) = weighted_linear_interp(zt(ic,k-1,0), zt(ic,k,0),
                                                      in(ic,k-1,0), in(ic,k,0),
                                                      zi(ic,k,0));
             }
-            out(ic,col.layout.nlev,0) =
-                weighted_linear_interp(zt(ic,col.layout.nlev-2,0), zt(ic,col.layout.nlev-1,0),
-                                       in(ic,col.layout.nlev-2,0), in(ic,col.layout.nlev-1,0),
-                                       zi(ic,col.layout.nlev,0));
-        }
+            out(ic,layout.nlev,0) =
+                weighted_linear_interp(zt(ic,layout.nlev-2,0), zt(ic,layout.nlev-1,0),
+                                       in(ic,layout.nlev-2,0), in(ic,layout.nlev-1,0),
+                                       zi(ic,layout.nlev,0));
+        });
     }
 
-    AMREX_FORCE_INLINE
-    Real interface_spacing (const ShocColumnData& col, int ic, int k)
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    Real interface_spacing (const Array4<const Real>& zt,
+                            const Array4<const Real>& zi,
+                            const ShocColumnLayout& layout,
+                            int ic, int k)
     {
-        const auto zt = col.zt.const_array();
-        const auto zi = col.zi.const_array();
         if (k <= 0) {
-            return std::max(zt(ic,0,0) - zi(ic,0,0), 1.0e-12);
+            return amrex::max(zt(ic,0,0) - zi(ic,0,0), 1.0e-12_rt);
         }
-        if (k >= col.layout.nlev) {
-            return std::max(zi(ic,col.layout.nlev,0) - zt(ic,col.layout.nlev-1,0), 1.0e-12);
+        if (k >= layout.nlev) {
+            return amrex::max(zi(ic,layout.nlev,0) - zt(ic,layout.nlev-1,0), 1.0e-12_rt);
         }
-        return std::max(zt(ic,k,0) - zt(ic,k-1,0), 1.0e-12);
+        return amrex::max(zt(ic,k,0) - zt(ic,k-1,0), 1.0e-12_rt);
     }
 
     void setup_tridiagonal (int nlev,
@@ -177,18 +183,18 @@ ShocImplicit::cache_baseline_state (ShocColumnData& col)
     auto v_base = col.v_base.array();
     auto tke_base = col.tke_base_state.array();
 
-    for (int ic = 0; ic < col.layout.ncell; ++ic) {
-        for (int k = 0; k < col.layout.nlev; ++k) {
-            thetal_base(ic,k,0) = thetal(ic,k,0);
-            theta_base(ic,k,0) = theta(ic,k,0);
-            qv_base(ic,k,0) = qv(ic,k,0);
-            qc_base(ic,k,0) = qc(ic,k,0);
-            qi_base(ic,k,0) = qi(ic,k,0);
-            u_base(ic,k,0) = u(ic,k,0);
-            v_base(ic,k,0) = v(ic,k,0);
-            tke_base(ic,k,0) = tke(ic,k,0);
-        }
-    }
+    const Box cell_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, col.layout.nlev - 1, 0));
+    ParallelFor(cell_box, [=] AMREX_GPU_DEVICE (int ic, int k, int) noexcept
+    {
+        thetal_base(ic,k,0) = thetal(ic,k,0);
+        theta_base(ic,k,0) = theta(ic,k,0);
+        qv_base(ic,k,0) = qv(ic,k,0);
+        qc_base(ic,k,0) = qc(ic,k,0);
+        qi_base(ic,k,0) = qi(ic,k,0);
+        u_base(ic,k,0) = u(ic,k,0);
+        v_base(ic,k,0) = v(ic,k,0);
+        tke_base(ic,k,0) = tke(ic,k,0);
+    });
 }
 
 void
@@ -199,9 +205,12 @@ ShocImplicit::compute_tmpi (const ShocColumnData& col,
     Vector<Real>& tmpi)
 {
     tmpi.assign(col.layout.nlev + 1, 0.0);
+    const auto zt = col.zt.const_array();
+    const auto zi = col.zi.const_array();
+    const auto layout = col.layout;
     for (int k = 0; k <= col.layout.nlev; ++k) {
         tmpi[k] = dt * CONST_GRAV * std::max(rho_zi[k], 1.0e-12) /
-                  interface_spacing(col, ic, k);
+                  interface_spacing(zt, zi, layout, ic, k);
     }
 }
 
@@ -218,6 +227,7 @@ ShocImplicit::compute_dp_inverse (const ShocColumnData& col,
     }
 }
 
+AMREX_GPU_HOST_DEVICE
 Real
 ShocImplicit::compute_temperature (Real thetal,
                                    Real ql,
@@ -227,6 +237,7 @@ ShocImplicit::compute_temperature (Real thetal,
                     thetal * std::max(exner, 1.0e-12) + (L_v / Cp_d) * ql);
 }
 
+AMREX_GPU_HOST_DEVICE
 Real
 ShocImplicit::compute_vapor (Real qw,
                              Real ql)
@@ -248,9 +259,18 @@ ShocImplicit::advance_implicit_state (ShocColumnData& col,
     }
 
     const Box iface_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, nlev, 0));
-    FArrayBox rho_zi_fab(iface_box, 1);
-    FArrayBox tk_zi_fab(iface_box, 1);
-    FArrayBox tkh_zi_fab(iface_box, 1);
+    const Box tri_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, 0, nlev - 1));
+    FArrayBox rho_zi_fab(iface_box, 1, The_Async_Arena());
+    FArrayBox tk_zi_fab(iface_box, 1, The_Async_Arena());
+    FArrayBox tkh_zi_fab(iface_box, 1, The_Async_Arena());
+    FArrayBox tmpi_fab(iface_box, 1, The_Async_Arena());
+    FArrayBox rdp_zt_fab(Box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, nlev - 1, 0)), 1, The_Async_Arena());
+    FArrayBox rhs_fab(tri_box, 1, The_Async_Arena());
+    FArrayBox soln_fab(tri_box, 1, The_Async_Arena());
+    FArrayBox coeffA_fab(tri_box, 1, The_Async_Arena());
+    FArrayBox coeffB_fab(tri_box, 1, The_Async_Arena());
+    FArrayBox inv_coeffB_fab(tri_box, 1, The_Async_Arena());
+    FArrayBox coeffC_fab(tri_box, 1, The_Async_Arena());
 
     interpolate_cc_to_iface(col, col.rho, rho_zi_fab);
     interpolate_cc_to_iface(col, col.tk, tk_zi_fab);
@@ -266,91 +286,114 @@ ShocImplicit::advance_implicit_state (ShocColumnData& col,
     const auto surf_tau_v = col.surf_tau_v.const_array();
     const auto surf_sens_flux = col.surf_sens_flux.const_array();
     const auto surf_lat_flux = col.surf_lat_flux.const_array();
+    const auto rho = col.rho.const_array();
+    const auto dz = col.dz.const_array();
+    const auto zt = col.zt.const_array();
+    const auto zi = col.zi.const_array();
     const auto rho_zi = rho_zi_fab.const_array();
     const auto tk_zi = tk_zi_fab.const_array();
     const auto tkh_zi = tkh_zi_fab.const_array();
-    const auto explicit_tke_delta = col.tke_tend.const_array();
+    const auto layout = col.layout;
+    auto tmpi = tmpi_fab.array();
+    auto rdp_zt = rdp_zt_fab.array();
+    auto rhs = rhs_fab.array();
+    auto soln = soln_fab.array();
+    auto coeffA = coeffA_fab.array();
+    auto coeffB = coeffB_fab.array();
+    auto inv_coeffB = inv_coeffB_fab.array();
+    auto coeffC = coeffC_fab.array();
 
-    for (int ic = 0; ic < col.layout.ncell; ++ic) {
-        Vector<Real> rho_zi_col(nlev + 1, 0.0);
+    const Box col_box(IntVect(0,0,0), IntVect(layout.ncell - 1, 0, 0));
+    ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
+    {
         for (int k = 0; k <= nlev; ++k) {
-            rho_zi_col[k] = std::max(rho_zi(ic,k,0), 1.0e-12);
-        }
-        Vector<Real> rdp_zt;
-        Vector<Real> tmpi;
-        compute_dp_inverse(col, ic, rdp_zt);
-        compute_tmpi(col, ic, dt, rho_zi_col, tmpi);
-
-        Vector<Real> thl_rhs(nlev, 0.0);
-        Vector<Real> qw_rhs(nlev, 0.0);
-        Vector<Real> tke_rhs(nlev, 0.0);
-        Vector<Real> u_rhs(nlev, 0.0);
-        Vector<Real> v_rhs(nlev, 0.0);
-        Vector<Real> tke_new(nlev, 0.0);
-        Vector<Real> tk_zi_col(nlev + 1, 0.0);
-        Vector<Real> tkh_zi_col(nlev + 1, 0.0);
-
-        for (int k = 0; k <= nlev; ++k) {
-            tk_zi_col[k] = std::max(0.0, tk_zi(ic,k,0));
-            tkh_zi_col[k] = std::max(0.0, tkh_zi(ic,k,0));
-        }
-
-        for (int k = 0; k < nlev; ++k) {
-            thl_rhs[k] = thetal(ic,k,0);
-            qw_rhs[k] = qw(ic,k,0);
-            tke_rhs[k] = std::clamp(tke(ic,k,0), k_shoc_min_tke, k_shoc_max_tke);
-            u_rhs[k] = u(ic,k,0);
-            v_rhs[k] = v(ic,k,0);
+            tmpi(ic,k,0) = dt * CONST_GRAV * amrex::max(rho_zi(ic,k,0), 1.0e-12_rt) /
+                           interface_spacing(zt, zi, layout, ic, k);
+            if (k < nlev) {
+                rdp_zt(ic,k,0) = 1.0_rt / amrex::max(CONST_GRAV * rho(ic,k,0) * dz(ic,k,0), 1.0e-12_rt);
+            }
         }
 
         // E3SM: cmnfac = dtime * g * rho_zi(nlevi-1) * rdp_zt(nlev-1)
         // The tmpi array includes a 1/dz_zi interface-spacing factor that
         // belongs only in the tridiagonal diffusion matrix, NOT in the
-        // explicit surface-flux injection.  Using tmpi[0]*rdp_zt[0] here
-        // previously introduced an extra 1/dz_half that weakened the
-        // surface fluxes by ~dz/2.
-        const Real cmnfac = dt * CONST_GRAV * rho_zi_col[0] * rdp_zt[0];
-        thl_rhs[0] += cmnfac * surf_sens_flux(ic,0,0);
-        qw_rhs[0] += cmnfac * surf_lat_flux(ic,0,0);
+        // explicit surface-flux injection.
+        const Real cmnfac = dt * CONST_GRAV * amrex::max(rho_zi(ic,0,0), 1.0e-12_rt) * rdp_zt(ic,0,0);
 
         const Real uw_sfc = surf_tau_u(ic,0,0);
         const Real vw_sfc = surf_tau_v(ic,0,0);
         const Real stress_mag = std::sqrt(uw_sfc * uw_sfc + vw_sfc * vw_sfc);
-        Real ksrf = 0.0;
-        Real wtke_sfc = 0.0;
-        if (stress_mag > 1.0e-12) {
-            const Real ws = std::max(std::sqrt(u_rhs[0] * u_rhs[0] + v_rhs[0] * v_rhs[0]), k_shoc_u_ws_min);
-            const Real tau = std::sqrt(std::pow(rho_zi_col[0] * uw_sfc, 2) +
-                                       std::pow(rho_zi_col[0] * vw_sfc, 2));
-            ksrf = std::max(tau / ws, k_shoc_ksrf_min);
-            const Real ustar = std::max(std::sqrt(stress_mag), k_shoc_ustar_min);
+        Real ksrf = 0.0_rt;
+        Real wtke_sfc = 0.0_rt;
+        if (stress_mag > 1.0e-12_rt) {
+            const Real ws = amrex::max(std::sqrt(u(ic,0,0) * u(ic,0,0) + v(ic,0,0) * v(ic,0,0)), k_shoc_u_ws_min);
+            const Real tau = std::sqrt(std::pow(amrex::max(rho_zi(ic,0,0), 1.0e-12_rt) * uw_sfc, 2) +
+                                       std::pow(amrex::max(rho_zi(ic,0,0), 1.0e-12_rt) * vw_sfc, 2));
+            ksrf = amrex::max(tau / ws, k_shoc_ksrf_min);
+            const Real ustar = amrex::max(std::sqrt(stress_mag), k_shoc_ustar_min);
             wtke_sfc = ustar * ustar * ustar;
         }
-        tke_rhs[0] += cmnfac * wtke_sfc;
-
-        Vector<Real> dl, d, du;
-        setup_tridiagonal(nlev, tk_zi_col, tmpi, rdp_zt, dt, ksrf, dl, d, du);
-        solve_tridiagonal(dl, d, du, u_rhs);
-        solve_tridiagonal(dl, d, du, v_rhs);
-
-        setup_tridiagonal(nlev, tkh_zi_col, tmpi, rdp_zt, dt, 0.0, dl, d, du);
-        solve_tridiagonal(dl, d, du, thl_rhs);
-        solve_tridiagonal(dl, d, du, qw_rhs);
-        solve_tridiagonal(dl, d, du, tke_rhs);
 
         for (int k = 0; k < nlev; ++k) {
-            const Real tke_new_loc = std::clamp(tke_rhs[k], k_shoc_min_tke, k_shoc_max_tke);
-            tke_new[k] = tke_new_loc;
+            rhs(ic,0,k) = u(ic,k,0);
+            coeffA(ic,0,k) = (k > 0) ? -tk_zi(ic,k,0) * tmpi(ic,k,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffC(ic,0,k) = (k < nlev - 1) ? -tk_zi(ic,k+1,0) * tmpi(ic,k+1,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffB(ic,0,k) = 1.0_rt - coeffA(ic,0,k) - coeffC(ic,0,k);
+        }
+        coeffB(ic,0,0) += ksrf * dt * CONST_GRAV * rdp_zt(ic,0,0);
+        SolveTridiag(ic, 0, 0, nlev - 1, soln, coeffA, coeffB, inv_coeffB, coeffC, rhs);
+        for (int k = 0; k < nlev; ++k) {
+            u(ic,k,0) = soln(ic,0,k);
         }
 
         for (int k = 0; k < nlev; ++k) {
-            thetal(ic,k,0) = thl_rhs[k];
-            qw(ic,k,0) = std::max(qw_rhs[k], k_shoc_min_qw);
-            tke(ic,k,0) = tke_new[k];
-            u(ic,k,0) = u_rhs[k];
-            v(ic,k,0) = v_rhs[k];
+            rhs(ic,0,k) = v(ic,k,0);
+            coeffA(ic,0,k) = (k > 0) ? -tk_zi(ic,k,0) * tmpi(ic,k,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffC(ic,0,k) = (k < nlev - 1) ? -tk_zi(ic,k+1,0) * tmpi(ic,k+1,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffB(ic,0,k) = 1.0_rt - coeffA(ic,0,k) - coeffC(ic,0,k);
         }
-    }
+        coeffB(ic,0,0) += ksrf * dt * CONST_GRAV * rdp_zt(ic,0,0);
+        SolveTridiag(ic, 0, 0, nlev - 1, soln, coeffA, coeffB, inv_coeffB, coeffC, rhs);
+        for (int k = 0; k < nlev; ++k) {
+            v(ic,k,0) = soln(ic,0,k);
+        }
+
+        for (int k = 0; k < nlev; ++k) {
+            rhs(ic,0,k) = thetal(ic,k,0);
+            coeffA(ic,0,k) = (k > 0) ? -tkh_zi(ic,k,0) * tmpi(ic,k,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffC(ic,0,k) = (k < nlev - 1) ? -tkh_zi(ic,k+1,0) * tmpi(ic,k+1,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffB(ic,0,k) = 1.0_rt - coeffA(ic,0,k) - coeffC(ic,0,k);
+        }
+        rhs(ic,0,0) += cmnfac * surf_sens_flux(ic,0,0);
+        SolveTridiag(ic, 0, 0, nlev - 1, soln, coeffA, coeffB, inv_coeffB, coeffC, rhs);
+        for (int k = 0; k < nlev; ++k) {
+            thetal(ic,k,0) = soln(ic,0,k);
+        }
+
+        for (int k = 0; k < nlev; ++k) {
+            rhs(ic,0,k) = qw(ic,k,0);
+            coeffA(ic,0,k) = (k > 0) ? -tkh_zi(ic,k,0) * tmpi(ic,k,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffC(ic,0,k) = (k < nlev - 1) ? -tkh_zi(ic,k+1,0) * tmpi(ic,k+1,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffB(ic,0,k) = 1.0_rt - coeffA(ic,0,k) - coeffC(ic,0,k);
+        }
+        rhs(ic,0,0) += cmnfac * surf_lat_flux(ic,0,0);
+        SolveTridiag(ic, 0, 0, nlev - 1, soln, coeffA, coeffB, inv_coeffB, coeffC, rhs);
+        for (int k = 0; k < nlev; ++k) {
+            qw(ic,k,0) = amrex::max(soln(ic,0,k), k_shoc_min_qw);
+        }
+
+        for (int k = 0; k < nlev; ++k) {
+            rhs(ic,0,k) = shoc_clamp(tke(ic,k,0), k_shoc_min_tke, k_shoc_max_tke);
+            coeffA(ic,0,k) = (k > 0) ? -tkh_zi(ic,k,0) * tmpi(ic,k,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffC(ic,0,k) = (k < nlev - 1) ? -tkh_zi(ic,k+1,0) * tmpi(ic,k+1,0) * rdp_zt(ic,k,0) : 0.0_rt;
+            coeffB(ic,0,k) = 1.0_rt - coeffA(ic,0,k) - coeffC(ic,0,k);
+        }
+        rhs(ic,0,0) += cmnfac * wtke_sfc;
+        SolveTridiag(ic, 0, 0, nlev - 1, soln, coeffA, coeffB, inv_coeffB, coeffC, rhs);
+        for (int k = 0; k < nlev; ++k) {
+            tke(ic,k,0) = shoc_clamp(soln(ic,0,k), k_shoc_min_tke, k_shoc_max_tke);
+        }
+    });
 }
 
 void
@@ -398,86 +441,106 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
     const auto u_base = col.u_base.const_array();
     const auto v_base = col.v_base.const_array();
     const auto tke_base = col.tke_base_state.const_array();
+    const auto rho = col.rho.const_array();
+    const auto dz = col.dz.const_array();
+    const auto surf_sens_flux = col.surf_sens_flux.const_array();
+    const auto surf_lat_flux = col.surf_lat_flux.const_array();
+    const Box col_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, 0, 0));
 
-    for (int ic = 0; ic < col.layout.ncell; ++ic) {
-        Vector<Real> thl_old(nlev, 0.0);
-        Vector<Real> qv_old(nlev, 0.0);
-        Vector<Real> qc_old(nlev, 0.0);
-        Vector<Real> qi_old(nlev, 0.0);
-        Vector<Real> u_old(nlev, 0.0);
-        Vector<Real> v_old(nlev, 0.0);
-        Vector<Real> tke_old(nlev, 0.0);
-        Vector<Real> thl_new(nlev, 0.0);
-        Vector<Real> qv_new(nlev, 0.0);
-        Vector<Real> qc_new(nlev, 0.0);
-        Vector<Real> qi_new(nlev, 0.0);
-        Vector<Real> u_new(nlev, 0.0);
-        Vector<Real> v_new(nlev, 0.0);
-        Vector<Real> tke_new(nlev, 0.0);
-
-        for (int k = 0; k < nlev; ++k) {
-            thl_old[k] = thetal_base(ic,k,0);
-            qv_old[k] = qv_base(ic,k,0);
-            qc_old[k] = qc_base(ic,k,0);
-            qi_old[k] = qi_base(ic,k,0);
-            u_old[k] = u_base(ic,k,0);
-            v_old[k] = v_base(ic,k,0);
-            tke_old[k] = tke_base(ic,k,0);
-
-            thl_new[k] = thetal(ic,k,0);
-            u_new[k] = u(ic,k,0);
-            v_new[k] = v(ic,k,0);
-            tke_new[k] = tke(ic,k,0);
-
-            const Real qw_new_loc = std::max(qw(ic,k,0), k_shoc_min_qw);
-            const Real pdf_ql = std::clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
-            Real tabs_new = 0.0;
-            reconstruct_moisture_from_pdf_and_mean_state(thl_new[k], qw_new_loc,
-                                                         exner(ic,k,0), qi_old[k], pdf_ql,
-                                                         tabs_new, qv_new[k], qc_new[k], qi_new[k]);
+    ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
+    {
+        int shoc_top = -1;
+        for (int k = nlev - 1; k >= 0; --k) {
+            if (tke(ic,k,0) > k_shoc_min_tke) {
+                shoc_top = k;
+                break;
+            }
         }
 
-        ShocEnergyFixer::apply_column(col, ic, dt,
-                                      thl_old, qv_old, qc_old, qi_old,
-                                      u_old, v_old, tke_old,
-                                      thl_new, qv_new, qc_new, qi_new,
-                                      u_new, v_new, tke_new);
+        if (shoc_top >= 0) {
+            Real energy_before = 0.0_rt;
+            Real energy_after = 0.0_rt;
+            Real air_mass = 0.0_rt;
+
+            for (int k = 0; k <= shoc_top; ++k) {
+                const Real mass = rho(ic,k,0) * dz(ic,k,0);
+                const Real tabs_old = compute_temperature(thetal_base(ic,k,0),
+                                                          qc_base(ic,k,0) + qi_base(ic,k,0),
+                                                          exner(ic,k,0));
+
+                const Real qw_new_loc = amrex::max(qw(ic,k,0), k_shoc_min_qw);
+                const Real pdf_ql = shoc_clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
+                Real tabs_new = 0.0_rt;
+                Real qv_new_loc = 0.0_rt;
+                Real qc_new_loc = 0.0_rt;
+                Real qi_new_loc = 0.0_rt;
+                reconstruct_moisture_from_pdf_and_mean_state(thetal(ic,k,0), qw_new_loc,
+                                                             exner(ic,k,0), qi_base(ic,k,0), pdf_ql,
+                                                             tabs_new, qv_new_loc, qc_new_loc, qi_new_loc);
+
+                const Real ql_old = amrex::max(0.0_rt, qc_base(ic,k,0) + qi_base(ic,k,0));
+                const Real ql_new = amrex::max(0.0_rt, qc_new_loc + qi_new_loc);
+                energy_before += mass * (Cp_d * tabs_old
+                                         + CONST_GRAV * zt(ic,k,0)
+                                         + 0.5_rt * (u_base(ic,k,0) * u_base(ic,k,0) +
+                                                     v_base(ic,k,0) * v_base(ic,k,0))
+                                         + tke_base(ic,k,0)
+                                         + (L_v + k_shoc_lat_ice) * qv_base(ic,k,0)
+                                         + k_shoc_lat_ice * ql_old);
+                energy_after += mass * (Cp_d * tabs_new
+                                        + CONST_GRAV * zt(ic,k,0)
+                                        + 0.5_rt * (u(ic,k,0) * u(ic,k,0) +
+                                                    v(ic,k,0) * v(ic,k,0))
+                                        + tke(ic,k,0)
+                                        + (L_v + k_shoc_lat_ice) * qv_new_loc
+                                        + k_shoc_lat_ice * ql_new);
+                air_mass += mass;
+            }
+
+            if (air_mass > 0.0_rt) {
+                const Real latent_flux_coeff = L_v + k_shoc_lat_ice;
+                const Real energy_target = energy_before
+                                         + dt * rho(ic,0,0)
+                                         * (Cp_d * exner(ic,0,0) * surf_sens_flux(ic,0,0)
+                                            + latent_flux_coeff * surf_lat_flux(ic,0,0));
+                const Real delta_tabs = (energy_target - energy_after) / (Cp_d * air_mass);
+                for (int k = 0; k <= shoc_top; ++k) {
+                    thetal(ic,k,0) += delta_tabs / amrex::max(exner(ic,k,0), 1.0e-12_rt);
+                }
+            }
+        }
 
         for (int k = 0; k < nlev; ++k) {
-            const Real qw_new_loc = std::max(qw(ic,k,0), k_shoc_min_qw);
-            const Real pdf_ql = std::clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
-            Real tabs_new = 0.0;
-            Real qv_new_loc = 0.0;
-            Real qc_new_loc = 0.0;
-            Real qi_new_loc = 0.0;
-            reconstruct_moisture_from_pdf_and_mean_state(thl_new[k], qw_new_loc,
-                                                         exner(ic,k,0), qi_old[k], pdf_ql,
+            const Real qw_new_loc = amrex::max(qw(ic,k,0), k_shoc_min_qw);
+            const Real pdf_ql = shoc_clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
+            Real tabs_new = 0.0_rt;
+            Real qv_new_loc = 0.0_rt;
+            Real qc_new_loc = 0.0_rt;
+            Real qi_new_loc = 0.0_rt;
+            reconstruct_moisture_from_pdf_and_mean_state(thetal(ic,k,0), qw_new_loc,
+                                                         exner(ic,k,0), qi_base(ic,k,0), pdf_ql,
                                                          tabs_new, qv_new_loc, qc_new_loc, qi_new_loc);
 
             const Real ql_total = qc_new_loc + qi_new_loc;
-            thetal(ic,k,0) = thl_new[k];
             tabs(ic,k,0) = tabs_new;
-            theta(ic,k,0) = tabs_new / std::max(exner(ic,k,0), 1.0e-12);
+            theta(ic,k,0) = tabs_new / amrex::max(exner(ic,k,0), 1.0e-12_rt);
             qw(ic,k,0) = qw_new_loc;
             qv(ic,k,0) = qv_new_loc;
             qc(ic,k,0) = qc_new_loc;
             qi(ic,k,0) = qi_new_loc;
             shoc_ql(ic,k,0) = ql_total;
-            theta_v(ic,k,0) = theta(ic,k,0) * (1.0 + k_shoc_zvir * qv_new_loc - ql_total);
+            theta_v(ic,k,0) = theta(ic,k,0) * (1.0_rt + k_shoc_zvir * qv_new_loc - ql_total);
             host_dse(ic,k,0) = Cp_d * tabs_new + CONST_GRAV * zt(ic,k,0);
-            tke(ic,k,0) = tke_new[k];
-            u(ic,k,0) = u_new[k];
-            v(ic,k,0) = v_new[k];
 
             theta_tend(ic,k,0) = (theta(ic,k,0) - theta_base(ic,k,0)) / dt;
             qv_tend(ic,k,0) = (qv_new_loc - qv_base(ic,k,0)) / dt;
             qc_tend(ic,k,0) = (qc_new_loc - qc_base(ic,k,0)) / dt;
             qi_tend(ic,k,0) = (qi_new_loc - qi_base(ic,k,0)) / dt;
-            u_tend(ic,k,0) = (u_new[k] - u_base(ic,k,0)) / dt;
-            v_tend(ic,k,0) = (v_new[k] - v_base(ic,k,0)) / dt;
-            tke_tend(ic,k,0) = (tke_new[k] - tke_base(ic,k,0)) / dt;
+            u_tend(ic,k,0) = (u(ic,k,0) - u_base(ic,k,0)) / dt;
+            v_tend(ic,k,0) = (v(ic,k,0) - v_base(ic,k,0)) / dt;
+            tke_tend(ic,k,0) = (tke(ic,k,0) - tke_base(ic,k,0)) / dt;
         }
-    }
+    });
 }
 
 void
