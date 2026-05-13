@@ -1,4 +1,9 @@
-find_package(GTest REQUIRED)
+if(NOT TARGET GTest::gtest)
+  message(FATAL_ERROR
+    "erf_shoc_unit_tests expects the vendored googletest target from "
+    "Tests/Unit/CMakeLists.txt. Configure unit tests through the top-level "
+    "ERF test build so Submodules/googletest is added first.")
+endif()
 
 add_executable(erf_shoc_unit_tests
   ERF_ShocUnitMain.cpp
