@@ -72,7 +72,12 @@ jobs:
         export return=$(tail -n 1 ${{runner.workspace}}/build-output-warnings.txt | awk '{print $2}')
         exit ${return}
 
-    - name: CMake Tests # see file ERF/Tests/CTestList.cmake
+    - name: CMake Unit Tests
+      run: |
+        ctest -L unit -VV
+      working-directory: ${{runner.workspace}}/ERF/build
+
+    - name: CMake Regression Tests # see file ERF/Tests/CTestList.cmake
       run: |
         ctest -L regression -VV
       working-directory: ${{runner.workspace}}/ERF/build

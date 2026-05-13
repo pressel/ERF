@@ -102,6 +102,11 @@ jobs:
         export return=$(tail -n 1 ${{runner.workspace}}/build-output-warnings.txt | awk '{print $2}')
         exit ${return}
 
+    - name: Unit Tests
+      run: |
+        ctest -L unit -VV
+      working-directory: ${{runner.workspace}}/ERF/build-${{matrix.os}}
+
     - name: Regression Tests
       run: |
         ctest -L regression -VV
