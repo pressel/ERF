@@ -42,7 +42,8 @@ jobs:
       run: |
         $out = ctest -N -C Debug -L unit
         $out
-        if ($out -notmatch 'Test\s+#\d+:') {
+        $outText = $out -join "`n"
+        if ($outText -notmatch 'Test\s+#\d+:') {
           throw "No unit tests registered"
         }
       working-directory: ${{runner.workspace}}/ERF/build
