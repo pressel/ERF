@@ -116,6 +116,19 @@ jobs:
         export return=$(tail -n 1 ${{runner.workspace}}/build-${{matrix.os}}-output-warnings.txt | awk '{print $2}')
         exit ${return}
 
+    - name: Check SHOC Unit Test Registration
+      run: |
+        ctest -N -L shoc | tee ${{runner.workspace}}/shoc-unit-test-list-hip.txt
+        grep -q 'Total Tests: ' ${{runner.workspace}}/shoc-unit-test-list-hip.txt
+        ! grep -q 'Total Tests: 0' ${{runner.workspace}}/shoc-unit-test-list-hip.txt
+      working-directory: ${{runner.workspace}}/ERF/build-${{matrix.os}}
+
+    - name: SHOC Unit Tests
+      run: |
+        source /etc/profile.d/rocm.sh
+        ctest --output-on-failure -L shoc
+      working-directory: ${{runner.workspace}}/ERF/build-${{matrix.os}}
+
     # - name: Regression Tests
     #   run: |
     #     ctest -L regression -VV

@@ -38,9 +38,7 @@ target_link_libraries(erf_shoc_unit_tests PRIVATE
   amrex
 )
 
-add_test(NAME erf_shoc_unit_tests
-  COMMAND erf_shoc_unit_tests
-)
-set_tests_properties(erf_shoc_unit_tests PROPERTIES
+erf_register_gtest_suite(erf_shoc_unit_tests
+  LABELS unit shoc
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )

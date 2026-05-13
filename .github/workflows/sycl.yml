@@ -89,3 +89,21 @@ jobs:
         cat ${{runner.workspace}}/build-output-warnings.txt
         export return=$(tail -n 1 ${{runner.workspace}}/build-output-warnings.txt | awk '{print $2}')
         exit ${return}
+
+    - name: Check SHOC Unit Test Registration
+      run: |
+        set +e
+        source /opt/intel/oneapi/setvars.sh
+        set -e
+        ctest -N -L shoc | tee ${{runner.workspace}}/shoc-unit-test-list-sycl.txt
+        grep -q 'Total Tests: ' ${{runner.workspace}}/shoc-unit-test-list-sycl.txt
+        ! grep -q 'Total Tests: 0' ${{runner.workspace}}/shoc-unit-test-list-sycl.txt
+      working-directory: ${{runner.workspace}}/ERF/build
+
+    - name: SHOC Unit Tests
+      run: |
+        set +e
+        source /opt/intel/oneapi/setvars.sh
+        set -e
+        ctest --output-on-failure -L shoc
+      working-directory: ${{runner.workspace}}/ERF/build

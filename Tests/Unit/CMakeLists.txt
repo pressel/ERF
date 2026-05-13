@@ -22,6 +22,37 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|IntelLLVM")
   endforeach()
 endif()
 
+include(GoogleTest)
+
+function(erf_register_gtest_suite target)
+  set(options)
+  set(oneValueArgs WORKING_DIRECTORY)
+  set(multiValueArgs LABELS)
+  cmake_parse_arguments(ERF_GTEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if(NOT TARGET ${target})
+    message(FATAL_ERROR "Cannot register unknown gtest suite target: ${target}")
+  endif()
+
+  if(NOT ERF_GTEST_WORKING_DIRECTORY)
+    set(ERF_GTEST_WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  endif()
+
+  if(NOT ERF_GTEST_LABELS)
+    set(ERF_GTEST_LABELS unit)
+  endif()
+
+  list(JOIN ERF_GTEST_LABELS ";" _erf_gtest_labels)
+  string(REPLACE ";" "\\;" _erf_gtest_labels "${_erf_gtest_labels}")
+
+  gtest_discover_tests(${target}
+    DISCOVERY_MODE POST_BUILD
+    WORKING_DIRECTORY ${ERF_GTEST_WORKING_DIRECTORY}
+    PROPERTIES
+      LABELS "${_erf_gtest_labels}"
+  )
+endfunction()
+
 set(erf_lib_name erf_srclib)
 set(erf_exe_name erf_unit_tests)
 
@@ -39,11 +70,8 @@ target_sources(${erf_exe_name}
 build_erf_exe(${erf_exe_name})
 target_link_libraries(${erf_exe_name} PRIVATE GTest::gtest)
 
-include(GoogleTest)
-gtest_discover_tests(${erf_exe_name}
-  DISCOVERY_MODE PRE_TEST
-  PROPERTIES
-    LABELS "unit"
+erf_register_gtest_suite(${erf_exe_name}
+  LABELS unit
 )
 
 if(ERF_ENABLE_SHOC)

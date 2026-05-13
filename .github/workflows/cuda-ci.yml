@@ -87,3 +87,17 @@ jobs:
           cat ${{runner.workspace}}/build-${{matrix.cuda_pkg}}-output-warnings.txt
           export return=$(tail -n 1 ${{runner.workspace}}/build-${{matrix.cuda_pkg}}-output-warnings.txt | awk '{print $2}')
           exit ${return}
+
+      - name: Check SHOC Unit Test Registration
+        run: |
+          ctest -N -L shoc | tee ${{runner.workspace}}/shoc-unit-test-list-${{matrix.cuda_pkg}}.txt
+          grep -q 'Total Tests: ' ${{runner.workspace}}/shoc-unit-test-list-${{matrix.cuda_pkg}}.txt
+          ! grep -q 'Total Tests: 0' ${{runner.workspace}}/shoc-unit-test-list-${{matrix.cuda_pkg}}.txt
+        working-directory: ${{runner.workspace}}/ERF/build-${{matrix.cuda_pkg}}
+
+      - name: SHOC Unit Tests
+        run: |
+          export PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
+          export LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+          ctest --output-on-failure -L shoc
+        working-directory: ${{runner.workspace}}/ERF/build-${{matrix.cuda_pkg}}
