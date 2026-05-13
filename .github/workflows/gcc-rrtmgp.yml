@@ -121,6 +121,12 @@ jobs:
         export return=$(tail -n 1 ${ERF_DIR}/../build-output-warnings.txt | awk '{print $2}')
         exit ${return}
 
+    - name: Check Unit Test Registration
+      run: |
+        ctest -N -L unit | tee ${{ github.workspace }}/unit-test-list.txt
+        grep -Eq "Total Tests: [1-9][0-9]*" ${{ github.workspace }}/unit-test-list.txt
+      working-directory: ${{ github.workspace }}/erf_clone/build
+
     - name: CMake Unit Tests
       run: |
         ctest -L unit -VV

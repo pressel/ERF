@@ -37,6 +37,16 @@ jobs:
       run: |
         cmake --build build --parallel 2 --verbose
 
+    - name: Check Unit Test Registration
+      shell: pwsh
+      run: |
+        $out = ctest -N -L unit
+        $out
+        if ($out -notmatch 'Total Tests:\s+[1-9]\d*') {
+          throw "No unit tests registered"
+        }
+      working-directory: ${{runner.workspace}}/ERF/build
+
     - name: CMake Unit Tests
       run: |
         ctest -L unit -VV

@@ -28,7 +28,7 @@ While performing a ``cmake -LAH ..`` command will give descriptions of every opt
 
 **ERF_ENABLE_UNIT_TESTS** -- enables the ``gtest``-based unit-test executable and registers CTest tests with the ``unit`` label; this defaults to ``ON`` when ``ERF_ENABLE_TESTS=ON`` and ``ERF_ENABLE_REGRESSION_TESTS_ONLY=OFF``
 
-**ERF_ENABLE_REGRESSION_TESTS_ONLY** -- configures only the regression test suite and suppresses unit-test build and registration
+**ERF_ENABLE_REGRESSION_TESTS_ONLY** -- when ``ERF_ENABLE_TESTS=ON``, suppresses unit-test build and registration so only the regression suite is configured
 
 
 Building the Tests
@@ -49,6 +49,8 @@ where plot files will be output, etc. This directory is analogous to the source 
 **Where is the executable?** With the CMake workflow, the shared regression executable is built under the build tree in ``Exec``
 (for example, ``build/Exec/erf_exec``), and all regression/canonical test input decks are run using that binary.
 The ``gtest`` unit-test executable is built as ``build/Tests/Unit/erf_unit_tests``.
+When enabling unit tests locally, make sure the GoogleTest submodule is initialized first, for example with
+``git submodule update --init Submodules/googletest`` (or ``git submodule update --init --recursive`` after cloning).
 
 To run the test suite, run ``ctest`` in the ``build`` directory. CTest will run the tests and report their exit status.
 Useful options for CTest are ``-VV`` which runs in a verbose mode where the output of each test can be seen. ``-R``
