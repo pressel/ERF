@@ -17,14 +17,16 @@ add_executable(${erf_exe_name})
 target_sources(${erf_exe_name}
   PRIVATE
     ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestMain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestHelloWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestRuntimeStubs.cpp
 )
 build_erf_exe(${erf_exe_name})
-target_link_libraries(${erf_exe_name} PRIVATE GTest::gtest_main)
+target_link_libraries(${erf_exe_name} PRIVATE GTest::gtest)
 
 include(GoogleTest)
 gtest_discover_tests(${erf_exe_name}
+  DISCOVERY_MODE PRE_TEST
   PROPERTIES
     LABELS "unit"
 )

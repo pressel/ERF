@@ -111,7 +111,6 @@ include(CMakePackageConfigHelpers)
 # Include Cray/Perlmutter auto-detection and fixes
 include(CrayDetection)
 include(UtilityTargets)
-include(CMakeDependentOption)
 
 ########################## OPTIONS #####################################
 
@@ -123,13 +122,14 @@ option(ERF_ENABLE_DOCUMENTATION "Build documentation" OFF)
 option(ERF_ENABLE_ALL_WARNINGS "Enable all compiler warnings" OFF)
 option(ERF_ENABLE_TESTS "Enable regression and unit tests" OFF)
 option(ERF_ENABLE_REGRESSION_TESTS_ONLY "Enable only regression tests" OFF)
-cmake_dependent_option(
-  ERF_ENABLE_UNIT_TESTS
-  "Enable gtest-based unit tests"
-  ON
-  "ERF_ENABLE_TESTS;NOT ERF_ENABLE_REGRESSION_TESTS_ONLY"
-  OFF
-)
+set(_erf_enable_unit_tests_default OFF)
+if(ERF_ENABLE_TESTS AND NOT ERF_ENABLE_REGRESSION_TESTS_ONLY)
+  set(_erf_enable_unit_tests_default ON)
+endif()
+option(ERF_ENABLE_UNIT_TESTS "Enable gtest-based unit tests" ${_erf_enable_unit_tests_default})
+if(ERF_ENABLE_REGRESSION_TESTS_ONLY)
+  set(ERF_ENABLE_UNIT_TESTS OFF CACHE BOOL "Enable gtest-based unit tests" FORCE)
+endif()
 option(ERF_USE_INTERNAL_AMREX "Add AMReX as subproject" ON)
 option(ERF_ENABLE_NETCDF "Enable NetCDF IO" OFF)
 option(ERF_ENABLE_HDF5 "Enable HDF5 IO" ${ERF_ENABLE_NETCDF})

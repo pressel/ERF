@@ -40,10 +40,10 @@ jobs:
     - name: Check Unit Test Registration
       shell: pwsh
       run: |
-        $out = ctest -N -C Debug -L unit
+        $out = & "${{runner.workspace}}/ERF/build/Tests/Unit/Debug/erf_unit_tests.exe" --gtest_list_tests
         $out
         $outText = $out -join "`n"
-        if ($outText -notmatch 'Test\s+#\d+:') {
+        if ($outText -notmatch '(?m)^[A-Za-z0-9_].*\.$') {
           throw "No unit tests registered"
         }
       working-directory: ${{runner.workspace}}/ERF/build
