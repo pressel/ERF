@@ -8,7 +8,19 @@ if(MSVC)
 endif()
 
 add_subdirectory(${PROJECT_SOURCE_DIR}/Submodules/googletest
-                 ${PROJECT_BINARY_DIR}/Submodules/googletest)
+                 ${PROJECT_BINARY_DIR}/Submodules/googletest
+                 EXCLUDE_FROM_ALL)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|IntelLLVM")
+  foreach(_erf_gtest_target gtest gtest_main)
+    if(TARGET ${_erf_gtest_target})
+      target_compile_options(${_erf_gtest_target}
+        PRIVATE
+          -Wno-unknown-warning-option
+      )
+    endif()
+  endforeach()
+endif()
 
 set(erf_lib_name erf_srclib)
 set(erf_exe_name erf_unit_tests)
