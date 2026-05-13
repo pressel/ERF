@@ -1,7 +1,13 @@
-set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
-set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+if(NOT DEFINED BUILD_GMOCK)
+  set(BUILD_GMOCK OFF CACHE BOOL "")
+endif()
+if(NOT DEFINED INSTALL_GTEST)
+  set(INSTALL_GTEST OFF CACHE BOOL "")
+endif()
 if(MSVC)
-  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  if(NOT DEFINED gtest_force_shared_crt)
+    set(gtest_force_shared_crt ON CACHE BOOL "")
+  endif()
 endif()
 
 add_subdirectory(${PROJECT_SOURCE_DIR}/Submodules/googletest
@@ -10,7 +16,7 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/Submodules/googletest
 set(erf_lib_name erf_srclib)
 set(erf_exe_name erf_unit_tests)
 
-add_executable(${erf_exe_name} "")
+add_executable(${erf_exe_name})
 target_sources(${erf_exe_name}
   PRIVATE
     ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
