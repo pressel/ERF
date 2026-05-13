@@ -35,24 +35,24 @@ jobs:
 
     - name: Compile and Link
       run: |
-        cmake --build build --parallel 2 --verbose
+        cmake --build build --config Debug --parallel 2 --verbose
 
     - name: Check Unit Test Registration
       shell: pwsh
       run: |
-        $out = ctest -N -L unit
+        $out = ctest -N -C Debug -L unit
         $out
-        if ($out -notmatch 'Total Tests:\s+[1-9]\d*') {
+        if ($out -notmatch 'Test\s+#\d+:') {
           throw "No unit tests registered"
         }
       working-directory: ${{runner.workspace}}/ERF/build
 
     - name: CMake Unit Tests
       run: |
-        ctest -L unit -VV
+        ctest -C Debug -L unit -VV
       working-directory: ${{runner.workspace}}/ERF/build
 
     - name: CMake Regression Tests # see file ERF/Tests/CTestList.cmake
       run: |
-        ctest -L regression -VV
+        ctest -C Debug -L regression -VV
       working-directory: ${{runner.workspace}}/ERF/build
