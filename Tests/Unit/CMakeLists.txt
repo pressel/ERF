@@ -1,13 +1,10 @@
-if(NOT DEFINED BUILD_GMOCK)
-  set(BUILD_GMOCK OFF CACHE BOOL "")
-endif()
-if(NOT DEFINED INSTALL_GTEST)
-  set(INSTALL_GTEST OFF CACHE BOOL "")
-endif()
+set(BUILD_GMOCK OFF CACHE BOOL
+    "Build Google Mock targets for the vendored GoogleTest dependency")
+set(INSTALL_GTEST OFF CACHE BOOL
+    "Install targets from the vendored GoogleTest dependency")
 if(MSVC)
-  if(NOT DEFINED gtest_force_shared_crt)
-    set(gtest_force_shared_crt ON CACHE BOOL "")
-  endif()
+  set(gtest_force_shared_crt ON CACHE BOOL
+      "Use the shared CRT when building the vendored GoogleTest dependency")
 endif()
 
 add_subdirectory(${PROJECT_SOURCE_DIR}/Submodules/googletest

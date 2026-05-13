@@ -111,6 +111,7 @@ include(CMakePackageConfigHelpers)
 # Include Cray/Perlmutter auto-detection and fixes
 include(CrayDetection)
 include(UtilityTargets)
+include(CMakeDependentOption)
 
 ########################## OPTIONS #####################################
 
@@ -122,17 +123,13 @@ option(ERF_ENABLE_DOCUMENTATION "Build documentation" OFF)
 option(ERF_ENABLE_ALL_WARNINGS "Enable all compiler warnings" OFF)
 option(ERF_ENABLE_TESTS "Enable regression and unit tests" OFF)
 option(ERF_ENABLE_REGRESSION_TESTS_ONLY "Enable only regression tests" OFF)
-set(_ERF_ENABLE_UNIT_TESTS_DEFAULT OFF)
-if(ERF_ENABLE_TESTS AND NOT ERF_ENABLE_REGRESSION_TESTS_ONLY)
-  set(_ERF_ENABLE_UNIT_TESTS_DEFAULT ON)
-endif()
-if(NOT DEFINED ERF_ENABLE_UNIT_TESTS)
-  set(ERF_ENABLE_UNIT_TESTS ${_ERF_ENABLE_UNIT_TESTS_DEFAULT}
-      CACHE BOOL "Enable gtest-based unit tests")
-elseif(ERF_ENABLE_REGRESSION_TESTS_ONLY AND ERF_ENABLE_UNIT_TESTS)
-  message(STATUS "Disabling ERF_ENABLE_UNIT_TESTS because ERF_ENABLE_REGRESSION_TESTS_ONLY=ON")
-  set(ERF_ENABLE_UNIT_TESTS OFF CACHE BOOL "Enable gtest-based unit tests" FORCE)
-endif()
+cmake_dependent_option(
+  ERF_ENABLE_UNIT_TESTS
+  "Enable gtest-based unit tests"
+  ON
+  "ERF_ENABLE_TESTS;NOT ERF_ENABLE_REGRESSION_TESTS_ONLY"
+  OFF
+)
 option(ERF_USE_INTERNAL_AMREX "Add AMReX as subproject" ON)
 option(ERF_ENABLE_NETCDF "Enable NetCDF IO" OFF)
 option(ERF_ENABLE_HDF5 "Enable HDF5 IO" ${ERF_ENABLE_NETCDF})
