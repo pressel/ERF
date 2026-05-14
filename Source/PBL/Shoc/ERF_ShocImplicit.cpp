@@ -19,7 +19,6 @@ namespace
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_max_tke () noexcept { return 50.0_rt; }
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_qw () noexcept { return 0.0_rt; }
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_temp () noexcept { return 180.0_rt; }
-    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_lat_ice () noexcept { return 3.34e5_rt; }
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_freezing_temp () noexcept { return 273.15_rt; }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -375,7 +374,6 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
     const auto zt = col.zt.const_array();
     const auto exner = col.exner.const_array();
     const auto shoc_ql_pdf = col.shoc_ql.const_array();
-    const auto thetal_base = col.thetal_base.const_array();
     const auto theta_base = col.theta_base.const_array();
     const auto qv_base = col.qv_base.const_array();
     const auto qc_base = col.qc_base.const_array();

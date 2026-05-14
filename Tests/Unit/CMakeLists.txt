@@ -50,6 +50,7 @@ function(erf_register_gtest_suite target)
     WORKING_DIRECTORY ${ERF_GTEST_WORKING_DIRECTORY}
     PROPERTIES
       LABELS "${_erf_gtest_labels}"
+      SKIP_RETURN_CODE 77
   )
 endfunction()
 
