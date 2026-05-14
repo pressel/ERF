@@ -9,18 +9,18 @@ using namespace amrex;
 
 namespace
 {
-    constexpr Real k_shoc_zvir = 0.61;
-    constexpr Real k_shoc_u_star_min = 0.01;
-    constexpr Real k_shoc_min_tke = 4.0e-4;
-    constexpr Real k_shoc_min_len = 20.0;
-    constexpr Real k_shoc_max_len = 2.0e4;
-    constexpr Real k_shoc_pblmaxp = 4.0e4;
-    constexpr Real k_shoc_pbl_ricr = 0.3;
-    constexpr Real k_shoc_pbl_fac = 100.0;
-    constexpr Real k_shoc_pbl_fak = 8.5;
-    constexpr Real k_shoc_pbl_betam = 15.0;
-    constexpr Real k_shoc_pbl_sffrac = 0.1;
-    constexpr Real k_shoc_kbfs_eps = 1.0e-10;
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_zvir () noexcept { return 0.61_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_u_star_min () noexcept { return 0.01_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_tke () noexcept { return 4.0e-4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_len () noexcept { return 20.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_max_len () noexcept { return 2.0e4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pblmaxp () noexcept { return 4.0e4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pbl_ricr () noexcept { return 0.3_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pbl_fac () noexcept { return 100.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pbl_fak () noexcept { return 8.5_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pbl_betam () noexcept { return 15.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pbl_sffrac () noexcept { return 0.1_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_kbfs_eps () noexcept { return 1.0e-10_rt; }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
@@ -39,7 +39,7 @@ namespace
     {
         int npbl = 1;
         for (int k = 0; k < layout.nlev; ++k) {
-            if (p_mid(ic,k,0) >= k_shoc_pblmaxp) {
+            if (p_mid(ic,k,0) >= shoc_pblmaxp()) {
                 npbl = k + 1;
             }
         }
@@ -56,7 +56,7 @@ namespace
     Real virtual_theta_from_shoc_state (Real thetal, Real ql, Real qv, Real exner)
     {
         const Real theta = theta_from_shoc_state(thetal, ql, exner);
-        return theta * (1.0 + k_shoc_zvir * qv - ql);
+        return theta * (1.0_rt + shoc_zvir() * qv - ql);
     }
 }
 
@@ -84,14 +84,14 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
     {
         const Real cldliq_sfc = qc(ic,0,0) + qi(ic,0,0);
         const Real th_sfc = theta_from_shoc_state(thetal(ic,0,0), cldliq_sfc, exner(ic,0,0));
-        const Real thv_sfc = th_sfc * (1.0_rt + k_shoc_zvir * qv(ic,0,0) - cldliq_sfc);
+        const Real thv_sfc = th_sfc * (1.0_rt + shoc_zvir() * qv(ic,0,0) - cldliq_sfc);
         const Real stress_mag = std::sqrt(tauu(ic,0,0) * tauu(ic,0,0) +
                                           tauv(ic,0,0) * tauv(ic,0,0));
         const Real ustar_val = std::sqrt(stress_mag);
-        const Real kbfs = sflux(ic,0,0) + k_shoc_zvir * th_sfc * lflux(ic,0,0);
-        const Real sign_val = (kbfs >= 0.0_rt) ? k_shoc_kbfs_eps : -k_shoc_kbfs_eps;
+        const Real kbfs = sflux(ic,0,0) + shoc_zvir() * th_sfc * lflux(ic,0,0);
+        const Real sign_val = (kbfs >= 0.0_rt) ? shoc_kbfs_eps() : -shoc_kbfs_eps();
 
-        ustar(ic,0,0) = amrex::max(k_shoc_u_star_min, ustar_val);
+        ustar(ic,0,0) = amrex::max(shoc_u_star_min(), ustar_val);
         obklen(ic,0,0) = -thv_sfc * std::pow(ustar(ic,0,0), 3) /
                          (CONST_GRAV * KAPPA * (kbfs + sign_val));
         pblh(ic,0,0) = zt(ic,0,0);
@@ -140,14 +140,14 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
             const Real vvk = amrex::max(1.0e-36_rt,
                                         std::pow(u(ic,k,0) - u(ic,0,0), 2) +
                                         std::pow(v(ic,k,0) - v(ic,0,0), 2) +
-                                        k_shoc_pbl_fac * ustar_loc * ustar_loc);
+                                        shoc_pbl_fac() * ustar_loc * ustar_loc);
             const Real rino = CONST_GRAV * (thvk - thv0) * (zt(ic,k,0) - zt(ic,0,0)) /
                               (amrex::max(thv0, 1.0e-12_rt) * vvk);
-            if (rino >= k_shoc_pbl_ricr) {
+            if (rino >= shoc_pbl_ricr()) {
                 if (k == 1 || amrex::Math::abs(rino - prev_rino) <= 1.0e-12_rt) {
                     pblh_loc = zt(ic,k,0);
                 } else {
-                    pblh_loc = zt(ic,k-1,0) + (k_shoc_pbl_ricr - prev_rino) *
+                    pblh_loc = zt(ic,k-1,0) + (shoc_pbl_ricr() - prev_rino) *
                                (zt(ic,k,0) - zt(ic,k-1,0)) / (rino - prev_rino);
                 }
                 found_pblh = true;
@@ -163,10 +163,10 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
         if (wthv_sec(ic,0,0) > 0.0_rt) {
             const Real obk_abs = amrex::max(amrex::Math::abs(obklen(ic,0,0)), 1.0e-6_rt);
             const Real obk = std::copysign(obk_abs, obklen(ic,0,0));
-            const Real binm = k_shoc_pbl_betam * k_shoc_pbl_sffrac;
+            const Real binm = shoc_pbl_betam() * shoc_pbl_sffrac();
             const Real phiminv = std::cbrt(amrex::max(1.0e-12_rt, 1.0_rt - binm * pblh_loc / obk));
-            const Real tlv = thv0 + wthv_sec(ic,0,0) * k_shoc_pbl_fak /
-                                   (amrex::max(ustar_loc, k_shoc_u_star_min) * phiminv);
+            const Real tlv = thv0 + wthv_sec(ic,0,0) * shoc_pbl_fak() /
+                                   (amrex::max(ustar_loc, shoc_u_star_min()) * phiminv);
             prev_rino = 0.0_rt;
             for (int k = 1; k < npbl; ++k) {
                 const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
@@ -174,14 +174,14 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
                 const Real vvk = amrex::max(1.0e-36_rt,
                                             std::pow(u(ic,k,0) - u(ic,0,0), 2) +
                                             std::pow(v(ic,k,0) - v(ic,0,0), 2) +
-                                            k_shoc_pbl_fac * ustar_loc * ustar_loc);
+                                            shoc_pbl_fac() * ustar_loc * ustar_loc);
                 const Real rino = CONST_GRAV * (thvk - tlv) * (zt(ic,k,0) - zt(ic,0,0)) /
                                   (amrex::max(thv0, 1.0e-12_rt) * vvk);
-                if (rino >= k_shoc_pbl_ricr) {
+                if (rino >= shoc_pbl_ricr()) {
                     if (k == 1 || amrex::Math::abs(rino - prev_rino) <= 1.0e-12_rt) {
                         pblh_loc = zt(ic,k,0);
                     } else {
-                        pblh_loc = zt(ic,k-1,0) + (k_shoc_pbl_ricr - prev_rino) *
+                        pblh_loc = zt(ic,k-1,0) + (shoc_pbl_ricr() - prev_rino) *
                                    (zt(ic,k,0) - zt(ic,k-1,0)) / (rino - prev_rino);
                     }
                     break;
@@ -224,11 +224,11 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
         Real numer = 0.0_rt;
         Real denom = 0.0_rt;
         for (int k = 0; k < layout.nlev; ++k) {
-            const Real tke_sqrt = std::sqrt(amrex::max(tke(ic,k,0), k_shoc_min_tke));
+            const Real tke_sqrt = std::sqrt(amrex::max(tke(ic,k,0), shoc_min_tke()));
             numer += tke_sqrt * zt(ic,k,0) * dz(ic,k,0);
             denom += tke_sqrt * dz(ic,k,0);
         }
-        const Real l_inf = (denom > 0.0_rt) ? 0.1_rt * numer / denom : k_shoc_min_len;
+        const Real l_inf = (denom > 0.0_rt) ? 0.1_rt * numer / denom : shoc_min_len();
 
         for (int k = 0; k < layout.nlev; ++k) {
             const Real theta_v_k = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
@@ -267,15 +267,15 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
             // therefore yield positive Brunt-Vaisala frequency.
             brunt(ic,k,0) = (CONST_GRAV / amrex::max(theta_v_k, 1.0e-12_rt)) *
                             (theta_v_hi - theta_v_lo) / amrex::max(dz(ic,k,0), 1.0e-12_rt);
-            const Real tkes = std::sqrt(amrex::max(tke(ic,k,0), k_shoc_min_tke));
+            const Real tkes = std::sqrt(amrex::max(tke(ic,k,0), shoc_min_tke()));
             const Real brunt_pos = amrex::max(brunt(ic,k,0), 0.0_rt);
             const Real inv_term = (1.0_rt / amrex::max(400.0_rt * tkes * KAPPA * amrex::max(zt(ic,k,0), 1.0_rt), 1.0e-12_rt)) +
-                                  (1.0_rt / amrex::max(400.0_rt * tkes * amrex::max(l_inf, k_shoc_min_len), 1.0e-12_rt)) +
-                                  0.01_rt * brunt_pos / amrex::max(tke(ic,k,0), k_shoc_min_tke);
-            Real mix = amrex::min(k_shoc_max_len,
+                                  (1.0_rt / amrex::max(400.0_rt * tkes * amrex::max(l_inf, shoc_min_len()), 1.0e-12_rt)) +
+                                  0.01_rt * brunt_pos / amrex::max(tke(ic,k,0), shoc_min_tke());
+            Real mix = amrex::min(shoc_max_len(),
                                   2.8284_rt * std::sqrt(1.0_rt / amrex::max(inv_term, 1.0e-12_rt)) /
                                   amrex::max(opts.length_fac, 1.0e-12_rt));
-            mix = amrex::min(max_horiz_len, amrex::max(k_shoc_min_len, mix));
+            mix = amrex::min(max_horiz_len, amrex::max(shoc_min_len(), mix));
             shoc_mix(ic,k,0) = mix;
         }
     });

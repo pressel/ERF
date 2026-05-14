@@ -9,12 +9,12 @@ using namespace amrex;
 
 namespace
 {
-    constexpr Real k_shoc_min_tke = 4.0e-4;
-    constexpr Real k_shoc_large_neg = -99999999.99;
-    constexpr Real k_shoc_w3clip = 1.2;
-    constexpr Real k_shoc_w3clipdef = 0.02;
-    constexpr Real k_shoc_base_temp = 300.0;
-    constexpr Real k_shoc_ufmin = 0.01;
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_tke () noexcept { return 4.0e-4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_large_neg () noexcept { return -99999999.99_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_w3clip () noexcept { return 1.2_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_w3clipdef () noexcept { return 0.02_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_base_temp () noexcept { return 300.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_ufmin () noexcept { return 0.01_rt; }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
@@ -150,9 +150,9 @@ namespace
             const Real vw_sfc = tauv(ic,0,0);
             const Real ustar2 = std::sqrt(uw_sfc * uw_sfc + vw_sfc * vw_sfc);
             const Real wstar = (wthl_sfc >= 0.0_rt)
-                ? std::cbrt((CONST_GRAV / k_shoc_base_temp) * wthl_sfc)
+                ? std::cbrt((CONST_GRAV / shoc_base_temp()) * wthl_sfc)
                 : 0.0_rt;
-            const Real uf = amrex::max(k_shoc_ufmin,
+            const Real uf = amrex::max(shoc_ufmin(),
                                        std::sqrt(ustar2 + 0.3_rt * wstar * wstar));
 
             thl_sec(ic,0,0) = 0.72_rt * std::pow(wthl_sfc / uf, 2);
@@ -162,7 +162,7 @@ namespace
             wqw_sec(ic,0,0) = wqw_sfc;
             uw_sec(ic,0,0) = uw_sfc;
             vw_sec(ic,0,0) = vw_sfc;
-            wtke_sec(ic,0,0) = std::pow(amrex::max(std::sqrt(ustar2), k_shoc_ufmin), 3);
+            wtke_sec(ic,0,0) = std::pow(amrex::max(std::sqrt(ustar2), shoc_ufmin()), 3);
 
             const int ktop = layout.nlev;
             thl_sec(ic,ktop,0) = 0.0_rt;
@@ -307,19 +307,9 @@ ShocMoments::diagnose_second_moments (ShocColumnData& col,
     auto thl_sec = col.thl_sec.array();
     auto qw_sec = col.qw_sec.array();
     auto qwthl_sec = col.qwthl_sec.array();
-    auto wthl_sec = col.wthl_sec.array();
-    auto wqw_sec = col.wqw_sec.array();
-    auto uw_sec = col.uw_sec.array();
-    auto vw_sec = col.vw_sec.array();
-    auto wtke_sec = col.wtke_sec.array();
     auto w_sec = col.w_sec.array();
 
-    const auto thetal = col.thetal.const_array();
-    const auto qw = col.qw.const_array();
     const auto tke = col.tke.const_array();
-    const auto u = col.u.const_array();
-    const auto v = col.v.const_array();
-
     const auto layout = col.layout;
     const Box col_box(IntVect(0,0,0), IntVect(layout.ncell - 1, 0, 0));
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
@@ -367,9 +357,9 @@ ShocMoments::clip_third_moments (const ShocColumnData& col,
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
         for (int k = 0; k <= layout.nlev; ++k) {
-            const Real clip_cond = k_shoc_w3clip * std::sqrt(amrex::max(0.0_rt, 2.0_rt * std::pow(wsec(ic,k,0), 3)));
+            const Real clip_cond = shoc_w3clip() * std::sqrt(amrex::max(0.0_rt, 2.0_rt * std::pow(wsec(ic,k,0), 3)));
             if (amrex::Math::abs(w3(ic,k,0)) > clip_cond) {
-                w3(ic,k,0) = k_shoc_w3clipdef;
+                w3(ic,k,0) = shoc_w3clipdef();
             }
         }
     });
@@ -387,8 +377,8 @@ ShocMoments::diagnose_third_moments (ShocColumnData& col,
     thetal_zi.resize(iface_box, 1, The_Async_Arena());
 
     interpolate_cc_to_iface(col, col.isotropy, isotropy_zi, 0.0);
-    interpolate_cc_to_iface(col, col.brunt, brunt_zi, k_shoc_large_neg);
-    interpolate_cc_to_iface(col, col.w_sec, w_sec_zi, (2.0 / 3.0) * k_shoc_min_tke);
+    interpolate_cc_to_iface(col, col.brunt, brunt_zi, shoc_large_neg());
+    interpolate_cc_to_iface(col, col.w_sec, w_sec_zi, (2.0_rt / 3.0_rt) * shoc_min_tke());
     interpolate_cc_to_iface(col, col.thetal, thetal_zi, 0.0);
 
     auto w3 = col.w3.array();

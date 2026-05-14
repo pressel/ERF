@@ -343,7 +343,6 @@ ShocDriver::advance (MultiFab& cons,
         const auto shear_prod = col.shear_prod.const_array();
         const auto buoy_prod = col.buoy_prod.const_array();
         const auto diss_tke = col.diss_tke.const_array();
-        const auto tke = col.tke.const_array();
         const auto tk = col.tk.const_array();
         const auto tkh = col.tkh.const_array();
         const auto rho = col.rho.const_array();

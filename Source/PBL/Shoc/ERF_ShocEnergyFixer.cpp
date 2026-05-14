@@ -8,15 +8,15 @@ using namespace amrex;
 
 namespace
 {
-    constexpr Real k_shoc_min_tke = 4.0e-4;
-    constexpr Real k_shoc_lat_ice = 3.34e5;
-    constexpr Real k_shoc_min_temp = 180.0;
-    constexpr Real k_shoc_freezing_temp = 273.15;
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_tke () noexcept { return 4.0e-4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_lat_ice () noexcept { return 3.34e5_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_temp () noexcept { return 180.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_freezing_temp () noexcept { return 273.15_rt; }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real shoc_temperature (Real thetal, Real ql, Real exner)
     {
-        return amrex::max(k_shoc_min_temp,
+        return amrex::max(shoc_min_temp(),
                           thetal * amrex::max(exner, 1.0e-12_rt) + (L_v / Cp_d) * amrex::max(0.0_rt, ql));
     }
 
@@ -29,8 +29,8 @@ namespace
              + CONST_GRAV * z
              + 0.5 * (u * u + v * v)
              + tke
-             + (L_v + k_shoc_lat_ice) * qv
-             + k_shoc_lat_ice * ql;
+             + (L_v + shoc_lat_ice()) * qv
+             + shoc_lat_ice() * ql;
     }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -47,7 +47,7 @@ namespace
         const Real ql_total = shoc_clamp(pdf_ql, 0.0_rt, amrex::max(0.0_rt, qw));
         tabs = shoc_temperature(thetal, ql_total, exner);
 
-        const bool use_ice = (tabs < k_shoc_freezing_temp && qi_seed > 0.0_rt);
+        const bool use_ice = (tabs < shoc_freezing_temp() && qi_seed > 0.0_rt);
         qc = use_ice ? 0.0_rt : ql_total;
         qi = use_ice ? ql_total : 0.0_rt;
         qv = amrex::max(0.0_rt, qw - amrex::max(0.0_rt, ql_total));
@@ -59,7 +59,7 @@ ShocEnergyFixer::diagnose_active_top (const Vector<Real>& tke)
 {
     int shoc_top = -1;
     for (int k = static_cast<int>(tke.size()) - 1; k >= 0; --k) {
-        if (tke[k] > k_shoc_min_tke) {
+        if (tke[k] > shoc_min_tke()) {
             shoc_top = k;
             break;
         }
@@ -75,7 +75,7 @@ ShocEnergyFixer::diagnose_active_top (const Array4<const Real>& tke,
 {
     int shoc_top = -1;
     for (int k = nlev - 1; k >= 0; --k) {
-        if (tke(ic,k,0) > k_shoc_min_tke) {
+        if (tke(ic,k,0) > shoc_min_tke()) {
             shoc_top = k;
             break;
         }
@@ -132,7 +132,7 @@ ShocEnergyFixer::apply_column (const ShocColumnData& col,
 
     if (air_mass <= 0.0) return;
 
-    const Real latent_flux_coeff = L_v + k_shoc_lat_ice;
+    const Real latent_flux_coeff = L_v + shoc_lat_ice();
     const Real energy_target = energy_before
                              + dt * rho(ic,0,0)
                              * (Cp_d * exner(ic,0,0) * surf_sens_flux(ic,0,0)
@@ -201,7 +201,7 @@ ShocEnergyFixer::apply_column_in_place (ShocColumnData& col,
 
     if (air_mass <= 0.0_rt) return;
 
-    const Real latent_flux_coeff = L_v + k_shoc_lat_ice;
+    const Real latent_flux_coeff = L_v + shoc_lat_ice();
     const Real energy_target = energy_before
                              + dt * rho(ic,0,0)
                              * (Cp_d * exner(ic,0,0) * surf_sens_flux(ic,0,0)

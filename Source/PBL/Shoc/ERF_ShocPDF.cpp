@@ -11,18 +11,17 @@ using namespace amrex;
 
 namespace
 {
-    constexpr Real k_shoc_thl_tol = 1.0e-2;
-    constexpr Real k_shoc_rt_tol = 1.0e-4;
-    constexpr Real k_shoc_w_tol_sqd = 4.0e-4;
-    constexpr Real k_shoc_w_thresh = 0.0;
-    constexpr Real k_shoc_large_neg = -99999999.99;
-    constexpr Real k_shoc_base_temp = 300.0;
-    constexpr Real k_shoc_tl_min = 100.0;
-    constexpr Real k_shoc_pdf_tmp = 0.4;
-    constexpr Real k_shoc_sqrt_pdf_tmp = 0.77459666924148337704; // sqrt(1-0.4)
-    constexpr bool k_shoc_do_thetal_skew = false;
-    constexpr Real k_inv_sqrt_two = 0.70710678118654752440;
-    constexpr Real k_inv_sqrt_two_pi = 0.39894228040143267794;
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_thl_tol () noexcept { return 1.0e-2_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_rt_tol () noexcept { return 1.0e-4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_w_tol_sqd () noexcept { return 4.0e-4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_w_thresh () noexcept { return 0.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_large_neg () noexcept { return -99999999.99_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_base_temp () noexcept { return 300.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_tl_min () noexcept { return 100.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pdf_tmp () noexcept { return 0.4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_sqrt_pdf_tmp () noexcept { return 0.77459666924148337704_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE bool shoc_do_thetal_skew () noexcept { return false; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real inv_sqrt_two_pi () noexcept { return 0.39894228040143267794_rt; }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real clamp01 (Real x) { return shoc_clamp(x, 0.0_rt, 1.0_rt); }
@@ -81,16 +80,16 @@ namespace
         w2_2 = 0.0;
         a = 0.5;
 
-        if (w_sec > k_shoc_w_tol_sqd) {
+        if (w_sec > shoc_w_tol_sqd()) {
             const Real skew_denom = std::sqrt(amrex::max(std::pow(w_sec, 3), 1.0e-18_rt));
             skew_w = w3var / skew_denom;
             const Real skew_term = std::sqrt(1.0_rt /
-                (4.0_rt * std::pow(1.0_rt - k_shoc_pdf_tmp, 3) + skew_w * skew_w));
+                (4.0_rt * std::pow(1.0_rt - shoc_pdf_tmp(), 3) + skew_w * skew_w));
             a = shoc_clamp(0.5_rt * (1.0_rt - skew_w * skew_term), 0.01_rt, 0.99_rt);
-            w1_1 = std::sqrt((1.0 - a) / a) * k_shoc_sqrt_pdf_tmp;
-            w1_2 = -std::sqrt(a / (1.0 - a)) * k_shoc_sqrt_pdf_tmp;
-            w2_1 = k_shoc_pdf_tmp * w_sec;
-            w2_2 = k_shoc_pdf_tmp * w_sec;
+            w1_1 = std::sqrt((1.0_rt - a) / a) * shoc_sqrt_pdf_tmp();
+            w1_2 = -std::sqrt(a / (1.0_rt - a)) * shoc_sqrt_pdf_tmp();
+            w2_1 = shoc_pdf_tmp() * w_sec;
+            w2_2 = shoc_pdf_tmp() * w_sec;
         }
     }
 
@@ -108,15 +107,15 @@ namespace
         sqrtthl2_1 = 0.0;
         sqrtthl2_2 = 0.0;
 
-        if (thlsec > k_shoc_thl_tol * k_shoc_thl_tol &&
-            std::abs(w1_2 - w1_1) > k_shoc_w_thresh &&
+        if (thlsec > shoc_thl_tol() * shoc_thl_tol() &&
+            std::abs(w1_2 - w1_1) > shoc_w_thresh() &&
             sqrtw2 > 0.0 && sqrtthl > 0.0) {
             const Real corr = shoc_clamp(wthlsec / (sqrtw2 * sqrtthl), -1.0_rt, 1.0_rt);
             const Real tmp1 = -corr / w1_1;
             const Real tmp2 = -corr / w1_2;
             const Real tsign = std::abs(tmp1 - tmp2);
             Real skew_thl = 0.0;
-            if (k_shoc_do_thetal_skew) {
+            if (shoc_do_thetal_skew()) {
                 if (tsign > 0.4) {
                     skew_thl = 1.2 * skew_w;
                 } else if (tsign > 0.2) {
@@ -154,8 +153,8 @@ namespace
         sqrtqw2_1 = 0.0;
         sqrtqw2_2 = 0.0;
 
-        if (qwsec > k_shoc_rt_tol * k_shoc_rt_tol &&
-            std::abs(w1_2 - w1_1) > k_shoc_w_thresh &&
+        if (qwsec > shoc_rt_tol() * shoc_rt_tol() &&
+            std::abs(w1_2 - w1_1) > shoc_w_thresh() &&
             sqrtw2 > 0.0 && sqrtqt > 0.0) {
             const Real corr = shoc_clamp(wqwsec / (sqrtw2 * sqrtqt), -1.0_rt, 1.0_rt);
             const Real tmp1 = -corr / w1_1;
@@ -235,7 +234,7 @@ namespace
         if (std_s > std::sqrt(std::numeric_limits<Real>::min()) * 100.0_rt) {
             cfrac = 0.5_rt * (1.0_rt + std::erf(s / (std::sqrt(2.0_rt) * std_s)));
             if (cfrac != 0.0_rt) {
-                qn = s * cfrac + std_s * k_inv_sqrt_two_pi * std::exp(-0.5_rt * (s / std_s) * (s / std_s));
+                qn = s * cfrac + std_s * inv_sqrt_two_pi() * std::exp(-0.5_rt * (s / std_s) * (s / std_s));
             }
         } else if (s > 0.0_rt) {
             cfrac = 1.0_rt;
@@ -253,9 +252,9 @@ namespace
     {
         const Real epsterm = R_d / R_v;
         return wthlsec
-             + ((1.0 - epsterm) / epsterm) * k_shoc_base_temp * wqwsec
+                 + ((1.0_rt - epsterm) / epsterm) * shoc_base_temp() * wqwsec
              + ((L_v / Cp_d) * std::pow(p_0 / amrex::max(pval, 1.0e-12_rt), R_d / Cp_d)
-                - (1.0 / epsterm) * k_shoc_base_temp) * wqls;
+                     - (1.0_rt / epsterm) * shoc_base_temp()) * wqls;
     }
 }
 
@@ -273,12 +272,12 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
     wqw_zt.resize(cell_box, 1, The_Async_Arena());
     qwthl_zt.resize(cell_box, 1, The_Async_Arena());
 
-    interpolate_iface_to_cc(col, col.w3, w3_zt, k_shoc_large_neg);
+    interpolate_iface_to_cc(col, col.w3, w3_zt, shoc_large_neg());
     interpolate_iface_to_cc(col, col.thl_sec, thl_sec_zt, 0.0);
     interpolate_iface_to_cc(col, col.qw_sec, qw_sec_zt, 0.0);
-    interpolate_iface_to_cc(col, col.wthl_sec, wthl_zt, k_shoc_large_neg);
-    interpolate_iface_to_cc(col, col.wqw_sec, wqw_zt, k_shoc_large_neg);
-    interpolate_iface_to_cc(col, col.qwthl_sec, qwthl_zt, k_shoc_large_neg);
+    interpolate_iface_to_cc(col, col.wthl_sec, wthl_zt, shoc_large_neg());
+    interpolate_iface_to_cc(col, col.wqw_sec, wqw_zt, shoc_large_neg());
+    interpolate_iface_to_cc(col, col.qwthl_sec, qwthl_zt, shoc_large_neg());
 
     auto shoc_cldfrac = col.shoc_cldfrac.array();
     auto shoc_ql = col.shoc_ql.array();
@@ -310,8 +309,8 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
             const Real w_first = w_field(ic,k,0);
             const Real w2sec = amrex::max(w_sec(ic,k,0), 0.0_rt);
             const Real sqrtw2 = std::sqrt(w2sec);
-            const Real sqrtthl = amrex::max(k_shoc_thl_tol, std::sqrt(amrex::max(thl_sec(ic,k,0), 0.0_rt)));
-            const Real sqrtqt = amrex::max(k_shoc_rt_tol, std::sqrt(amrex::max(qw_sec(ic,k,0), 0.0_rt)));
+            const Real sqrtthl = amrex::max(shoc_thl_tol(), std::sqrt(amrex::max(thl_sec(ic,k,0), 0.0_rt)));
+            const Real sqrtqt = amrex::max(shoc_rt_tol(), std::sqrt(amrex::max(qw_sec(ic,k,0), 0.0_rt)));
 
             Real skew_w = 0.0, w1_1 = w_first, w1_2 = w_first, w2_1 = 0.0, w2_2 = 0.0, a = 0.5;
             vv_parameters(w_first, w2sec, w3(ic,k,0), skew_w, w1_1, w1_2, w2_1, w2_2, a);
@@ -336,8 +335,8 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
                                                        qwthl_sec(ic,k,0), qw1_1, qw_first,
                                                        thl1_1, thl_first, qw1_2, thl1_2);
 
-            Real Tl1_1 = amrex::max(k_shoc_tl_min, compute_temperature(thl1_1, p_mid(ic,k,0)));
-            Real Tl1_2 = amrex::max(k_shoc_tl_min, compute_temperature(thl1_2, p_mid(ic,k,0)));
+            Real Tl1_1 = amrex::max(shoc_tl_min(), compute_temperature(thl1_1, p_mid(ic,k,0)));
+            Real Tl1_2 = amrex::max(shoc_tl_min(), compute_temperature(thl1_2, p_mid(ic,k,0)));
             Real qs1 = 0.0_rt, beta1 = 0.0_rt, qs2 = 0.0_rt, beta2 = 0.0_rt;
             compute_qs_beta(Tl1_1, p_mid(ic,k,0), qs1, beta1);
             compute_qs_beta(Tl1_2, p_mid(ic,k,0), qs2, beta2);

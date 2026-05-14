@@ -9,22 +9,31 @@ using namespace amrex;
 
 namespace
 {
-    constexpr Real k_shoc_basetemp = 300.0;
-    constexpr Real k_shoc_min_tke = 4.0e-4;
-    constexpr Real k_shoc_max_tke = 50.0;
-    constexpr Real k_shoc_max_iso = 2.0e4;
-    constexpr Real k_shoc_tabs_crit = 182.0;
-    constexpr Real k_shoc_pbl_trans = 200.0;
-    constexpr Real k_shoc_stable_ckh = 0.1;
-    constexpr Real k_shoc_stable_ckm = 0.1;
-    constexpr Real k_shoc_shear_ck = 0.1;
-    constexpr Real k_shoc_tke_cs = 0.15;
-    constexpr Real k_shoc_tke_ce =
-        (k_shoc_shear_ck * k_shoc_shear_ck * k_shoc_shear_ck) /
-        ((k_shoc_tke_cs * k_shoc_tke_cs) * (k_shoc_tke_cs * k_shoc_tke_cs));
-    constexpr Real k_shoc_tke_cee =
-        (k_shoc_tke_ce / 0.7) * 0.19 + (k_shoc_tke_ce / 0.7) * 0.51;
-    constexpr Real k_shoc_trop_pres = 8.0e4;
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_base_temp () noexcept { return 300.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_tke () noexcept { return 4.0e-4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_max_tke () noexcept { return 50.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_max_iso () noexcept { return 2.0e4_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_tabs_crit () noexcept { return 182.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_pbl_trans () noexcept { return 200.0_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_stable_ckh () noexcept { return 0.1_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_stable_ckm () noexcept { return 0.1_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_shear_ck () noexcept { return 0.1_rt; }
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_tke_cs () noexcept { return 0.15_rt; }
+
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    Real shoc_tke_ce () noexcept
+    {
+        return (shoc_shear_ck() * shoc_shear_ck() * shoc_shear_ck()) /
+               ((shoc_tke_cs() * shoc_tke_cs()) * (shoc_tke_cs() * shoc_tke_cs()));
+    }
+
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    Real shoc_tke_cee () noexcept
+    {
+        return (shoc_tke_ce() / 0.7_rt) * 0.19_rt + (shoc_tke_ce() / 0.7_rt) * 0.51_rt;
+    }
+
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_trop_pres () noexcept { return 8.0e4_rt; }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
@@ -99,7 +108,11 @@ ShocTKE::compute_shear_production (const ShocColumnData& col,
 {
     const Box iface_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, col.layout.nlev, 0));
     sterm_iface.resize(iface_box, 1, The_Async_Arena());
-    sterm_iface.setVal(0.0);
+#ifdef AMREX_USE_GPU
+    sterm_iface.setVal<amrex::RunOn::Device>(0.0, sterm_iface.box(), 0, sterm_iface.nComp());
+#else
+    sterm_iface.setVal<amrex::RunOn::Host>(0.0, sterm_iface.box(), 0, sterm_iface.nComp());
+#endif
 
     auto sterm = sterm_iface.array();
     const auto u = col.u.const_array();
@@ -117,7 +130,7 @@ ShocTKE::compute_shear_production (const ShocColumnData& col,
             const Real dz_zi = interface_spacing(zt, zi, layout, ic, k);
             const Real du_dz = (u(ic,k-1,0) - u(ic,k,0)) / dz_zi;
             const Real dv_dz = (v(ic,k-1,0) - v(ic,k,0)) / dz_zi;
-            sterm(ic,k,0) = k_shoc_shear_ck * (du_dz * du_dz + dv_dz * dv_dz);
+            sterm(ic,k,0) = shoc_shear_ck() * (du_dz * du_dz + dv_dz * dv_dz);
         }
     });
 }
@@ -133,7 +146,7 @@ ShocTKE::integrate_column_stability (const ShocColumnData& col,
 
     for (int ic = 0; ic < col.layout.ncell; ++ic) {
         for (int k = 0; k < col.layout.nlev; ++k) {
-            if (p_mid(ic,k,0) > k_shoc_trop_pres) {
+            if (p_mid(ic,k,0) > shoc_trop_pres()) {
                 brunt_int[ic] += dz(ic,k,0) * brunt(ic,k,0);
             }
         }
@@ -182,26 +195,26 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
     {
         Real brunt_int = 0.0_rt;
         for (int k = 0; k < layout.nlev; ++k) {
-            if (p_mid(ic,k,0) > k_shoc_trop_pres) {
+            if (p_mid(ic,k,0) > shoc_trop_pres()) {
                 brunt_int += dz(ic,k,0) * brunt(ic,k,0);
             }
 
             const Real old_tke = amrex::max(0.0_rt, tke(ic,k,0));
             const Real buoy_prod = opts.shoc_1p5tke
                 ? -old_tke * brunt(ic,k,0)
-                : (CONST_GRAV / k_shoc_basetemp) * wthv_sec(ic,k,0);
+                : (CONST_GRAV / shoc_base_temp()) * wthv_sec(ic,k,0);
             const Real shear_prod = tk(ic,k,0) * sterm(ic,k,0);
             const Real mix = amrex::max(shoc_mix(ic,k,0), 1.0e-12_rt);
-            const Real diss = k_shoc_tke_cee / mix * std::pow(old_tke, 1.5_rt);
+            const Real diss = shoc_tke_cee() / mix * std::pow(old_tke, 1.5_rt);
             const Real net_prod = opts.signed_tke_production
                 ? (shear_prod + buoy_prod)
                 : amrex::max(0.0_rt, shear_prod + buoy_prod);
             const Real raw_new_tke = shoc_clamp(old_tke + dt * (net_prod - diss),
-                                                k_shoc_min_tke, k_shoc_max_tke);
+                                                shoc_min_tke(), shoc_max_tke());
             const Real top_factor = top_taper_factor(zt, zi, layout, opts, ic, k);
-            const Real new_tke = shoc_clamp(k_shoc_min_tke +
-                                            top_factor * (raw_new_tke - k_shoc_min_tke),
-                                            k_shoc_min_tke, k_shoc_max_tke);
+            const Real new_tke = shoc_clamp(shoc_min_tke() +
+                                            top_factor * (raw_new_tke - shoc_min_tke()),
+                                            shoc_min_tke(), shoc_max_tke());
 
             a_diss_arr(ic,k,0) = top_factor * diss;
             shear_prod_arr(ic,k,0) = top_factor * shear_prod;
@@ -218,15 +231,15 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
             const Real diss = amrex::max(a_diss_arr(ic,k,0), 1.0e-12_rt);
             const Real tscale = 2.0_rt * tke(ic,k,0) / diss;
             const Real local_lambda = (brunt(ic,k,0) <= 0.0_rt) ? 0.0_rt : lambda;
-            isotropy(ic,k,0) = amrex::min(k_shoc_max_iso,
+            isotropy(ic,k,0) = amrex::min(shoc_max_iso(),
                                           tscale / (1.0_rt + local_lambda * brunt(ic,k,0) * tscale * tscale));
 
-            const bool use_stable_mix = (zt(ic,k,0) < pblh(ic,0,0) + k_shoc_pbl_trans) &&
-                                        (tabs(ic,0,0) < k_shoc_tabs_crit);
+            const bool use_stable_mix = (zt(ic,k,0) < pblh(ic,0,0) + shoc_pbl_trans()) &&
+                                        (tabs(ic,0,0) < shoc_tabs_crit());
             if (use_stable_mix) {
                 const Real sterm_sqrt = std::sqrt(amrex::max(sterm(ic,k,0), 0.0_rt));
-                tkh(ic,k,0) = k_shoc_stable_ckh * shoc_mix(ic,k,0) * shoc_mix(ic,k,0) * sterm_sqrt;
-                tk(ic,k,0) = k_shoc_stable_ckm * shoc_mix(ic,k,0) * shoc_mix(ic,k,0) * sterm_sqrt;
+                tkh(ic,k,0) = shoc_stable_ckh() * shoc_mix(ic,k,0) * shoc_mix(ic,k,0) * sterm_sqrt;
+                tk(ic,k,0) = shoc_stable_ckm() * shoc_mix(ic,k,0) * shoc_mix(ic,k,0) * sterm_sqrt;
             } else {
                 tkh(ic,k,0) = opts.coeff_kh * isotropy(ic,k,0) * tke(ic,k,0);
                 tk(ic,k,0) = opts.coeff_km * isotropy(ic,k,0) * tke(ic,k,0);

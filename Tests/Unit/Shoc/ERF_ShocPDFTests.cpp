@@ -374,6 +374,8 @@ TEST(ShocPDF, TranslatedE3smNegativeSkewnessCaseMatchesReferenceRelationships)
 
     bool saw_flux_response = false;
     for (int k = 0; k < symmetric.layout.nlev; ++k) {
+        EXPECT_GT(cf0(0,k,0), 0.0);
+        EXPECT_LT(cf0(0,k,0), 1.0);
         EXPECT_GE(cf1(0,k,0), 0.0);
         EXPECT_LT(cf1(0,k,0), 1.0);
         EXPECT_GT(ql21(0,k,0), 0.0);
