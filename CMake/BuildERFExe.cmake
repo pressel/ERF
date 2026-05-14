@@ -19,6 +19,35 @@ function(target_link_libraries_includes_only target visibility lib)
   endif()
 endfunction()
 
+function(erf_add_shoc_sources target)
+  set(options FULL)
+  cmake_parse_arguments(ERF_SHOC "${options}" "" "" ${ARGN})
+
+  set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
+
+  target_sources(${target} PRIVATE
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocStructure.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocTKE.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocMoments.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocPDF.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocEnergyFixer.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocImplicit.cpp
+  )
+
+  if(ERF_SHOC_FULL)
+    target_sources(${target} PRIVATE
+      ${SRC_DIR}/PBL/Shoc/ERF_ShocDriver.cpp
+      ${SRC_DIR}/PBL/Shoc/ERF_ShocPreprocess.cpp
+      ${SRC_DIR}/PBL/Shoc/ERF_ShocDiagnostics.cpp
+      ${SRC_DIR}/PBL/Shoc/ERF_ShocCoupling.cpp
+    )
+  endif()
+
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/PBL/Shoc>
+  )
+endfunction()
+
 function(build_erf_lib erf_lib_name)
 
   set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
@@ -148,21 +177,7 @@ function(build_erf_lib erf_lib_name)
 
   ########################### SHOC #################################
   if(ERF_ENABLE_SHOC)
-    target_include_directories(${erf_lib_name} PUBLIC
-                               $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/Source/PBL/Shoc>
-                              )
-     target_sources(${erf_lib_name} PRIVATE
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocDriver.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocPreprocess.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocStructure.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocTKE.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocMoments.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocPDF.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocEnergyFixer.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocImplicit.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocDiagnostics.cpp
-                    ${SRC_DIR}/PBL/Shoc/ERF_ShocCoupling.cpp
-                  )
+    erf_add_shoc_sources(${erf_lib_name} FULL)
     target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_SHOC)
   endif()
 

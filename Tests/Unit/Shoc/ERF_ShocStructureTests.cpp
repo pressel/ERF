@@ -47,6 +47,40 @@ TEST(ShocStructure, SurfaceLayerUsesUstarFloorAndFiniteObukhov)
     }
 }
 
+TEST(ShocStructure, SurfaceLayerObukhovUsesClampedUstar)
+{
+    auto col = shoc_test::make_column(4);
+    auto thetal = col.thetal.array();
+    auto qv = col.qv.array();
+    auto qc = col.qc.array();
+    auto qi = col.qi.array();
+    auto exner = col.exner.array();
+
+    thetal(0,0,0) = 300.0;
+    qv(0,0,0) = 0.010;
+    qc(0,0,0) = 0.0;
+    qi(0,0,0) = 0.0;
+    exner(0,0,0) = 1.0;
+
+    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
+    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
+    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
+
+    ShocStructure::diagnose_surface_layer(col);
+    shoc_test::sync();
+
+    const amrex::Real thv_sfc = 300.0 * (1.0 + 0.61 * 0.010);
+    const amrex::Real ustar = 0.01;
+    const amrex::Real ustar_cu = ustar * ustar * ustar;
+    const amrex::Real kbfs = 0.02;
+    const amrex::Real expected_obk = -thv_sfc * ustar_cu /
+                                     (CONST_GRAV * KAPPA * (kbfs + 1.0e-10));
+
+    EXPECT_DOUBLE_EQ(col.ustar.const_array()(0,0,0), ustar);
+    EXPECT_NEAR(col.obklen.const_array()(0,0,0), expected_obk, 1.0e-12);
+}
+
 TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
 {
     auto col = shoc_test::make_column(4);

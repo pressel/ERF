@@ -2,6 +2,7 @@
 #define ERF_SHOC_COLUMN_DATA_H_
 
 #include "ERF_ShocTypes.H"
+#include "ERF_ShocGpuUtils.H"
 
 #include <AMReX_Arena.H>
 #include <AMReX_Box.H>
@@ -22,7 +23,9 @@ make_shoc_layout (const amrex::Box& bx, const amrex::Geometry& geom)
 }
 
 inline void
-define_shoc_column_data (ShocColumnData& col, const ShocColumnLayout& layout)
+define_shoc_column_data (ShocColumnData& col,
+                         const ShocColumnLayout& layout,
+                         amrex::Arena* arena = amrex::The_Async_Arena())
 {
     col.layout = layout;
 
@@ -33,9 +36,9 @@ define_shoc_column_data (ShocColumnData& col, const ShocColumnLayout& layout)
     const amrex::Box scal_box(amrex::IntVect(0,0,0),
                               amrex::IntVect(layout.ncell-1, 0, 0));
 
-    auto make2 = [&] (amrex::FArrayBox& fab) { fab.resize(cell_box, 1, amrex::The_Async_Arena()); };
-    auto make2i = [&] (amrex::FArrayBox& fab) { fab.resize(iface_box, 1, amrex::The_Async_Arena()); };
-    auto make1 = [&] (amrex::FArrayBox& fab) { fab.resize(scal_box, 1, amrex::The_Async_Arena()); };
+    auto make2 = [&] (amrex::FArrayBox& fab) { fab.resize(cell_box, 1, arena); };
+    auto make2i = [&] (amrex::FArrayBox& fab) { fab.resize(iface_box, 1, arena); };
+    auto make1 = [&] (amrex::FArrayBox& fab) { fab.resize(scal_box, 1, arena); };
 
     make2(col.zt); make2i(col.zi); make2(col.dz); make2(col.p_mid); make2i(col.p_int);
     make2(col.rho); make2(col.theta); make2(col.exner); make2(col.theta_v); make2(col.thetal);
@@ -66,11 +69,7 @@ define_shoc_column_data (ShocColumnData& col, const ShocColumnLayout& layout)
                                   &col.theta_tend,
                                   &col.qv_tend,&col.qc_tend,&col.qi_tend,&col.u_tend,&col.v_tend,&col.tke_tend,
                                   &col.surf_sens_flux,&col.surf_lat_flux,&col.surf_tau_u,&col.surf_tau_v}) {
-                #ifdef AMREX_USE_GPU
-                    fab->setVal<amrex::RunOn::Device>(0.0, fab->box(), 0, fab->nComp());
-                #else
-                    fab->setVal<amrex::RunOn::Host>(0.0, fab->box(), 0, fab->nComp());
-                #endif
+        shoc::set_fab_val(*fab, amrex::Real(0.0));
     }
 }
 

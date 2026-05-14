@@ -5,6 +5,7 @@ if(NOT TARGET GTest::gtest)
     "ERF test build so Submodules/googletest is added first.")
 endif()
 
+include(${PROJECT_SOURCE_DIR}/CMake/BuildERFExe.cmake)
   include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
 
 add_executable(erf_shoc_unit_tests
@@ -15,13 +16,9 @@ add_executable(erf_shoc_unit_tests
   ERF_ShocPDFTests.cpp
   ERF_ShocImplicitTests.cpp
   ERF_ShocPhysicalPropertyTests.cpp
-  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocStructure.cpp
-  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocTKE.cpp
-  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocMoments.cpp
-  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocPDF.cpp
-  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocEnergyFixer.cpp
-  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocImplicit.cpp
 )
+
+erf_add_shoc_sources(erf_shoc_unit_tests)
 
 target_include_directories(erf_shoc_unit_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/Source

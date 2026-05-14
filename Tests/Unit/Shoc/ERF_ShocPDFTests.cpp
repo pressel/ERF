@@ -22,6 +22,7 @@ void run_pdf_pipeline (ShocColumnData& col,
     ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
     ShocMoments::diagnose_moments(col, opts);
     ShocPDF::diagnose_pdf(col, opts, dt);
+    shoc_test::sync();
 }
 
 void setup_translated_e3sm_pdf_column (ShocColumnData& col, amrex::Real w3_value)

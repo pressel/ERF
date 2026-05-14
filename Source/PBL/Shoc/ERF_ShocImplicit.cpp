@@ -173,8 +173,8 @@ ShocImplicit::compute_temperature (Real thetal,
                                    Real ql,
                                    Real exner)
 {
-    return std::max(shoc_min_temp(),
-                    thetal * std::max(exner, 1.0e-12) + (L_v / Cp_d) * ql);
+    return amrex::max(shoc_min_temp(),
+                      thetal * amrex::max(exner, 1.0e-12) + (L_v / Cp_d) * ql);
 }
 
 AMREX_GPU_HOST_DEVICE
@@ -182,7 +182,7 @@ Real
 ShocImplicit::compute_vapor (Real qw,
                              Real ql)
 {
-    return std::max(0.0_rt, qw - std::max(0.0_rt, ql));
+    return amrex::max(0.0_rt, qw - amrex::max(0.0_rt, ql));
 }
 
 void
@@ -267,8 +267,10 @@ ShocImplicit::advance_implicit_state (ShocColumnData& col,
         Real wtke_sfc = 0.0_rt;
         if (stress_mag > 1.0e-12_rt) {
             const Real ws = amrex::max(std::sqrt(u(ic,0,0) * u(ic,0,0) + v(ic,0,0) * v(ic,0,0)), shoc_u_ws_min());
-            const Real tau = std::sqrt(std::pow(amrex::max(rho_zi(ic,0,0), 1.0e-12_rt) * uw_sfc, 2) +
-                                       std::pow(amrex::max(rho_zi(ic,0,0), 1.0e-12_rt) * vw_sfc, 2));
+            const Real rho_zi_sfc = amrex::max(rho_zi(ic,0,0), 1.0e-12_rt);
+            const Real tau_u = rho_zi_sfc * uw_sfc;
+            const Real tau_v = rho_zi_sfc * vw_sfc;
+            const Real tau = std::sqrt(tau_u * tau_u + tau_v * tau_v);
             ksrf = amrex::max(tau / ws, shoc_ksrf_min());
             const Real ustar = amrex::max(std::sqrt(stress_mag), shoc_ustar_min());
             wtke_sfc = ustar * ustar * ustar;
@@ -381,74 +383,12 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
     const auto u_base = col.u_base.const_array();
     const auto v_base = col.v_base.const_array();
     const auto tke_base = col.tke_base_state.const_array();
-    const auto rho = col.rho.const_array();
-    const auto dz = col.dz.const_array();
-    const auto surf_sens_flux = col.surf_sens_flux.const_array();
-    const auto surf_lat_flux = col.surf_lat_flux.const_array();
+    const auto energy_view = shoc::make_energy_fixer_view(col);
     const Box col_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, 0, 0));
 
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
-        int shoc_top = -1;
-        for (int k = nlev - 1; k >= 0; --k) {
-            if (tke(ic,k,0) > shoc_min_tke()) {
-                shoc_top = k;
-                break;
-            }
-        }
-
-        if (shoc_top >= 0) {
-            Real energy_before = 0.0_rt;
-            Real energy_after = 0.0_rt;
-            Real air_mass = 0.0_rt;
-
-            for (int k = 0; k <= shoc_top; ++k) {
-                const Real mass = rho(ic,k,0) * dz(ic,k,0);
-                const Real tabs_old = compute_temperature(thetal_base(ic,k,0),
-                                                          qc_base(ic,k,0) + qi_base(ic,k,0),
-                                                          exner(ic,k,0));
-
-                const Real qw_new_loc = amrex::max(qw(ic,k,0), shoc_min_qw());
-                const Real pdf_ql = shoc_clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
-                Real tabs_new = 0.0_rt;
-                Real qv_new_loc = 0.0_rt;
-                Real qc_new_loc = 0.0_rt;
-                Real qi_new_loc = 0.0_rt;
-                reconstruct_moisture_from_pdf_and_mean_state(thetal(ic,k,0), qw_new_loc,
-                                                             exner(ic,k,0), qi_base(ic,k,0), pdf_ql,
-                                                             tabs_new, qv_new_loc, qc_new_loc, qi_new_loc);
-
-                const Real ql_old = amrex::max(0.0_rt, qc_base(ic,k,0) + qi_base(ic,k,0));
-                const Real ql_new = amrex::max(0.0_rt, qc_new_loc + qi_new_loc);
-                energy_before += mass * (Cp_d * tabs_old
-                                         + CONST_GRAV * zt(ic,k,0)
-                                         + 0.5_rt * (u_base(ic,k,0) * u_base(ic,k,0) +
-                                                     v_base(ic,k,0) * v_base(ic,k,0))
-                                         + tke_base(ic,k,0)
-                                         + (L_v + shoc_lat_ice()) * qv_base(ic,k,0)
-                                         + shoc_lat_ice() * ql_old);
-                energy_after += mass * (Cp_d * tabs_new
-                                        + CONST_GRAV * zt(ic,k,0)
-                                        + 0.5_rt * (u(ic,k,0) * u(ic,k,0) +
-                                                    v(ic,k,0) * v(ic,k,0))
-                                        + tke(ic,k,0)
-                                        + (L_v + shoc_lat_ice()) * qv_new_loc
-                                        + shoc_lat_ice() * ql_new);
-                air_mass += mass;
-            }
-
-            if (air_mass > 0.0_rt) {
-                const Real latent_flux_coeff = L_v + shoc_lat_ice();
-                const Real energy_target = energy_before
-                                         + dt * rho(ic,0,0)
-                                         * (Cp_d * exner(ic,0,0) * surf_sens_flux(ic,0,0)
-                                            + latent_flux_coeff * surf_lat_flux(ic,0,0));
-                const Real delta_tabs = (energy_target - energy_after) / (Cp_d * air_mass);
-                for (int k = 0; k <= shoc_top; ++k) {
-                    thetal(ic,k,0) += delta_tabs / amrex::max(exner(ic,k,0), 1.0e-12_rt);
-                }
-            }
-        }
+        shoc::apply_energy_fix_column(energy_view, ic, dt);
 
         for (int k = 0; k < nlev; ++k) {
             const Real qw_new_loc = amrex::max(qw(ic,k,0), shoc_min_qw());

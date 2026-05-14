@@ -154,15 +154,18 @@ namespace
                 : 0.0_rt;
             const Real uf = amrex::max(shoc_ufmin(),
                                        std::sqrt(ustar2 + 0.3_rt * wstar * wstar));
+            const Real wthl_ratio = wthl_sfc / uf;
+            const Real wqw_ratio = wqw_sfc / uf;
+            const Real wtke_scale = amrex::max(std::sqrt(ustar2), shoc_ufmin());
 
-            thl_sec(ic,0,0) = 0.72_rt * std::pow(wthl_sfc / uf, 2);
-            qw_sec(ic,0,0) = 0.72_rt * std::pow(wqw_sfc / uf, 2);
-            qwthl_sec(ic,0,0) = 0.36_rt * (wthl_sfc / uf) * (wqw_sfc / uf);
+            thl_sec(ic,0,0) = 0.72_rt * wthl_ratio * wthl_ratio;
+            qw_sec(ic,0,0) = 0.72_rt * wqw_ratio * wqw_ratio;
+            qwthl_sec(ic,0,0) = 0.36_rt * wthl_ratio * wqw_ratio;
             wthl_sec(ic,0,0) = wthl_sfc;
             wqw_sec(ic,0,0) = wqw_sfc;
             uw_sec(ic,0,0) = uw_sfc;
             vw_sec(ic,0,0) = vw_sfc;
-            wtke_sec(ic,0,0) = std::pow(amrex::max(std::sqrt(ustar2), shoc_ufmin()), 3);
+            wtke_sec(ic,0,0) = wtke_scale * wtke_scale * wtke_scale;
 
             const int ktop = layout.nlev;
             thl_sec(ic,ktop,0) = 0.0_rt;
@@ -357,7 +360,8 @@ ShocMoments::clip_third_moments (const ShocColumnData& col,
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
         for (int k = 0; k <= layout.nlev; ++k) {
-            const Real clip_cond = shoc_w3clip() * std::sqrt(amrex::max(0.0_rt, 2.0_rt * std::pow(wsec(ic,k,0), 3)));
+            const Real wsec3 = wsec(ic,k,0) * wsec(ic,k,0) * wsec(ic,k,0);
+            const Real clip_cond = shoc_w3clip() * std::sqrt(amrex::max(0.0_rt, 2.0_rt * wsec3));
             if (amrex::Math::abs(w3(ic,k,0)) > clip_cond) {
                 w3(ic,k,0) = shoc_w3clipdef();
             }
@@ -432,10 +436,13 @@ ShocMoments::diagnose_third_moments (ShocColumnData& col,
             const Real a3 = 0.6_rt / (c * amrex::max(c - 2.0_rt, 1.0e-12_rt));
             const Real a4 = 2.4_rt / (3.0_rt * c + 5.0_rt);
             const Real a5 = 0.6_rt / (c * (3.0_rt + 5.0_rt * c));
+            const Real bet2_sq = bet2 * bet2;
+            const Real bet2_cu = bet2_sq * bet2;
+            const Real iso_cu = isosq * iso;
 
-            const Real f0 = thedz2 * std::pow(bet2, 3) * std::pow(isosq, 2) *
+            const Real f0 = thedz2 * bet2_cu * isosq * isosq *
                             wthl_sec(ic,k,0) * thl_sec_diff;
-            const Real f1 = thedz2 * (bet2 * bet2) * std::pow(iso, 3) *
+            const Real f1 = thedz2 * bet2_sq * iso_cu *
                             (wthl_sec(ic,k,0) * wthl_sec_diff +
                             0.5_rt * w_sec_i(ic,k,0) * thl_sec_diff);
             const Real f2 = thedz * bet2 * isosq * wthl_sec(ic,k,0) * wsec_diff +

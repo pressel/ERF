@@ -1,6 +1,7 @@
 #include "ERF_ShocTKE.H"
 
 #include "ERF_Constants.H"
+#include "ERF_ShocGpuUtils.H"
 
 #include <algorithm>
 #include <cmath>
@@ -108,11 +109,7 @@ ShocTKE::compute_shear_production (const ShocColumnData& col,
 {
     const Box iface_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, col.layout.nlev, 0));
     sterm_iface.resize(iface_box, 1, The_Async_Arena());
-#ifdef AMREX_USE_GPU
-    sterm_iface.setVal<amrex::RunOn::Device>(0.0, sterm_iface.box(), 0, sterm_iface.nComp());
-#else
-    sterm_iface.setVal<amrex::RunOn::Host>(0.0, sterm_iface.box(), 0, sterm_iface.nComp());
-#endif
+    shoc::set_fab_val(sterm_iface, 0.0);
 
     auto sterm = sterm_iface.array();
     const auto u = col.u.const_array();
@@ -205,7 +202,7 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
                 : (CONST_GRAV / shoc_base_temp()) * wthv_sec(ic,k,0);
             const Real shear_prod = tk(ic,k,0) * sterm(ic,k,0);
             const Real mix = amrex::max(shoc_mix(ic,k,0), 1.0e-12_rt);
-            const Real diss = shoc_tke_cee() / mix * std::pow(old_tke, 1.5_rt);
+            const Real diss = shoc_tke_cee() / mix * old_tke * std::sqrt(old_tke);
             const Real net_prod = opts.signed_tke_production
                 ? (shear_prod + buoy_prod)
                 : amrex::max(0.0_rt, shear_prod + buoy_prod);

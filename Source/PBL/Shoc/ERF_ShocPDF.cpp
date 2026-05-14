@@ -81,10 +81,13 @@ namespace
         a = 0.5;
 
         if (w_sec > shoc_w_tol_sqd()) {
-            const Real skew_denom = std::sqrt(amrex::max(std::pow(w_sec, 3), 1.0e-18_rt));
+            const Real w_sec_cu = w_sec * w_sec * w_sec;
+            const Real one_minus_pdf = 1.0_rt - shoc_pdf_tmp();
+            const Real one_minus_pdf_cu = one_minus_pdf * one_minus_pdf * one_minus_pdf;
+            const Real skew_denom = std::sqrt(amrex::max(w_sec_cu, 1.0e-18_rt));
             skew_w = w3var / skew_denom;
             const Real skew_term = std::sqrt(1.0_rt /
-                (4.0_rt * std::pow(1.0_rt - shoc_pdf_tmp(), 3) + skew_w * skew_w));
+                (4.0_rt * one_minus_pdf_cu + skew_w * skew_w));
             a = shoc_clamp(0.5_rt * (1.0_rt - skew_w * skew_term), 0.01_rt, 0.99_rt);
             w1_1 = std::sqrt((1.0_rt - a) / a) * shoc_sqrt_pdf_tmp();
             w1_2 = -std::sqrt(a / (1.0_rt - a)) * shoc_sqrt_pdf_tmp();
@@ -108,12 +111,12 @@ namespace
         sqrtthl2_2 = 0.0;
 
         if (thlsec > shoc_thl_tol() * shoc_thl_tol() &&
-            std::abs(w1_2 - w1_1) > shoc_w_thresh() &&
+            amrex::Math::abs(w1_2 - w1_1) > shoc_w_thresh() &&
             sqrtw2 > 0.0 && sqrtthl > 0.0) {
             const Real corr = shoc_clamp(wthlsec / (sqrtw2 * sqrtthl), -1.0_rt, 1.0_rt);
             const Real tmp1 = -corr / w1_1;
             const Real tmp2 = -corr / w1_2;
-            const Real tsign = std::abs(tmp1 - tmp2);
+            const Real tsign = amrex::Math::abs(tmp1 - tmp2);
             Real skew_thl = 0.0;
             if (shoc_do_thetal_skew()) {
                 if (tsign > 0.4) {
@@ -154,12 +157,12 @@ namespace
         sqrtqw2_2 = 0.0;
 
         if (qwsec > shoc_rt_tol() * shoc_rt_tol() &&
-            std::abs(w1_2 - w1_1) > shoc_w_thresh() &&
+            amrex::Math::abs(w1_2 - w1_1) > shoc_w_thresh() &&
             sqrtw2 > 0.0 && sqrtqt > 0.0) {
             const Real corr = shoc_clamp(wqwsec / (sqrtw2 * sqrtqt), -1.0_rt, 1.0_rt);
             const Real tmp1 = -corr / w1_1;
             const Real tmp2 = -corr / w1_2;
-            const Real tsign = std::abs(tmp1 - tmp2);
+            const Real tsign = amrex::Math::abs(tmp1 - tmp2);
             Real skew_qw = 0.0;
             if (tsign > 0.4) {
                 skew_qw = 1.2 * skew_w;
@@ -204,7 +207,8 @@ namespace
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real compute_temperature (Real thl1, Real pval)
     {
-        return thl1 / std::pow(p_0 / amrex::max(pval, 1.0e-12_rt), R_d / Cp_d);
+        const Real pressure_ratio = p_0 / amrex::max(pval, 1.0e-12_rt);
+        return thl1 / std::exp((R_d / Cp_d) * std::log(pressure_ratio));
     }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -221,8 +225,11 @@ namespace
                           Real thl2, Real qw2, Real sqrtthl2, Real sqrtqw2,
                           Real r_qwthl, Real& s, Real& std_s, Real& qn, Real& cfrac)
     {
-        const Real cthl = ((1.0 + beta * qw1) / std::pow(1.0 + beta * qs, 2))
-                        * (Cp_d / L_v) * beta * qs * std::pow(pval / p_0, R_d / Cp_d);
+        const Real beta_qs = 1.0_rt + beta * qs;
+        const Real pressure_ratio = pval / p_0;
+        const Real pressure_term = std::exp((R_d / Cp_d) * std::log(pressure_ratio));
+        const Real cthl = ((1.0_rt + beta * qw1) / (beta_qs * beta_qs))
+                        * (Cp_d / L_v) * beta * qs * pressure_term;
         const Real cqt = 1.0 / (1.0 + beta * qs);
         std_s = std::sqrt(amrex::max(0.0_rt, cthl * cthl * thl2
                                         + cqt * cqt * qw2
@@ -251,9 +258,11 @@ namespace
     Real compute_buoyancy_flux (Real wthlsec, Real wqwsec, Real pval, Real wqls)
     {
         const Real epsterm = R_d / R_v;
+        const Real pressure_ratio = p_0 / amrex::max(pval, 1.0e-12_rt);
+        const Real pressure_term = std::exp((R_d / Cp_d) * std::log(pressure_ratio));
         return wthlsec
                  + ((1.0_rt - epsterm) / epsterm) * shoc_base_temp() * wqwsec
-             + ((L_v / Cp_d) * std::pow(p_0 / amrex::max(pval, 1.0e-12_rt), R_d / Cp_d)
+             + ((L_v / Cp_d) * pressure_term
                      - (1.0_rt / epsterm) * shoc_base_temp()) * wqls;
     }
 }

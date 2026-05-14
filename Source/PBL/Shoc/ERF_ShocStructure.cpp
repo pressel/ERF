@@ -92,7 +92,8 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
         const Real sign_val = (kbfs >= 0.0_rt) ? shoc_kbfs_eps() : -shoc_kbfs_eps();
 
         ustar(ic,0,0) = amrex::max(shoc_u_star_min(), ustar_val);
-        obklen(ic,0,0) = -thv_sfc * std::pow(ustar(ic,0,0), 3) /
+        const Real ustar_cu = ustar(ic,0,0) * ustar(ic,0,0) * ustar(ic,0,0);
+        obklen(ic,0,0) = -thv_sfc * ustar_cu /
                          (CONST_GRAV * KAPPA * (kbfs + sign_val));
         pblh(ic,0,0) = zt(ic,0,0);
 
@@ -137,9 +138,11 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
         for (int k = 1; k < npbl; ++k) {
             const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
                                                             qv(ic,k,0), exner(ic,k,0));
+            const Real du = u(ic,k,0) - u(ic,0,0);
+            const Real dv = v(ic,k,0) - v(ic,0,0);
             const Real vvk = amrex::max(1.0e-36_rt,
-                                        std::pow(u(ic,k,0) - u(ic,0,0), 2) +
-                                        std::pow(v(ic,k,0) - v(ic,0,0), 2) +
+                                        du * du +
+                                        dv * dv +
                                         shoc_pbl_fac() * ustar_loc * ustar_loc);
             const Real rino = CONST_GRAV * (thvk - thv0) * (zt(ic,k,0) - zt(ic,0,0)) /
                               (amrex::max(thv0, 1.0e-12_rt) * vvk);
@@ -171,9 +174,11 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
             for (int k = 1; k < npbl; ++k) {
                 const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
                                                                 qv(ic,k,0), exner(ic,k,0));
+                const Real du = u(ic,k,0) - u(ic,0,0);
+                const Real dv = v(ic,k,0) - v(ic,0,0);
                 const Real vvk = amrex::max(1.0e-36_rt,
-                                            std::pow(u(ic,k,0) - u(ic,0,0), 2) +
-                                            std::pow(v(ic,k,0) - v(ic,0,0), 2) +
+                                            du * du +
+                                            dv * dv +
                                             shoc_pbl_fac() * ustar_loc * ustar_loc);
                 const Real rino = CONST_GRAV * (thvk - tlv) * (zt(ic,k,0) - zt(ic,0,0)) /
                                   (amrex::max(thv0, 1.0e-12_rt) * vvk);
