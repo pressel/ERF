@@ -9,6 +9,14 @@
 #include <cuda_runtime_api.h>
 #elif defined(AMREX_USE_HIP)
 #include <hip/hip_runtime.h>
+#elif defined(AMREX_USE_SYCL) || defined(ERF_USE_SYCL)
+    #if __has_include(<sycl/sycl.hpp>)
+        #include <sycl/sycl.hpp>
+namespace erf_test_sycl = sycl;
+    #else
+        #include <CL/sycl.hpp>
+namespace erf_test_sycl = cl::sycl;
+    #endif
 #endif
 
 namespace
@@ -45,6 +53,19 @@ gpu_runtime_available ()
         std::cerr << "Skipping SHOC HIP unit tests: "
                   << hipGetErrorString(err)
                   << " (device count = " << ndev << ")\n";
+        return false;
+    }
+#elif defined(AMREX_USE_SYCL) || defined(ERF_USE_SYCL)
+    try {
+        const auto devices =
+            erf_test_sycl::device::get_devices(erf_test_sycl::info::device_type::gpu);
+
+        if (devices.empty()) {
+            std::cerr << "Skipping SHOC SYCL unit tests: no SYCL GPU device available\n";
+            return false;
+        }
+    } catch (const erf_test_sycl::exception& e) {
+        std::cerr << "Skipping SHOC SYCL unit tests: " << e.what() << "\n";
         return false;
     }
 #endif
