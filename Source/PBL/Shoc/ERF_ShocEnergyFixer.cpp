@@ -108,7 +108,6 @@ ShocEnergyFixer::apply_column (const ShocColumnData& col,
     const auto exner = col.exner.const_array();
     const auto surf_sens_flux = col.surf_sens_flux.const_array();
     const auto surf_lat_flux = col.surf_lat_flux.const_array();
-    const int nlev = col.layout.nlev;
 
     const int shoc_top = diagnose_active_top(tke_new);
     if (shoc_top < 0) return;

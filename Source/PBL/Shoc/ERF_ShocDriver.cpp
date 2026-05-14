@@ -27,6 +27,83 @@ namespace
     {
         return periodic ? idx : shoc_clamp(idx, domlo, domhi);
     }
+
+    void seed_carried_turbulence_impl (
+        Box const& xy_box,
+        ShocColumnLayout layout,
+        Array4<const Real> const& rho_host,
+        Array4<const Real> const& carried,
+        Array4<const Real> const& host_diff,
+        Array4<Real> const& tk,
+        Array4<Real> const& tkh,
+        bool prev_turb_valid)
+    {
+        ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+        {
+            const int ic = shoc_column_index(layout, i, j);
+            for (int kk = 0; kk < layout.nlev; ++kk) {
+                const int k = layout.kmin + kk;
+                if (prev_turb_valid) {
+                    tk(ic,kk,0) = carried(i,j,k,0);
+                    tkh(ic,kk,0) = carried(i,j,k,1);
+                } else {
+                    const Real rho = amrex::max(rho_host(i,j,k,Rho_comp), 1.0e-12_rt);
+                    tk(ic,kk,0) = amrex::max(0.0_rt, host_diff(i,j,k,EddyDiff::Mom_v) / rho);
+                    tkh(ic,kk,0) = amrex::max(0.0_rt, host_diff(i,j,k,EddyDiff::Theta_v) / rho);
+                }
+            }
+        });
+    }
+
+    void store_carried_turbulence_impl (
+        Box const& xy_box,
+        ShocColumnLayout layout,
+        Array4<Real> const& carried,
+        Array4<const Real> const& tk,
+        Array4<const Real> const& tkh)
+    {
+        ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+        {
+            const int ic = shoc_column_index(layout, i, j);
+            for (int kk = 0; kk < layout.nlev; ++kk) {
+                const int k = layout.kmin + kk;
+                carried(i,j,k,0) = tk(ic,kk,0);
+                carried(i,j,k,1) = tkh(ic,kk,0);
+            }
+        });
+    }
+
+    void seed_carried_buoyancy_flux_impl (
+        Box const& xy_box,
+        ShocColumnLayout layout,
+        Array4<const Real> const& carried,
+        Array4<Real> const& wthv_sec)
+    {
+        ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+        {
+            const int ic = shoc_column_index(layout, i, j);
+            for (int kk = 0; kk < layout.nlev; ++kk) {
+                const int k = layout.kmin + kk;
+                wthv_sec(ic,kk,0) = carried(i,j,k,0);
+            }
+        });
+    }
+
+    void store_carried_buoyancy_flux_impl (
+        Box const& xy_box,
+        ShocColumnLayout layout,
+        Array4<Real> const& carried,
+        Array4<const Real> const& wthv_sec)
+    {
+        ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+        {
+            const int ic = shoc_column_index(layout, i, j);
+            for (int kk = 0; kk < layout.nlev; ++kk) {
+                const int k = layout.kmin + kk;
+                carried(i,j,k,0) = wthv_sec(ic,kk,0);
+            }
+        });
+    }
 }
 
 ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
@@ -122,24 +199,12 @@ ShocDriver::seed_carried_turbulence (ShocColumnData& col,
     const auto host_diff = eddy_diffs.const_array(mfi);
     auto tk = col.tk.array();
     auto tkh = col.tkh.array();
+    const bool prev_turb_valid = m_prev_turb_valid;
     const auto layout = col.layout;
     const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    ParallelFor(xy_box, [=, this] AMREX_GPU_DEVICE (int i, int j, int) noexcept
-    {
-        const int ic = shoc_column_index(layout, i, j);
-        for (int kk = 0; kk < layout.nlev; ++kk) {
-            const int k = layout.kmin + kk;
-            if (m_prev_turb_valid) {
-                tk(ic,kk,0) = carried(i,j,k,0);
-                tkh(ic,kk,0) = carried(i,j,k,1);
-            } else {
-                const Real rho = amrex::max(rho_host(i,j,k,Rho_comp), 1.0e-12_rt);
-                tk(ic,kk,0) = amrex::max(0.0_rt, host_diff(i,j,k,EddyDiff::Mom_v) / rho);
-                tkh(ic,kk,0) = amrex::max(0.0_rt, host_diff(i,j,k,EddyDiff::Theta_v) / rho);
-            }
-        }
-    });
+    seed_carried_turbulence_impl(xy_box, layout, rho_host, carried, host_diff,
+                                 tk, tkh, prev_turb_valid);
 }
 
 void
@@ -152,15 +217,7 @@ ShocDriver::store_carried_turbulence (const ShocColumnData& col,
     const auto layout = col.layout;
     const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
-    {
-        const int ic = shoc_column_index(layout, i, j);
-        for (int kk = 0; kk < layout.nlev; ++kk) {
-            const int k = layout.kmin + kk;
-            carried(i,j,k,0) = tk(ic,kk,0);
-            carried(i,j,k,1) = tkh(ic,kk,0);
-        }
-    });
+    store_carried_turbulence_impl(xy_box, layout, carried, tk, tkh);
 }
 
 void
@@ -176,14 +233,7 @@ ShocDriver::seed_carried_buoyancy_flux (ShocColumnData& col,
     const auto layout = col.layout;
     const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
-    {
-        const int ic = shoc_column_index(layout, i, j);
-        for (int kk = 0; kk < layout.nlev; ++kk) {
-            const int k = layout.kmin + kk;
-            wthv_sec(ic,kk,0) = carried(i,j,k,0);
-        }
-    });
+    seed_carried_buoyancy_flux_impl(xy_box, layout, carried, wthv_sec);
 }
 
 void
@@ -195,14 +245,7 @@ ShocDriver::store_carried_buoyancy_flux (const ShocColumnData& col,
     const auto layout = col.layout;
     const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
-    {
-        const int ic = shoc_column_index(layout, i, j);
-        for (int kk = 0; kk < layout.nlev; ++kk) {
-            const int k = layout.kmin + kk;
-            carried(i,j,k,0) = wthv_sec(ic,kk,0);
-        }
-    });
+    store_carried_buoyancy_flux_impl(xy_box, layout, carried, wthv_sec);
 }
 
 void

@@ -25,7 +25,6 @@ function(build_erf_lib erf_lib_name)
   set(BIN_DIR ${PROJECT_BINARY_DIR}/Source/${erf_lib_name})
 
   include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
-  set_erf_compile_flags(${erf_lib_name})
 
   target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_MOISTURE)
 
@@ -466,20 +465,8 @@ function(build_erf_lib erf_lib_name)
 
   #Link to amrex library
   target_link_libraries_system(${erf_lib_name} PUBLIC AMReX::amrex)
-  if(ERF_ENABLE_CUDA)
-    set(pctargets "${erf_lib_name}")
-    foreach(tgt IN LISTS pctargets)
-      get_target_property(ERF_SOURCES ${tgt} SOURCES)
-      list(FILTER ERF_SOURCES INCLUDE REGEX "\\.cpp")
-      set_source_files_properties(${ERF_SOURCES} PROPERTIES LANGUAGE CUDA)
-      message(STATUS "setting cuda for ${ERF_SOURCES}")
-    endforeach()
-    set_target_properties(
-    ${erf_lib_name} PROPERTIES
-    LANGUAGE CUDA
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-  endif()
+
+  erf_finalize_target(${erf_lib_name})
 
   #Define what we want to be installed during a make install
   install(TARGETS ${erf_lib_name}
@@ -502,7 +489,6 @@ function(build_erf_exe erf_exe_name)
 
 target_link_libraries(${erf_exe_name} PUBLIC ${erf_lib_name})
 include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
-set_erf_compile_flags(${erf_exe_name})
 
   if(ERF_ENABLE_EKAT)
     # Link privately to avoid duplicate link flags, but propagate includes
@@ -549,20 +535,7 @@ set_erf_compile_flags(${erf_exe_name})
        endif()
   endif()
 
-  if(ERF_ENABLE_CUDA)
-    set(pctargets "${erf_exe_name}")
-    foreach(tgt IN LISTS pctargets)
-      get_target_property(ERF_SOURCES ${tgt} SOURCES)
-      list(FILTER ERF_SOURCES INCLUDE REGEX "\\.cpp")
-      set_source_files_properties(${ERF_SOURCES} PROPERTIES LANGUAGE CUDA)
-      message(STATUS "setting cuda for ${ERF_SOURCES}")
-    endforeach()
-    set_target_properties(
-    ${erf_exe_name} PROPERTIES
-    LANGUAGE CUDA
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-  endif()
+  erf_finalize_target(${erf_exe_name})
 
   install(TARGETS ${erf_exe_name}
           RUNTIME DESTINATION bin
