@@ -38,6 +38,16 @@ target_link_libraries(erf_shoc_unit_tests PRIVATE
   amrex
 )
 
+if(ERF_ENABLE_CUDA)
+  get_target_property(ERF_SOURCES erf_shoc_unit_tests SOURCES)
+  list(FILTER ERF_SOURCES INCLUDE REGEX "\\.cpp")
+  set_source_files_properties(${ERF_SOURCES} PROPERTIES LANGUAGE CUDA)
+  set_target_properties(erf_shoc_unit_tests PROPERTIES
+    LANGUAGE CUDA
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+endif()
+
 erf_register_gtest_suite(erf_shoc_unit_tests
   LABELS unit shoc
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}

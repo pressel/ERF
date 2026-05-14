@@ -125,7 +125,7 @@ ShocDriver::seed_carried_turbulence (ShocColumnData& col,
     const auto layout = col.layout;
     const Box xy_box = amrex::makeSlab(mfi.validbox(), 2, layout.kmin);
 
-    ParallelFor(xy_box, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+    ParallelFor(xy_box, [=, this] AMREX_GPU_DEVICE (int i, int j, int) noexcept
     {
         const int ic = shoc_column_index(layout, i, j);
         for (int kk = 0; kk < layout.nlev; ++kk) {
