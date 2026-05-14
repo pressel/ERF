@@ -3,7 +3,7 @@
 using namespace amrex;
 
 void
-ERF::compute_shoc_tendencies (int level,
+ERF::compute_shoc_tendencies (int lev,
                               MultiFab* cons,
                               MultiFab* xvel,
                               MultiFab* yvel,
@@ -17,8 +17,8 @@ ERF::compute_shoc_tendencies (int level,
                               MultiFab* z_phys_nd,
                               const Real& dt_advance)
 {
-    AMREX_ALWAYS_ASSERT(shoc_interface[level]);
-    shoc_interface[level]->advance(*cons, *xvel, *yvel, *zvel,
+    AMREX_ALWAYS_ASSERT(shoc_interface[lev]);
+    shoc_interface[lev]->advance(*cons, *xvel, *yvel, *zvel,
                                  tau13, tau23, hfx3, qfx3, eddyDiffs,
-                                 *z_phys_nd, Geom(level), dt_advance);
+                                 *z_phys_nd, Geom(lev), dt_advance);
 }
