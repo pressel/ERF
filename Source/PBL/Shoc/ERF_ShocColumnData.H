@@ -66,7 +66,7 @@ define_shoc_column_data (ShocColumnData& col, const ShocColumnLayout& layout)
                                   &col.theta_tend,
                                   &col.qv_tend,&col.qc_tend,&col.qi_tend,&col.u_tend,&col.v_tend,&col.tke_tend,
                                   &col.surf_sens_flux,&col.surf_lat_flux,&col.surf_tau_u,&col.surf_tau_v}) {
-        fab->setVal(0.0);
+        fab->setVal(0.0, 0, fab->nComp());
     }
 }
 

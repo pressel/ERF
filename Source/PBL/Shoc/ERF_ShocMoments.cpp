@@ -124,22 +124,6 @@ namespace
         return top_taper_from_distance(opts, zi(ic,layout.nlev,0) - zi(ic,k,0));
     }
 
-    void diagnose_surface_moment_scales (const ShocColumnData& col,
-                                         Real& ustar2,
-                                         Real& wstar)
-    {
-        const auto wthl_sfc = col.surf_sens_flux.const_array()(0,0,0);
-        const auto uw_sfc = col.surf_tau_u.const_array()(0,0,0);
-        const auto vw_sfc = col.surf_tau_v.const_array()(0,0,0);
-
-        ustar2 = std::sqrt(uw_sfc * uw_sfc + vw_sfc * vw_sfc);
-        if (wthl_sfc >= 0.0) {
-            wstar = std::cbrt((CONST_GRAV / k_shoc_base_temp) * wthl_sfc);
-        } else {
-            wstar = 0.0;
-        }
-    }
-
     void apply_second_moment_boundary_conditions (ShocColumnData& col)
     {
         auto thl_sec = col.thl_sec.array();

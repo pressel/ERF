@@ -635,9 +635,15 @@ TEST(ShocImplicit, TranslatedE3smMultiColumnPropertyCaseStaysPhysical)
             qw_after += qw_new(ic,k,0) * rho(ic,k,0) * dz(ic,k,0);
         }
 
-        if (wthl_sfc[ic] > 0.0) EXPECT_GT(thl_after, thl_before[ic]);
-        if (wqw_sfc[ic] > 0.0) EXPECT_GT(qw_after, qw_before[ic]);
-        if (wqw_sfc[ic] < 0.0) EXPECT_LT(qw_after, qw_before[ic]);
+        if (wthl_sfc[ic] > 0.0) {
+            EXPECT_GT(thl_after, thl_before[ic]);
+        }
+        if (wqw_sfc[ic] > 0.0) {
+            EXPECT_GT(qw_after, qw_before[ic]);
+        }
+        if (wqw_sfc[ic] < 0.0) {
+            EXPECT_LT(qw_after, qw_before[ic]);
+        }
     }
 }
 

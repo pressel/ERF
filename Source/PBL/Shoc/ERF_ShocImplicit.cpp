@@ -100,66 +100,6 @@ namespace
         }
         return amrex::max(zt(ic,k,0) - zt(ic,k-1,0), 1.0e-12_rt);
     }
-
-    void setup_tridiagonal (int nlev,
-                            const Vector<Real>& kv_zi,
-                            const Vector<Real>& tmpi,
-                            const Vector<Real>& rdp_zt,
-                            Real dt,
-                            Real flux_diag,
-                            Vector<Real>& dl,
-                            Vector<Real>& d,
-                            Vector<Real>& du)
-    {
-        dl.assign(nlev, 0.0);
-        d.assign(nlev, 1.0);
-        du.assign(nlev, 0.0);
-
-        for (int k = 0; k < nlev; ++k) {
-            if (k > 0) {
-                dl[k] = -kv_zi[k] * tmpi[k] * rdp_zt[k];
-            }
-            if (k < nlev - 1) {
-                du[k] = -kv_zi[k+1] * tmpi[k+1] * rdp_zt[k];
-            }
-            d[k] = 1.0 - dl[k] - du[k];
-        }
-
-        if (nlev > 0) {
-            d[0] += flux_diag * dt * CONST_GRAV * rdp_zt[0];
-        }
-    }
-
-    void solve_tridiagonal (const Vector<Real>& dl_in,
-                            const Vector<Real>& d_in,
-                            const Vector<Real>& du_in,
-                            Vector<Real>& rhs)
-    {
-        const int n = static_cast<int>(rhs.size());
-        if (n == 0) {
-            return;
-        }
-
-        Vector<Real> cprime(n, 0.0);
-        Vector<Real> dprime(n, 0.0);
-
-        Real denom = d_in[0];
-        AMREX_ALWAYS_ASSERT(std::abs(denom) > 1.0e-14);
-        cprime[0] = (n > 1) ? du_in[0] / denom : 0.0;
-        dprime[0] = rhs[0] / denom;
-
-        for (int k = 1; k < n; ++k) {
-            denom = d_in[k] - dl_in[k] * cprime[k-1];
-            AMREX_ALWAYS_ASSERT(std::abs(denom) > 1.0e-14);
-            cprime[k] = (k < n - 1) ? du_in[k] / denom : 0.0;
-            dprime[k] = (rhs[k] - dl_in[k] * dprime[k-1]) / denom;
-        }
-
-        rhs[n-1] = dprime[n-1];
-        for (int k = n - 2; k >= 0; --k) {
-            rhs[k] = dprime[k] - cprime[k] * rhs[k+1];
-        }
-    }
 }
 
 void

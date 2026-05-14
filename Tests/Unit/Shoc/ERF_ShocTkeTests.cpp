@@ -18,27 +18,27 @@ TEST(ShocTke, ShearProductionRespectsBoundariesAndShear)
     auto u = col.u.array();
     auto v = col.v.array();
     for (int k = 0; k < col.layout.nlev; ++k) {
-        u(0,k,0) = 2.0 - k;
-        v(0,k,0) = 1.0 + k;
+        u(0,k,0,0) = 2.0 - k;
+        v(0,k,0,0) = 1.0 + k;
     }
 
     ShocTKE::compute_shear_production(col, sterm_iface);
     const auto sterm = sterm_iface.const_array();
 
-    EXPECT_DOUBLE_EQ(sterm(0,0,0), 0.0);
-    EXPECT_DOUBLE_EQ(sterm(0,col.layout.nlev,0), 0.0);
+    EXPECT_DOUBLE_EQ(sterm(0,0,0,0), 0.0);
+    EXPECT_DOUBLE_EQ(sterm(0,col.layout.nlev,0,0), 0.0);
     for (int k = 1; k < col.layout.nlev; ++k) {
-        EXPECT_GT(sterm(0,k,0), 0.0);
-        EXPECT_TRUE(std::isfinite(sterm(0,k,0)));
+        EXPECT_GT(sterm(0,k,0,0), 0.0);
+        EXPECT_TRUE(std::isfinite(sterm(0,k,0,0)));
     }
 
     for (int k = 0; k < col.layout.nlev; ++k) {
-        u(0,k,0) = 3.0;
-        v(0,k,0) = -2.0;
+        u(0,k,0,0) = 3.0;
+        v(0,k,0,0) = -2.0;
     }
     ShocTKE::compute_shear_production(col, sterm_iface);
     for (int k = 0; k <= col.layout.nlev; ++k) {
-        EXPECT_DOUBLE_EQ(sterm_iface.const_array()(0,k,0), 0.0);
+        EXPECT_DOUBLE_EQ(sterm_iface.const_array()(0,k,0,0), 0.0);
     }
 }
 
@@ -56,16 +56,16 @@ TEST(ShocTke, HelperKernelsMatchTranslatedE3smFixtures)
     auto zi = col.zi.array();
 
     for (int k = 0; k < col.layout.nlev; ++k) {
-        u(0,k,0) = 2.0 - k;
-        v(0,k,0) = 1.0 + k;
-        dz(0,k,0) = 100.0 + 25.0 * k;
-        brunt(0,k,0) = 1.0e-3 * (k + 1);
-        p_mid(0,k,0) = (k < 3) ? (95000.0 - 5000.0 * k) : (78000.0 - 2000.0 * (k - 3));
+        u(0,k,0,0) = 2.0 - k;
+        v(0,k,0,0) = 1.0 + k;
+        dz(0,k,0,0) = 100.0 + 25.0 * k;
+        brunt(0,k,0,0) = 1.0e-3 * (k + 1);
+        p_mid(0,k,0,0) = (k < 3) ? (95000.0 - 5000.0 * k) : (78000.0 - 2000.0 * (k - 3));
     }
     for (int k = 0; k <= col.layout.nlev; ++k) {
-        zi(0,k,0) = 100.0 * k;
+        zi(0,k,0,0) = 100.0 * k;
         if (k < col.layout.nlev) {
-            zt(0,k,0) = 50.0 + 100.0 * k;
+            zt(0,k,0,0) = 50.0 + 100.0 * k;
         }
     }
 
@@ -81,7 +81,7 @@ TEST(ShocTke, HelperKernelsMatchTranslatedE3smFixtures)
     ASSERT_EQ(shear_fixture.size(), static_cast<std::size_t>(col.layout.nlev + 1));
     ASSERT_EQ(stab_fixture.size(), 1);
     for (int k = 0; k <= col.layout.nlev; ++k) {
-        EXPECT_NEAR(sterm_iface.const_array()(0,k,0), shear_fixture[k], 1.0e-15);
+        EXPECT_NEAR(sterm_iface.const_array()(0,k,0,0), shear_fixture[k], 1.0e-15);
     }
     ASSERT_EQ(brunt_int.size(), 1);
     EXPECT_NEAR(brunt_int[0], stab_fixture[0], 1.0e-15);
@@ -95,17 +95,17 @@ TEST(ShocTke, ColumnStabilityIntegralUsesLowerTroposphereOnly)
     auto brunt = col.brunt.array();
 
     for (int k = 0; k < col.layout.nlev; ++k) {
-        dz(0,k,0) = 100.0 + 25.0 * k;
-        brunt(0,k,0) = 1.0e-3 * (k + 1);
-        p_mid(0,k,0) = (k < 3) ? (95000.0 - 5000.0 * k) : (78000.0 - 2000.0 * (k - 3));
+        dz(0,k,0,0) = 100.0 + 25.0 * k;
+        brunt(0,k,0,0) = 1.0e-3 * (k + 1);
+        p_mid(0,k,0,0) = (k < 3) ? (95000.0 - 5000.0 * k) : (78000.0 - 2000.0 * (k - 3));
     }
 
     Vector<Real> brunt_int;
     ShocTKE::integrate_column_stability(col, brunt_int);
 
-    const Real expected = dz(0,0,0) * brunt(0,0,0)
-                        + dz(0,1,0) * brunt(0,1,0)
-                        + dz(0,2,0) * brunt(0,2,0);
+    const Real expected = dz(0,0,0,0) * brunt(0,0,0,0)
+                        + dz(0,1,0,0) * brunt(0,1,0,0)
+                        + dz(0,2,0,0) * brunt(0,2,0,0);
     ASSERT_EQ(brunt_int.size(), 1);
     EXPECT_NEAR(brunt_int[0], expected, 1.0e-12);
 }
@@ -129,18 +129,18 @@ TEST(ShocTke, TimestepControlsTkeGrowth)
     auto tk_small = col_small.tk.array();
     auto tk_large = col_large.tk.array();
     for (int k = 0; k < col_small.layout.nlev; ++k) {
-        wthv_small(0,k,0) = 0.06 - 0.005 * k;
-        wthv_large(0,k,0) = wthv_small(0,k,0);
-        tk_small(0,k,0) = 1.0;
-        tk_large(0,k,0) = 1.0;
+        wthv_small(0,k,0,0) = 0.06 - 0.005 * k;
+        wthv_large(0,k,0,0) = wthv_small(0,k,0,0);
+        tk_small(0,k,0,0) = 1.0;
+        tk_large(0,k,0,0) = 1.0;
     }
 
-    const auto tke0 = col_small.tke.const_array()(0,0,0);
+    const auto tke0 = col_small.tke.const_array()(0,0,0,0);
     ShocTKE::diagnose_tke_and_diffusivities(col_small, opts, 60.0);
     ShocTKE::diagnose_tke_and_diffusivities(col_large, opts, 300.0);
 
-    EXPECT_GT(col_small.tke.const_array()(0,0,0), tke0);
-    EXPECT_GT(col_large.tke.const_array()(0,0,0), col_small.tke.const_array()(0,0,0));
+    EXPECT_GT(col_small.tke.const_array()(0,0,0,0), tke0);
+    EXPECT_GT(col_large.tke.const_array()(0,0,0,0), col_small.tke.const_array()(0,0,0,0));
 }
 
 TEST(ShocTke, TopTaperDampsUpperActiveLayerOnly)
@@ -165,20 +165,20 @@ TEST(ShocTke, TopTaperDampsUpperActiveLayerOnly)
     auto tk_base = col_base.tk.array();
     auto tk_taper = col_taper.tk.array();
     for (int k = 0; k < col_base.layout.nlev; ++k) {
-        wthv_base(0,k,0) = 0.03;
-        wthv_taper(0,k,0) = 0.03;
-        tk_base(0,k,0) = 1.0;
-        tk_taper(0,k,0) = 1.0;
+        wthv_base(0,k,0,0) = 0.03;
+        wthv_taper(0,k,0,0) = 0.03;
+        tk_base(0,k,0,0) = 1.0;
+        tk_taper(0,k,0,0) = 1.0;
     }
 
     ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 120.0);
     ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 120.0);
 
     const int ktop = col_base.layout.nlev - 1;
-    EXPECT_LT(col_taper.tke.const_array()(0,ktop,0), col_base.tke.const_array()(0,ktop,0));
-    EXPECT_LT(col_taper.tk.const_array()(0,ktop,0), col_base.tk.const_array()(0,ktop,0));
-    EXPECT_LT(col_taper.tkh.const_array()(0,ktop,0), col_base.tkh.const_array()(0,ktop,0));
-    EXPECT_NEAR(col_taper.tke.const_array()(0,0,0), col_base.tke.const_array()(0,0,0), 1.0e-12);
+    EXPECT_LT(col_taper.tke.const_array()(0,ktop,0,0), col_base.tke.const_array()(0,ktop,0,0));
+    EXPECT_LT(col_taper.tk.const_array()(0,ktop,0,0), col_base.tk.const_array()(0,ktop,0,0));
+    EXPECT_LT(col_taper.tkh.const_array()(0,ktop,0,0), col_base.tkh.const_array()(0,ktop,0,0));
+    EXPECT_NEAR(col_taper.tke.const_array()(0,0,0,0), col_base.tke.const_array()(0,0,0,0), 1.0e-12);
 }
 
 TEST(ShocTke, PreviousDiffusivityFeedsShearProduction)
@@ -200,19 +200,19 @@ TEST(ShocTke, PreviousDiffusivityFeedsShearProduction)
     auto tk_zero = col_zero.tk.array();
     auto tk_carried = col_carried.tk.array();
     for (int k = 0; k < col_zero.layout.nlev; ++k) {
-        wthv_zero(0,k,0) = 0.0;
-        wthv_carried(0,k,0) = 0.0;
-        tk_zero(0,k,0) = 0.0;
-        tk_carried(0,k,0) = 1.0;
+        wthv_zero(0,k,0,0) = 0.0;
+        wthv_carried(0,k,0,0) = 0.0;
+        tk_zero(0,k,0,0) = 0.0;
+        tk_carried(0,k,0,0) = 1.0;
     }
 
-    const Real tke0 = col_zero.tke.const_array()(0,1,0);
+    const Real tke0 = col_zero.tke.const_array()(0,1,0,0);
     ShocTKE::diagnose_tke_and_diffusivities(col_zero, opts, 120.0);
     ShocTKE::diagnose_tke_and_diffusivities(col_carried, opts, 120.0);
 
-    EXPECT_LT(col_zero.tke.const_array()(0,1,0), col_carried.tke.const_array()(0,1,0));
-    EXPECT_LT(col_zero.tke.const_array()(0,1,0), tke0);
-    EXPECT_GT(col_carried.tke.const_array()(0,1,0), col_zero.tke.const_array()(0,1,0));
+    EXPECT_LT(col_zero.tke.const_array()(0,1,0,0), col_carried.tke.const_array()(0,1,0,0));
+    EXPECT_LT(col_zero.tke.const_array()(0,1,0,0), tke0);
+    EXPECT_GT(col_carried.tke.const_array()(0,1,0,0), col_zero.tke.const_array()(0,1,0,0));
 }
 
 TEST(ShocTke, OnePointFiveClosureUsesBruntInsteadOfBuoyancyFlux)
@@ -237,22 +237,22 @@ TEST(ShocTke, OnePointFiveClosureUsesBruntInsteadOfBuoyancyFlux)
     auto tk_default = col_default.tk.array();
     auto tk_15 = col_15.tk.array();
     for (int k = 0; k < col_default.layout.nlev; ++k) {
-        wthv_default(0,k,0) = 0.03;
-        wthv_15(0,k,0) = 0.0;
-        brunt(0,k,0) = 2.5e-3;
-        tk_default(0,k,0) = 0.5;
-        tk_15(0,k,0) = 0.5;
+        wthv_default(0,k,0,0) = 0.03;
+        wthv_15(0,k,0,0) = 0.0;
+        brunt(0,k,0,0) = 2.5e-3;
+        tk_default(0,k,0,0) = 0.5;
+        tk_15(0,k,0,0) = 0.5;
     }
 
-    const Real tke_default_before = col_default.tke.const_array()(0,0,0);
-    const Real tke_15_before = col_15.tke.const_array()(0,0,0);
+    const Real tke_default_before = col_default.tke.const_array()(0,0,0,0);
+    const Real tke_15_before = col_15.tke.const_array()(0,0,0,0);
     ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 120.0);
     ShocTKE::diagnose_tke_and_diffusivities(col_15, opts_15, 120.0);
 
-    EXPECT_LT(col_15.tke.const_array()(0,0,0), tke_15_before);
-    EXPECT_GT(col_default.tke.const_array()(0,0,0), col_15.tke.const_array()(0,0,0));
-    EXPECT_GT(col_default.tke.const_array()(0,0,0) - tke_default_before,
-              col_15.tke.const_array()(0,0,0) - tke_15_before);
+    EXPECT_LT(col_15.tke.const_array()(0,0,0,0), tke_15_before);
+    EXPECT_GT(col_default.tke.const_array()(0,0,0,0), col_15.tke.const_array()(0,0,0,0));
+    EXPECT_GT(col_default.tke.const_array()(0,0,0,0) - tke_default_before,
+              col_15.tke.const_array()(0,0,0,0) - tke_15_before);
 }
 
 TEST(ShocTke, SignedProductionOptionAllowsStableBuoyancyToReduceTke)
@@ -276,21 +276,21 @@ TEST(ShocTke, SignedProductionOptionAllowsStableBuoyancyToReduceTke)
     auto tk_default = col_default.tk.array();
     auto tk_signed = col_signed.tk.array();
     for (int k = 0; k < col_default.layout.nlev; ++k) {
-        wthv_default(0,k,0) = -0.2;
-        wthv_signed(0,k,0) = -0.2;
-        tk_default(0,k,0) = 0.0;
-        tk_signed(0,k,0) = 0.0;
+        wthv_default(0,k,0,0) = -0.2;
+        wthv_signed(0,k,0,0) = -0.2;
+        tk_default(0,k,0,0) = 0.0;
+        tk_signed(0,k,0,0) = 0.0;
     }
 
-    const Real tke_default_before = col_default.tke.const_array()(0,0,0);
-    const Real tke_signed_before = col_signed.tke.const_array()(0,0,0);
+    const Real tke_default_before = col_default.tke.const_array()(0,0,0,0);
+    const Real tke_signed_before = col_signed.tke.const_array()(0,0,0,0);
     ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 60.0);
     ShocTKE::diagnose_tke_and_diffusivities(col_signed, opts_signed, 60.0);
 
-    EXPECT_LT(col_default.tke.const_array()(0,0,0), tke_default_before);
-    EXPECT_LT(col_signed.tke.const_array()(0,0,0), tke_signed_before);
-    EXPECT_LT(col_signed.tke.const_array()(0,0,0), col_default.tke.const_array()(0,0,0));
-    EXPECT_GE(col_signed.tke.const_array()(0,0,0), 4.0e-4);
+    EXPECT_LT(col_default.tke.const_array()(0,0,0,0), tke_default_before);
+    EXPECT_LT(col_signed.tke.const_array()(0,0,0,0), tke_signed_before);
+    EXPECT_LT(col_signed.tke.const_array()(0,0,0,0), col_default.tke.const_array()(0,0,0,0));
+    EXPECT_GE(col_signed.tke.const_array()(0,0,0,0), 4.0e-4);
 }
 
 TEST(ShocTke, DiffusivitiesRemainPositiveAndFinite)
@@ -310,16 +310,16 @@ TEST(ShocTke, DiffusivitiesRemainPositiveAndFinite)
     const auto tend = col.tke_tend.const_array();
 
     for (int k = 0; k < col.layout.nlev; ++k) {
-        EXPECT_TRUE(std::isfinite(tke(0,k,0)));
-        EXPECT_TRUE(std::isfinite(tk(0,k,0)));
-        EXPECT_TRUE(std::isfinite(tkh(0,k,0)));
-        EXPECT_TRUE(std::isfinite(isotropy(0,k,0)));
-        EXPECT_TRUE(std::isfinite(tend(0,k,0)));
-        EXPECT_GE(tke(0,k,0), 4.0e-4);
-        EXPECT_LE(tke(0,k,0), 50.0);
-        EXPECT_GE(tk(0,k,0), 0.0);
-        EXPECT_GE(tkh(0,k,0), 0.0);
-        EXPECT_GE(isotropy(0,k,0), 0.0);
+        EXPECT_TRUE(std::isfinite(tke(0,k,0,0)));
+        EXPECT_TRUE(std::isfinite(tk(0,k,0,0)));
+        EXPECT_TRUE(std::isfinite(tkh(0,k,0,0)));
+        EXPECT_TRUE(std::isfinite(isotropy(0,k,0,0)));
+        EXPECT_TRUE(std::isfinite(tend(0,k,0,0)));
+        EXPECT_GE(tke(0,k,0,0), 4.0e-4);
+        EXPECT_LE(tke(0,k,0,0), 50.0);
+        EXPECT_GE(tk(0,k,0,0), 0.0);
+        EXPECT_GE(tkh(0,k,0,0), 0.0);
+        EXPECT_GE(isotropy(0,k,0,0), 0.0);
     }
 }
 
@@ -341,16 +341,16 @@ TEST(ShocTke, RandomizedColumnsStayBounded)
         const auto tkh = col.tkh.const_array();
 
         for (int k = 0; k < col.layout.nlev; ++k) {
-            EXPECT_TRUE(std::isfinite(mix(0,k,0)));
-            EXPECT_TRUE(std::isfinite(tke(0,k,0)));
-            EXPECT_TRUE(std::isfinite(tk(0,k,0)));
-            EXPECT_TRUE(std::isfinite(tkh(0,k,0)));
-            EXPECT_GE(mix(0,k,0), 20.0);
-            EXPECT_LE(mix(0,k,0), std::sqrt(600.0 * 450.0));
-            EXPECT_GE(tke(0,k,0), 4.0e-4);
-            EXPECT_LE(tke(0,k,0), 50.0);
-            EXPECT_GE(tk(0,k,0), 0.0);
-            EXPECT_GE(tkh(0,k,0), 0.0);
+            EXPECT_TRUE(std::isfinite(mix(0,k,0,0)));
+            EXPECT_TRUE(std::isfinite(tke(0,k,0,0)));
+            EXPECT_TRUE(std::isfinite(tk(0,k,0,0)));
+            EXPECT_TRUE(std::isfinite(tkh(0,k,0,0)));
+            EXPECT_GE(mix(0,k,0,0), 20.0);
+            EXPECT_LE(mix(0,k,0,0), std::sqrt(600.0 * 450.0));
+            EXPECT_GE(tke(0,k,0,0), 4.0e-4);
+            EXPECT_LE(tke(0,k,0,0), 50.0);
+            EXPECT_GE(tk(0,k,0,0), 0.0);
+            EXPECT_GE(tkh(0,k,0,0), 0.0);
         }
     }
 }
