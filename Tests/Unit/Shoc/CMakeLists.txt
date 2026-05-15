@@ -15,10 +15,17 @@ add_executable(erf_shoc_unit_tests
   ERF_ShocMomentsTests.cpp
   ERF_ShocPDFTests.cpp
   ERF_ShocImplicitTests.cpp
+  ERF_ShocDriverTests.cpp
   ERF_ShocPhysicalPropertyTests.cpp
 )
 
 erf_add_shoc_sources(erf_shoc_unit_tests)
+
+target_sources(erf_shoc_unit_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocDriver.cpp
+  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocPreprocess.cpp
+  ${CMAKE_SOURCE_DIR}/Source/PBL/Shoc/ERF_ShocDiagnostics.cpp
+)
 
 target_include_directories(erf_shoc_unit_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/Source

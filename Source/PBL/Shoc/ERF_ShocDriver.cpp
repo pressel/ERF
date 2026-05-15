@@ -14,6 +14,19 @@ namespace
     constexpr int k_shoc_vertical_diff_comp = EddyDiff::Mom_v;
     constexpr int k_shoc_vertical_diff_count = EddyDiff::Q_v - EddyDiff::Mom_v + 1;
 
+    void require_full_height_shoc_boxes (const BoxArray& ba, const Box& domain)
+    {
+        const int dom_klo = domain.smallEnd(2);
+        const int dom_khi = domain.bigEnd(2);
+        for (int ibox = 0; ibox < ba.size(); ++ibox) {
+            const Box& bx = ba[ibox];
+            if (bx.smallEnd(2) != dom_klo || bx.bigEnd(2) != dom_khi) {
+                amrex::Abort(
+                    "Native SHOC currently requires each BoxArray tile to span the full vertical domain; z-split boxes are not supported.");
+            }
+        }
+    }
+
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
     {
@@ -265,6 +278,8 @@ ShocDriver::advance (MultiFab& cons,
                      Real dt)
 {
     BL_PROFILE("SHOC::advance");
+
+    require_full_height_shoc_boxes(cons.boxArray(), geom.Domain());
 
     m_cons_ptr = &cons;
     m_hfx3_ptr = hfx3;
@@ -559,6 +574,10 @@ ShocDriver::add_fast_tend (Vector<MultiFab>& S_rhs) const
 {
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
 
+    if (!uses_shoc_tendencies()) {
+        return;
+    }
+
     for (MFIter mfi(*m_cons_ptr, false); mfi.isValid(); ++mfi) {
         const Box& vbx = mfi.validbox();
         const int ilo = vbx.smallEnd(0);
@@ -600,6 +619,10 @@ ShocDriver::add_slow_tend (const MFIter& mfi,
                            const Array4<Real>& cell_rhs) const
 {
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
+
+    if (!uses_shoc_tendencies()) {
+        return;
+    }
 
     const auto rho = m_cons_ptr->const_array(mfi);
     const auto qv_tend = m_qv_tend_cc.const_array(mfi);
