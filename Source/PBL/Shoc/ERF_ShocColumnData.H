@@ -25,7 +25,8 @@ make_shoc_layout (const amrex::Box& bx, const amrex::Geometry& geom)
 inline void
 define_shoc_column_data (ShocColumnData& col,
                          const ShocColumnLayout& layout,
-                         amrex::Arena* arena = amrex::The_Async_Arena())
+                         amrex::Arena* arena = amrex::The_Async_Arena(),
+                         shoc::InitRunOn init_run_on = shoc::default_init_run_on())
 {
     col.layout = layout;
 
@@ -69,7 +70,7 @@ define_shoc_column_data (ShocColumnData& col,
                                   &col.theta_tend,
                                   &col.qv_tend,&col.qc_tend,&col.qi_tend,&col.u_tend,&col.v_tend,&col.tke_tend,
                                   &col.surf_sens_flux,&col.surf_lat_flux,&col.surf_tau_u,&col.surf_tau_v}) {
-        shoc::set_fab_val(*fab, amrex::Real(0.0));
+        shoc::set_fab_val(*fab, amrex::Real(0.0), init_run_on);
     }
 }
 

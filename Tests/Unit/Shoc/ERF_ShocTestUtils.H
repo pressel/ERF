@@ -130,7 +130,8 @@ make_column (int nlev)
     layout.ny = 1;
     layout.ncell = 1;
     layout.nlev = nlev;
-    define_shoc_column_data(col, layout, test_arena());
+    define_shoc_column_data(col, layout, test_arena(), shoc::InitRunOn::Host);
+    sync();
 
     auto zt = col.zt.array();
     auto zi = col.zi.array();
@@ -181,10 +182,10 @@ make_column (int nlev)
         tkh(0,k,0) = 0.0;
     }
 
-    shoc::set_fab_val(col.surf_sens_flux, 0.02);
-    shoc::set_fab_val(col.surf_lat_flux, 1.0e-4);
-    shoc::set_fab_val(col.surf_tau_u, 0.0);
-    shoc::set_fab_val(col.surf_tau_v, 0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 1.0e-4, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     return col;
 }
@@ -225,10 +226,10 @@ make_randomized_column (int nlev, std::mt19937& gen)
         v(0,k,0) = vel_dist(gen);
     }
 
-    shoc::set_fab_val(col.surf_sens_flux, flux_dist(gen));
-    shoc::set_fab_val(col.surf_lat_flux, std::uniform_real_distribution<amrex::Real>(-5.0e-4, 5.0e-4)(gen));
-    shoc::set_fab_val(col.surf_tau_u, std::uniform_real_distribution<amrex::Real>(-0.1, 0.1)(gen));
-    shoc::set_fab_val(col.surf_tau_v, std::uniform_real_distribution<amrex::Real>(-0.1, 0.1)(gen));
+    shoc::set_fab_val(col.surf_sens_flux, flux_dist(gen), shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, std::uniform_real_distribution<amrex::Real>(-5.0e-4, 5.0e-4)(gen), shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, std::uniform_real_distribution<amrex::Real>(-0.1, 0.1)(gen), shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, std::uniform_real_distribution<amrex::Real>(-0.1, 0.1)(gen), shoc::InitRunOn::Host);
 
     return col;
 }

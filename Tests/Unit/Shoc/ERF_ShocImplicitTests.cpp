@@ -245,10 +245,10 @@ TEST(ShocImplicit, UniformProfileWithNoFluxRemainsUnchanged)
         col.tke_tend.array()(0,k,0) = 0.0;
     }
 
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     ShocImplicit::update_prognostics(col, opts, 10.0);
 
@@ -305,10 +305,10 @@ TEST(ShocImplicit, PdfDiagnosedLiquidFeedsHostWriteback)
         col.tke_tend.array()(0,k,0) = 0.0;
     }
 
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     ShocImplicit::update_prognostics(col, opts, 10.0);
 
@@ -362,10 +362,10 @@ TEST(ShocImplicit, FinalWritebackDoesNotCreateLiquidBeyondPdfDiagnosis)
         col.tke_tend.array()(0,k,0) = 0.0;
     }
 
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     ShocImplicit::update_prognostics(col, opts, 1.0);
 
@@ -382,10 +382,10 @@ TEST(ShocImplicit, SurfaceFluxesDriveBottomCellAndKeepMoistureBounded)
     auto col = shoc_test::make_column(6);
     ShocRuntimeOptions opts;
 
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.03);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(2.0e-4);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(-0.04);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.01);
+    shoc::set_fab_val(col.surf_sens_flux, 0.03, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, -0.04, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.01, shoc::InitRunOn::Host);
 
     auto tk = col.tk.array();
     auto tkh = col.tkh.array();
@@ -466,10 +466,10 @@ TEST(ShocImplicit, CloudLiquidRaisesThetaAboveThetal)
         col.tke_tend.array()(0,k,0) = 0.0;
     }
 
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     ShocImplicit::update_prognostics(col, opts, 1.0);
 
@@ -499,10 +499,10 @@ TEST(ShocImplicit, NegativeMoistureFluxIsClippedAtZeroWater)
         col.tke_tend.array()(0,k,0) = 0.0;
     }
 
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(-5.0e-4);
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_lat_flux, -5.0e-4, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     ShocImplicit::update_prognostics(col, opts, 20.0);
 
@@ -541,8 +541,8 @@ TEST(ShocEnergyFixer, LiquidPartitionChangeDoesNotCreateEnergyCorrection)
         zt(0,k,0) = 50.0 + 100.0 * k;
         exner(0,k,0) = 0.8;
     }
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
 
     amrex::Vector<amrex::Real> thl_old(3, 300.0);
     amrex::Vector<amrex::Real> qv_old(3, 1.0e-2);
@@ -581,7 +581,8 @@ TEST(ShocImplicit, TranslatedE3smMultiColumnPropertyCaseStaysPhysical)
     layout.ny = 1;
     layout.ncell = 5;
     layout.nlev = 5;
-    define_shoc_column_data(col, layout);
+    define_shoc_column_data(col, layout, shoc_test::test_arena(), shoc::InitRunOn::Host);
+    shoc_test::sync();
     ShocRuntimeOptions opts;
     const auto fixture = shoc_test::read_named_fixture_vectors(
         "implicit_energy/e3sm_update_prognostics_implicit_multicolumn.txt");
@@ -686,10 +687,10 @@ TEST(ShocImplicit, SurfaceFluxScalingMatchesE3smFormula)
     zi(0,col.layout.nlev,0) = 40.0 * col.layout.nlev;
 
     const amrex::Real wthl_sfc = 0.008;
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(wthl_sfc);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, wthl_sfc, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     const amrex::Real dt = 5.0;
     ShocRuntimeOptions opts;

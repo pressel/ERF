@@ -68,10 +68,10 @@ TEST(ShocPhysical, ColumnHeatBudgetTracksSurfaceFlux)
         host_dse(0,k,0) = Cp_d * tabs(0,k,0) + CONST_GRAV * col.zt.const_array()(0,k,0);
         col.tke_tend.array()(0,k,0) = 0.0;
     }
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
     const amrex::Real before = column_moist_energy(col);
     const amrex::Real dt = 10.0;
@@ -102,8 +102,8 @@ TEST(ShocPhysical, StrongerSurfaceHeatingRaisesMeanThetaMore)
         }
     }
 
-    weak.surf_sens_flux.setVal<amrex::RunOn::Host>(0.01);
-    strong.surf_sens_flux.setVal<amrex::RunOn::Host>(0.03);
+    shoc::set_fab_val(weak.surf_sens_flux, 0.01, shoc::InitRunOn::Host);
+    shoc::set_fab_val(strong.surf_sens_flux, 0.03, shoc::InitRunOn::Host);
 
     const amrex::Real weak_before = weak.thetal.const_array()(0,0,0);
     const amrex::Real strong_before = strong.thetal.const_array()(0,0,0);
@@ -121,10 +121,10 @@ TEST(ShocPhysical, UnstableSurfaceForcingDeepensPblMoreThanStableForcing)
     auto stable = shoc_test::make_column(8);
     auto unstable = shoc_test::make_column(8);
 
-    stable.surf_sens_flux.setVal<amrex::RunOn::Host>(-0.01);
-    unstable.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    stable.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
-    unstable.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(stable.surf_sens_flux, -0.01, shoc::InitRunOn::Host);
+    shoc::set_fab_val(unstable.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(stable.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(unstable.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
 
     ShocStructure::diagnose_surface_layer(stable);
     ShocStructure::diagnose_pblh(stable);
@@ -150,8 +150,8 @@ TEST(ShocPhysical, TwoSmallStepsTrackOneLargeStep)
             exner(0,k,0) = 1.0;
             col->tke_tend.array()(0,k,0) = 0.0;
         }
-        col->surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-        col->surf_lat_flux.setVal<amrex::RunOn::Host>(5.0e-5);
+        shoc::set_fab_val(col->surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+        shoc::set_fab_val(col->surf_lat_flux, 5.0e-5, shoc::InitRunOn::Host);
     }
 
     ShocImplicit::update_prognostics(one_step, opts, 10.0);

@@ -54,10 +54,10 @@ TEST(ShocMoments, SurfaceMomentBoundaryConditionsMatchTranslatedE3smSemantics)
     auto col = shoc_test::make_column(6);
     ShocRuntimeOptions opts;
 
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(1.0e-4);
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.04);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.03);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 1.0e-4, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
 
     ShocStructure::diagnose_surface_layer(col);
     ShocStructure::diagnose_pblh(col);
@@ -123,10 +123,10 @@ TEST(ShocMoments, VarianceAndFluxHelpersMatchDowngradientForm)
     amrex::FArrayBox outvar(iface_box, 1);
     amrex::FArrayBox flux(iface_box, 1);
 
-    isotropy_zi.setVal<amrex::RunOn::Host>(2.0);
-    tkh_zi.setVal<amrex::RunOn::Host>(4.0);
-    outvar.setVal<amrex::RunOn::Host>(0.0);
-    flux.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(isotropy_zi, 2.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(tkh_zi, 4.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(outvar, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(flux, 0.0, shoc::InitRunOn::Host);
 
     auto in1 = col.thetal.array();
     auto in2 = col.qw.array();
@@ -157,10 +157,10 @@ TEST(ShocMoments, HelperKernelsMatchTranslatedE3smFixtures)
     amrex::FArrayBox outvar(iface_box, 1);
     amrex::FArrayBox flux(iface_box, 1);
 
-    isotropy_zi.setVal<amrex::RunOn::Host>(0.5);
-    tkh_zi.setVal<amrex::RunOn::Host>(2.0);
-    outvar.setVal<amrex::RunOn::Host>(0.0);
-    flux.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(isotropy_zi, 0.5, shoc::InitRunOn::Host);
+    shoc::set_fab_val(tkh_zi, 2.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(outvar, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(flux, 0.0, shoc::InitRunOn::Host);
 
     auto zt = col.zt.array();
     auto zi = col.zi.array();
@@ -242,8 +242,8 @@ TEST(ShocMoments, ThirdMomentClippingUsesPositiveFallback)
     const amrex::Box iface_box(amrex::IntVect(0,0,0), amrex::IntVect(col.layout.ncell - 1, col.layout.nlev, 0));
     amrex::FArrayBox w_sec_zi(iface_box, 1);
     amrex::FArrayBox w3(iface_box, 1);
-    w_sec_zi.setVal<amrex::RunOn::Host>(0.1);
-    w3.setVal<amrex::RunOn::Host>(-10.0);
+    shoc::set_fab_val(w_sec_zi, 0.1, shoc::InitRunOn::Host);
+    shoc::set_fab_val(w3, -10.0, shoc::InitRunOn::Host);
 
     ShocMoments::clip_third_moments(col, w_sec_zi, w3);
 

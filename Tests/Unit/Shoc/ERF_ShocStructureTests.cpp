@@ -62,10 +62,10 @@ TEST(ShocStructure, SurfaceLayerObukhovUsesClampedUstar)
     qi(0,0,0) = 0.0;
     exner(0,0,0) = 1.0;
 
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
 
     ShocStructure::diagnose_surface_layer(col);
     shoc_test::sync();
@@ -98,10 +98,10 @@ TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
     for (int k = 1; k < col.layout.nlev; ++k) {
         col.wthv_sec.array()(0,k,0) = 5.0e-4 * k;
     }
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.04);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.03);
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(2.0e-4);
+    shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
 
     ShocStructure::diagnose_surface_layer(col);
 
@@ -138,10 +138,10 @@ TEST(ShocStructure, SurfaceLayerThermodynamicMappingUsesExner)
     qi(0,0,0) = 0.0;
     qw(0,0,0) = 0.011;
     exner(0,0,0) = 0.8;
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.04);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.03);
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(2.0e-4);
+    shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
 
     ShocStructure::diagnose_surface_layer(col);
 
@@ -167,10 +167,10 @@ TEST(ShocStructure, SurfaceLayerMatchesTranslatedE3smFixture)
     qc(0,0,0) = 1.0e-3;
     qi(0,0,0) = 0.0;
     qw(0,0,0) = 0.011;
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.04);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.03);
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.02);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(2.0e-4);
+    shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
 
     ShocStructure::diagnose_surface_layer(col);
 
@@ -194,10 +194,10 @@ TEST(ShocStructure, PblHeightUsesVaporNotTotalWaterInVirtualTheta)
     auto u = col.u.array();
     auto v = col.v.array();
 
-    col.surf_tau_u.setVal<amrex::RunOn::Host>(0.04);
-    col.surf_tau_v.setVal<amrex::RunOn::Host>(0.03);
-    col.surf_sens_flux.setVal<amrex::RunOn::Host>(0.0);
-    col.surf_lat_flux.setVal<amrex::RunOn::Host>(0.0);
+    shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_sens_flux, 0.0, shoc::InitRunOn::Host);
+    shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
 
     for (int k = 0; k < col.layout.nlev; ++k) {
         thetal(0,k,0) = 299.0 + 0.3 * k;
