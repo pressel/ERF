@@ -4,6 +4,8 @@
 #include "ERF_ShocEnergyFixer.H"
 #include "ERF_SolveTridiag.H"
 
+#include <AMReX_BLProfiler.H>
+
 #include <algorithm>
 #include <cmath>
 
@@ -383,12 +385,20 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
     const auto tke_base = col.tke_base_state.const_array();
     const auto energy_view = shoc::make_energy_fixer_view(col);
     const Box col_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, 0, 0));
+    const Box cell_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, nlev - 1, 0));
 
-    ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
-        shoc::apply_energy_fix_column(energy_view, ic, dt);
+        BL_PROFILE("SHOC::advance::finalize::energy_fix");
+        ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
+        {
+            shoc::apply_energy_fix_column(energy_view, ic, dt);
+        });
+    }
 
-        for (int k = 0; k < nlev; ++k) {
+    {
+        BL_PROFILE("SHOC::advance::finalize::reconstruct");
+        ParallelFor(cell_box, [=] AMREX_GPU_DEVICE (int ic, int k, int) noexcept
+        {
             const Real qw_new_loc = amrex::max(qw(ic,k,0), shoc_min_qw());
             const Real pdf_ql = shoc_clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
             Real tabs_new = 0.0_rt;
@@ -417,8 +427,8 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
             u_tend(ic,k,0) = (u(ic,k,0) - u_base(ic,k,0)) / dt;
             v_tend(ic,k,0) = (v(ic,k,0) - v_base(ic,k,0)) / dt;
             tke_tend(ic,k,0) = (tke(ic,k,0) - tke_base(ic,k,0)) / dt;
-        }
-    });
+        });
+    }
 }
 
 void
