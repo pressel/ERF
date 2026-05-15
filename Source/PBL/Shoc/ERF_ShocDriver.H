@@ -5,7 +5,11 @@
 #include "ERF_ShocTypes.H"
 #include "ERF_ShocPreprocess.H"
 
+#include <AMReX_BoxArray.H>
 #include <AMReX_MultiFab.H>
+
+bool shoc_boxarray_spans_full_height (const amrex::BoxArray& ba,
+                                      const amrex::Box& domain);
 
 class ShocDriver
 {

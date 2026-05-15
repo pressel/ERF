@@ -12,6 +12,7 @@
 #include <AMReX_BoxArray.H>
 #include <AMReX_DistributionMapping.H>
 #include <AMReX_Geometry.H>
+#include <AMReX_GpuContainers.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_RealBox.H>
@@ -27,6 +28,7 @@ using namespace amrex::literals;
 using amrex::Box;
 using amrex::DistributionMapping;
 using amrex::Geometry;
+using amrex::GpuArray;
 using amrex::IntVect;
 using amrex::MFIter;
 using amrex::MultiFab;
@@ -39,6 +41,22 @@ constexpr int nz = 5;
 constexpr Real tol = 1.0e-12_rt;
 
 using FixtureMap = std::map<std::string, amrex::Vector<Real>>;
+
+template <int N>
+GpuArray<Real, N>
+fixture_gpu_array (const FixtureMap& fixture,
+                   const std::string& key)
+{
+    const auto& values = shoc_test::fixture_values(fixture, key);
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(static_cast<int>(values.size()) == N,
+                                     "SHOC driver fixture size mismatch");
+
+    GpuArray<Real, N> result{};
+    for (int i = 0; i < N; ++i) {
+        result[i] = values[i];
+    }
+    return result;
+}
 
 class ScopedParmParseString
 {
@@ -212,15 +230,10 @@ void
 initialize_state (MultiFab& cons,
                   const FixtureMap& fixture)
 {
-    const auto& rho_zt = shoc_test::fixture_values(fixture, "rho_zt");
-    const auto& thetal = shoc_test::fixture_values(fixture, "thetal");
-    const auto& qw = shoc_test::fixture_values(fixture, "qw");
-    const auto& tke = shoc_test::fixture_values(fixture, "tke");
-
-    ASSERT_EQ(static_cast<int>(rho_zt.size()), nz);
-    ASSERT_EQ(static_cast<int>(thetal.size()), nz);
-    ASSERT_EQ(static_cast<int>(qw.size()), nz);
-    ASSERT_EQ(static_cast<int>(tke.size()), nz);
+    const auto rho_zt = fixture_gpu_array<nz>(fixture, "rho_zt");
+    const auto thetal = fixture_gpu_array<nz>(fixture, "thetal");
+    const auto qw = fixture_gpu_array<nz>(fixture, "qw");
+    const auto tke = fixture_gpu_array<nz>(fixture, "tke");
 
     fill_multifab(cons, 0.0_rt);
 
@@ -250,11 +263,8 @@ initialize_velocity (MultiFab& xvel,
                      MultiFab& zvel,
                      const FixtureMap& fixture)
 {
-    const auto& u = shoc_test::fixture_values(fixture, "u");
-    const auto& v = shoc_test::fixture_values(fixture, "v");
-
-    ASSERT_EQ(static_cast<int>(u.size()), nz);
-    ASSERT_EQ(static_cast<int>(v.size()), nz);
+    const auto u = fixture_gpu_array<nz>(fixture, "u");
+    const auto v = fixture_gpu_array<nz>(fixture, "v");
 
     fill_multifab(zvel, 0.0_rt);
 
@@ -281,9 +291,7 @@ void
 initialize_geometry (MultiFab& z_phys_nd,
                      const FixtureMap& fixture)
 {
-    const auto& zi_grid = shoc_test::fixture_values(fixture, "zi_grid");
-
-    ASSERT_EQ(static_cast<int>(zi_grid.size()), nz + 1);
+    const auto zi_grid = fixture_gpu_array<nz + 1>(fixture, "zi_grid");
 
     for (MFIter mfi(z_phys_nd, false); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
@@ -302,19 +310,13 @@ initialize_surface_fluxes (MultiFab& hfx3,
                            MultiFab& tau23,
                            const FixtureMap& fixture)
 {
-    const auto& rho_zt = shoc_test::fixture_values(fixture, "rho_zt");
-    const auto& wthl_sfc = shoc_test::fixture_values(fixture, "wthl_sfc");
-    const auto& wqw_sfc = shoc_test::fixture_values(fixture, "wqw_sfc");
-    const auto& uw_sfc = shoc_test::fixture_values(fixture, "uw_sfc");
-    const auto& vw_sfc = shoc_test::fixture_values(fixture, "vw_sfc");
+    const auto rho_zt = fixture_gpu_array<nz>(fixture, "rho_zt");
+    const auto wthl_sfc = fixture_gpu_array<nx * ny>(fixture, "wthl_sfc");
+    const auto wqw_sfc = fixture_gpu_array<nx * ny>(fixture, "wqw_sfc");
+    const auto uw_sfc = fixture_gpu_array<nx * ny>(fixture, "uw_sfc");
+    const auto vw_sfc = fixture_gpu_array<nx * ny>(fixture, "vw_sfc");
 
-    ASSERT_FALSE(rho_zt.empty());
-    ASSERT_EQ(static_cast<int>(wthl_sfc.size()), nx * ny);
-    ASSERT_EQ(static_cast<int>(wqw_sfc.size()), nx * ny);
-    ASSERT_EQ(static_cast<int>(uw_sfc.size()), nx * ny);
-    ASSERT_EQ(static_cast<int>(vw_sfc.size()), nx * ny);
-
-    const Real rho_sfc = rho_zt.front();
+    const Real rho_sfc = rho_zt[0];
 
     fill_multifab(hfx3, 0.0_rt);
     fill_multifab(qfx3, 0.0_rt);
@@ -359,11 +361,8 @@ void
 initialize_eddy_diffs (MultiFab& eddy_diffs,
                        const FixtureMap& fixture)
 {
-    const auto& rho_zt = shoc_test::fixture_values(fixture, "rho_zt");
-    const auto& tkh = shoc_test::fixture_values(fixture, "tkh");
-
-    ASSERT_EQ(static_cast<int>(rho_zt.size()), nz);
-    ASSERT_EQ(static_cast<int>(tkh.size()), nz);
+    const auto rho_zt = fixture_gpu_array<nz>(fixture, "rho_zt");
+    const auto tkh = fixture_gpu_array<nz>(fixture, "tkh");
 
     fill_multifab(eddy_diffs, 0.0_rt);
 
@@ -607,47 +606,17 @@ TEST(ShocDriver, AdvanceProducesFiniteDiagnosticsAndTendencies)
     EXPECT_GT(component_max_abs(rhs[IntVars::ymom], 0), 0.0_rt);
 }
 
-TEST(ShocDriver, RejectsVerticallySplitBoxes)
+TEST(ShocDriver, FullHeightBoxPredicateRejectsVerticallySplitBoxes)
 {
     Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
-    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
-                            500.0_rt, 100.0_rt, 900.0_rt);
-    int is_periodic[AMREX_SPACEDIM] = {1, 1, 0};
-    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
-
     amrex::BoxArray ba(domain);
     ba.maxSize(3);
-    DistributionMapping dm(ba);
 
-    MultiFab cons(ba, dm, NVAR_max, 0);
-    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
-    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
-    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
-    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
-    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+    EXPECT_FALSE(shoc_boxarray_spans_full_height(ba, domain));
 
-    MultiFab xvel(xba, dm, 1, 0);
-    MultiFab yvel(yba, dm, 1, 0);
-    MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
-    MultiFab hfx3(ba, dm, 1, 0);
-    MultiFab qfx3(ba, dm, 1, 0);
-    MultiFab tau13(xzba, dm, 1, 0);
-    MultiFab tau23(yzba, dm, 1, 0);
-    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
-
-    SolverChoice solver_choice;
-    solver_choice.moisture_type = MoistureType::SAM_NoPrecip_NoIce;
-    solver_choice.moisture_indices = MoistureComponentIndices(RhoQ1_comp, RhoQ2_comp);
-
-    EXPECT_DEATH_IF_SUPPORTED(
-        {
-            ShocDriver driver(0, solver_choice);
-            driver.advance(cons, xvel, yvel, zvel,
-                           &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
-                           z_phys_nd, geom, 10.0_rt);
-        },
-        "z-split boxes are not supported");
+    amrex::BoxArray full_height(domain);
+    full_height.maxSize(IntVect(3, ny, nz));
+    EXPECT_TRUE(shoc_boxarray_spans_full_height(full_height, domain));
 }
 
 TEST(ShocDriver, SecondAdvanceIgnoresHostDiffSeedsAfterCarryStateIsEstablished)

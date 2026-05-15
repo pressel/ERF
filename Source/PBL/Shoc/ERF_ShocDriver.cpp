@@ -9,6 +9,20 @@
 
 using namespace amrex;
 
+bool
+shoc_boxarray_spans_full_height (const BoxArray& ba, const Box& domain)
+{
+    const int dom_klo = domain.smallEnd(2);
+    const int dom_khi = domain.bigEnd(2);
+    for (int ibox = 0; ibox < ba.size(); ++ibox) {
+        const Box& bx = ba[ibox];
+        if (bx.smallEnd(2) != dom_klo || bx.bigEnd(2) != dom_khi) {
+            return false;
+        }
+    }
+    return true;
+}
+
 namespace
 {
     constexpr int k_shoc_vertical_diff_comp = EddyDiff::Mom_v;
@@ -16,14 +30,9 @@ namespace
 
     void require_full_height_shoc_boxes (const BoxArray& ba, const Box& domain)
     {
-        const int dom_klo = domain.smallEnd(2);
-        const int dom_khi = domain.bigEnd(2);
-        for (int ibox = 0; ibox < ba.size(); ++ibox) {
-            const Box& bx = ba[ibox];
-            if (bx.smallEnd(2) != dom_klo || bx.bigEnd(2) != dom_khi) {
-                amrex::Abort(
-                    "Native SHOC currently requires each BoxArray tile to span the full vertical domain; z-split boxes are not supported.");
-            }
+        if (!shoc_boxarray_spans_full_height(ba, domain)) {
+            amrex::Abort(
+                "Native SHOC currently requires each BoxArray tile to span the full vertical domain; z-split boxes are not supported.");
         }
     }
 

@@ -20,7 +20,7 @@ function(target_link_libraries_includes_only target visibility lib)
 endfunction()
 
 function(erf_add_shoc_sources target)
-  set(options FULL)
+  set(options FULL DRIVER)
   cmake_parse_arguments(ERF_SHOC "${options}" "" "" ${ARGN})
 
   set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
@@ -34,11 +34,16 @@ function(erf_add_shoc_sources target)
     ${SRC_DIR}/PBL/Shoc/ERF_ShocImplicit.cpp
   )
 
-  if(ERF_SHOC_FULL)
+  if(ERF_SHOC_DRIVER OR ERF_SHOC_FULL)
     target_sources(${target} PRIVATE
       ${SRC_DIR}/PBL/Shoc/ERF_ShocDriver.cpp
       ${SRC_DIR}/PBL/Shoc/ERF_ShocPreprocess.cpp
       ${SRC_DIR}/PBL/Shoc/ERF_ShocDiagnostics.cpp
+    )
+  endif()
+
+  if(ERF_SHOC_FULL)
+    target_sources(${target} PRIVATE
       ${SRC_DIR}/PBL/Shoc/ERF_ShocCoupling.cpp
     )
   endif()
