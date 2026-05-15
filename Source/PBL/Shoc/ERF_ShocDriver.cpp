@@ -278,6 +278,9 @@ ShocDriver::advance (MultiFab& cons,
         ensure_storage(cons, xvel, yvel, *eddy_diffs);
     }
 
+    // Reused across the current host-serial MFIter loop to avoid repeated
+    // SHOC scratch allocation. If this loop is parallelized on the host,
+    // make the workspace thread-private.
     ShocColumnWorkspace workspace;
 
     for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {

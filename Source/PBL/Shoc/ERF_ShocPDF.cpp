@@ -3,6 +3,8 @@
 #include "ERF_Constants.H"
 #include "ERF_MicrophysicsUtils.H"
 
+#include <AMReX_BLProfiler.H>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -56,15 +58,13 @@ namespace
         auto out = cc_out.array();
 
         const auto layout = col.layout;
-        const Box col_box(IntVect(0,0,0), IntVect(layout.ncell - 1, 0, 0));
-        ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
+        const Box cell_box(IntVect(0,0,0), IntVect(layout.ncell - 1, layout.nlev - 1, 0));
+        ParallelFor(cell_box, [=] AMREX_GPU_DEVICE (int ic, int k, int) noexcept
         {
-            for (int k = 0; k < layout.nlev; ++k) {
-                const Real interp = weighted_linear_interp(zi(ic,k,0), zi(ic,k+1,0),
-                                                           in(ic,k,0), in(ic,k+1,0),
-                                                           zt(ic,k,0));
-                out(ic,k,0) = amrex::max(min_thresh, interp);
-            }
+            const Real interp = weighted_linear_interp(zi(ic,k,0), zi(ic,k+1,0),
+                                                       in(ic,k,0), in(ic,k+1,0),
+                                                       zt(ic,k,0));
+            out(ic,k,0) = amrex::max(min_thresh, interp);
         });
     }
 
@@ -273,7 +273,8 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
                        Real dt)
 {
     FArrayBox w3_zt, thl_sec_zt, qw_sec_zt, wthl_zt, wqw_zt, qwthl_zt;
-    const Box cell_box(IntVect(0,0,0), IntVect(col.layout.ncell - 1, col.layout.nlev - 1, 0));
+    const auto layout = col.layout;
+    const Box cell_box(IntVect(0,0,0), IntVect(layout.ncell - 1, layout.nlev - 1, 0));
     w3_zt.resize(cell_box, 1, The_Async_Arena());
     thl_sec_zt.resize(cell_box, 1, The_Async_Arena());
     qw_sec_zt.resize(cell_box, 1, The_Async_Arena());
@@ -281,12 +282,15 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
     wqw_zt.resize(cell_box, 1, The_Async_Arena());
     qwthl_zt.resize(cell_box, 1, The_Async_Arena());
 
-    interpolate_iface_to_cc(col, col.w3, w3_zt, shoc_large_neg());
-    interpolate_iface_to_cc(col, col.thl_sec, thl_sec_zt, 0.0);
-    interpolate_iface_to_cc(col, col.qw_sec, qw_sec_zt, 0.0);
-    interpolate_iface_to_cc(col, col.wthl_sec, wthl_zt, shoc_large_neg());
-    interpolate_iface_to_cc(col, col.wqw_sec, wqw_zt, shoc_large_neg());
-    interpolate_iface_to_cc(col, col.qwthl_sec, qwthl_zt, shoc_large_neg());
+    {
+        BL_PROFILE("SHOC::advance::pdf::interpolate");
+        interpolate_iface_to_cc(col, col.w3, w3_zt, shoc_large_neg());
+        interpolate_iface_to_cc(col, col.thl_sec, thl_sec_zt, 0.0_rt);
+        interpolate_iface_to_cc(col, col.qw_sec, qw_sec_zt, 0.0_rt);
+        interpolate_iface_to_cc(col, col.wthl_sec, wthl_zt, shoc_large_neg());
+        interpolate_iface_to_cc(col, col.wqw_sec, wqw_zt, shoc_large_neg());
+        interpolate_iface_to_cc(col, col.qwthl_sec, qwthl_zt, shoc_large_neg());
+    }
 
     auto shoc_cldfrac = col.shoc_cldfrac.array();
     auto shoc_ql = col.shoc_ql.array();
@@ -308,11 +312,10 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
     const auto w_sec = col.w_sec.const_array();
     const auto w3 = w3_zt.const_array();
 
-    const auto layout = col.layout;
-    const Box col_box(IntVect(0,0,0), IntVect(layout.ncell - 1, 0, 0));
-    ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
-        for (int k = 0; k < layout.nlev; ++k) {
+        BL_PROFILE("SHOC::advance::pdf::main_kernel");
+        ParallelFor(cell_box, [=] AMREX_GPU_DEVICE (int ic, int k, int) noexcept
+        {
             const Real thl_first = thetal(ic,k,0);
             const Real qw_first = qw(ic,k,0);
             const Real w_first = w_field(ic,k,0);
@@ -365,10 +368,10 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
                                 sqrtthl2_2, sqrtqw2_2, r_qwthl_1, s2, std_s2, qn2, c2);
             }
 
-            const Real ql1 = std::min(qn1, qw1_1);
-            const Real ql2 = std::min(qn2, qw1_2);
+            const Real ql1 = amrex::min(qn1, qw1_1);
+            const Real ql2 = amrex::min(qn2, qw1_2);
             const Real old_ql = shoc_ql(ic,k,0);
-            const Real cldfrac = std::min(1.0, a * c1 + (1.0 - a) * c2);
+            const Real cldfrac = amrex::min(1.0_rt, a * c1 + (1.0_rt - a) * c2);
             const Real ql = amrex::max(0.0_rt, a * ql1 + (1.0_rt - a) * ql2);
             const Real ql2_var = amrex::max(0.0_rt, a * (s1 * ql1 + c1 * std_s1 * std_s1)
                                                + (1.0_rt - a) * (s2 * ql2 + c2 * std_s2 * std_s2)
@@ -390,6 +393,6 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
                 shoc_cond(ic,k,0) = 0.0_rt;
                 shoc_evap(ic,k,0) = 0.0_rt;
             }
-        }
-    });
+        });
+    }
 }
