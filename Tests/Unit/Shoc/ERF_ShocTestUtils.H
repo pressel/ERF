@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace shoc_test
 {
@@ -28,6 +29,15 @@ inline void
 sync ()
 {
     shoc::sync_if_needed();
+}
+
+// Run a SHOC test action and synchronize before host-side EXPECT/ASSERT reads.
+template <typename F>
+inline void
+run_and_sync (F&& f)
+{
+    std::forward<F>(f)();
+    sync();
 }
 
 inline std::string

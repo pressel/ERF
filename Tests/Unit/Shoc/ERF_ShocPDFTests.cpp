@@ -16,13 +16,14 @@ void run_pdf_pipeline (ShocColumnData& col,
                        const ShocRuntimeOptions& opts,
                        amrex::Real dt)
 {
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 500.0, 500.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
-    ShocMoments::diagnose_moments(col, opts);
-    ShocPDF::diagnose_pdf(col, opts, dt);
-    shoc_test::sync();
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 500.0, 500.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+        ShocMoments::diagnose_moments(col, opts);
+        ShocPDF::diagnose_pdf(col, opts, dt);
+    });
 }
 
 void setup_translated_e3sm_pdf_column (ShocColumnData& col, amrex::Real w3_value)
@@ -246,7 +247,9 @@ TEST(ShocPDF, TranslatedE3smNoSgsVariabilityCaseKeepsDegenerateOutputs)
         w3(0,k,0) = 0.0;
     }
 
-    ShocPDF::diagnose_pdf(col, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocPDF::diagnose_pdf(col, opts, 10.0);
+    });
 
     const auto cldfrac = col.shoc_cldfrac.const_array();
     const auto ql = col.shoc_ql.const_array();
@@ -307,8 +310,10 @@ TEST(ShocPDF, TranslatedE3smPositiveSkewnessCaseMatchesReferenceRelationships)
     setup_translated_e3sm_pdf_column(symmetric, 0.0);
     setup_translated_e3sm_pdf_column(skewed, 1.0);
 
-    ShocPDF::diagnose_pdf(symmetric, opts, 300.0);
-    ShocPDF::diagnose_pdf(skewed, opts, 300.0);
+    shoc_test::run_and_sync([&] {
+        ShocPDF::diagnose_pdf(symmetric, opts, 300.0);
+        ShocPDF::diagnose_pdf(skewed, opts, 300.0);
+    });
 
     const auto cf0 = symmetric.shoc_cldfrac.const_array();
     const auto cf1 = skewed.shoc_cldfrac.const_array();
@@ -359,8 +364,10 @@ TEST(ShocPDF, TranslatedE3smNegativeSkewnessCaseMatchesReferenceRelationships)
     setup_translated_e3sm_pdf_column(symmetric, 0.0);
     setup_translated_e3sm_pdf_column(skewed, -1.0);
 
-    ShocPDF::diagnose_pdf(symmetric, opts, 300.0);
-    ShocPDF::diagnose_pdf(skewed, opts, 300.0);
+    shoc_test::run_and_sync([&] {
+        ShocPDF::diagnose_pdf(symmetric, opts, 300.0);
+        ShocPDF::diagnose_pdf(skewed, opts, 300.0);
+    });
 
     const auto cf0 = symmetric.shoc_cldfrac.const_array();
     const auto cf1 = skewed.shoc_cldfrac.const_array();

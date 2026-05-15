@@ -250,7 +250,9 @@ TEST(ShocImplicit, UniformProfileWithNoFluxRemainsUnchanged)
     shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
-    ShocImplicit::update_prognostics(col, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 10.0);
+    });
 
     const auto theta_tend = col.theta_tend.const_array();
     const auto qv_tend = col.qv_tend.const_array();
@@ -310,7 +312,9 @@ TEST(ShocImplicit, PdfDiagnosedLiquidFeedsHostWriteback)
     shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
-    ShocImplicit::update_prognostics(col, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 10.0);
+    });
 
     const auto theta_tend = col.theta_tend.const_array();
     const auto qv_tend = col.qv_tend.const_array();
@@ -367,7 +371,9 @@ TEST(ShocImplicit, FinalWritebackDoesNotCreateLiquidBeyondPdfDiagnosis)
     shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
-    ShocImplicit::update_prognostics(col, opts, 1.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 1.0);
+    });
 
     for (int k = 0; k < col.layout.nlev; ++k) {
         EXPECT_NEAR(col.shoc_ql.const_array()(0,k,0), 0.0, 1.0e-12);
@@ -405,7 +411,9 @@ TEST(ShocImplicit, SurfaceFluxesDriveBottomCellAndKeepMoistureBounded)
                            col.dz.const_array()(0,k,0);
     }
 
-    ShocImplicit::update_prognostics(col, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 10.0);
+    });
 
     const auto thetal = col.thetal.const_array();
     const auto qw = col.qw.const_array();
@@ -471,7 +479,9 @@ TEST(ShocImplicit, CloudLiquidRaisesThetaAboveThetal)
     shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
-    ShocImplicit::update_prognostics(col, opts, 1.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 1.0);
+    });
 
     EXPECT_GT(col.shoc_ql.const_array()(0,0,0), 0.0);
     EXPECT_GE(col.theta.const_array()(0,0,0), col.thetal.const_array()(0,0,0));
@@ -504,7 +514,9 @@ TEST(ShocImplicit, NegativeMoistureFluxIsClippedAtZeroWater)
     shoc::set_fab_val(col.surf_tau_u, 0.0, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.0, shoc::InitRunOn::Host);
 
-    ShocImplicit::update_prognostics(col, opts, 20.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 20.0);
+    });
 
     const auto qv_new = col.qv.const_array();
     const auto qc_new = col.qc.const_array();
@@ -605,7 +617,9 @@ TEST(ShocImplicit, TranslatedE3smMultiColumnPropertyCaseStaysPhysical)
         }
     }
 
-    ShocImplicit::update_prognostics(col, opts, 300.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 300.0);
+    });
 
     const auto thetal_new = col.thetal.const_array();
     const auto qw_new = col.qw.const_array();
@@ -694,7 +708,9 @@ TEST(ShocImplicit, SurfaceFluxScalingMatchesE3smFormula)
 
     const amrex::Real dt = 5.0;
     ShocRuntimeOptions opts;
-    ShocImplicit::update_prognostics(col, opts, dt);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, dt);
+    });
 
     // With zero diffusion and no momentum flux, only the bottom cell
     // should change, and only in thetal.  The E3SM scaling gives:

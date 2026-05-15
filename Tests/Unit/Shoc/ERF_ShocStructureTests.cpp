@@ -33,7 +33,9 @@ TEST(ShocStructure, SurfaceLayerUsesUstarFloorAndFiniteObukhov)
     for (int k = 1; k < col.layout.nlev; ++k) {
         wthv(0,k,0) = 1.0e-3 * k;
     }
-    ShocStructure::diagnose_surface_layer(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+    });
 
     const auto ustar = col.ustar.const_array();
     const auto obklen = col.obklen.const_array();
@@ -67,8 +69,9 @@ TEST(ShocStructure, SurfaceLayerObukhovUsesClampedUstar)
     shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
 
-    ShocStructure::diagnose_surface_layer(col);
-    shoc_test::sync();
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+    });
 
     const amrex::Real thv_sfc = 300.0 * (1.0 + 0.61 * 0.010);
     const amrex::Real ustar = 0.01;
@@ -103,7 +106,9 @@ TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
     shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
 
-    ShocStructure::diagnose_surface_layer(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+    });
 
     const amrex::Real cldliq = 1.0e-3;
     const amrex::Real th_sfc = 298.0 + (L_v / Cp_d) * cldliq;
@@ -143,7 +148,9 @@ TEST(ShocStructure, SurfaceLayerThermodynamicMappingUsesExner)
     shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
 
-    ShocStructure::diagnose_surface_layer(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+    });
 
     const amrex::Real cldliq = 1.0e-3;
     const amrex::Real theta_sfc = 298.0 + (L_v / Cp_d) * cldliq / 0.8;
@@ -172,7 +179,9 @@ TEST(ShocStructure, SurfaceLayerMatchesTranslatedE3smFixture)
     shoc::set_fab_val(col.surf_sens_flux, 0.02, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_lat_flux, 2.0e-4, shoc::InitRunOn::Host);
 
-    ShocStructure::diagnose_surface_layer(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+    });
 
     const auto fixture =
         shoc_test::read_fixture_vector("structure/e3sm_diag_obklen_surface_mapping.txt");
@@ -212,14 +221,18 @@ TEST(ShocStructure, PblHeightUsesVaporNotTotalWaterInVirtualTheta)
     qc(0,2,0) = 2.0e-3;
     qw(0,2,0) = qv(0,2,0) + qc(0,2,0);
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+    });
     const auto pblh_consistent_qw = col.pblh.const_array()(0,0,0);
 
     qw(0,2,0) = qv(0,2,0) + qc(0,2,0) + 0.02;
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+    });
     const auto pblh_inconsistent_qw = col.pblh.const_array()(0,0,0);
 
     EXPECT_NEAR(pblh_consistent_qw, pblh_inconsistent_qw, 1.0e-10);
@@ -228,8 +241,10 @@ TEST(ShocStructure, PblHeightUsesVaporNotTotalWaterInVirtualTheta)
 TEST(ShocStructure, PblHeightStaysInsideColumn)
 {
     auto col = shoc_test::make_column(6);
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+    });
 
     const auto pblh = col.pblh.const_array();
     const auto zt = col.zt.const_array();
@@ -244,8 +259,10 @@ TEST(ShocStructure, LowestCloudLayerAppliesVentilationFloor)
     auto qc = col.qc.array();
     qc(0,0,0) = 5.0e-4;
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+    });
 
     const auto pblh = col.pblh.const_array();
     const auto zi = col.zi.const_array();
@@ -257,9 +274,11 @@ TEST(ShocStructure, LengthScaleRespectsBoundsAndBruntIsFinite)
     auto col = shoc_test::make_column(5);
     ShocRuntimeOptions opts;
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 900.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 900.0);
+    });
 
     const auto brunt = col.brunt.const_array();
     const auto mix = col.shoc_mix.const_array();
@@ -288,7 +307,9 @@ TEST(ShocStructure, StableColumnHasPositiveBruntInBottomUpErfOrdering)
         qi(0,k,0) = 0.0;
     }
 
-    ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 900.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 900.0);
+    });
 
     const auto brunt = col.brunt.const_array();
     for (int k = 0; k < col.layout.nlev; ++k) {

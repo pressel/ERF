@@ -14,11 +14,13 @@ TEST(ShocMoments, SecondMomentBoundaryConditionsAreApplied)
     auto col = shoc_test::make_column(6);
     ShocRuntimeOptions opts;
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 400.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
-    ShocMoments::diagnose_second_moments(col, opts);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 400.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+        ShocMoments::diagnose_second_moments(col, opts);
+    });
 
     const auto thl_sec = col.thl_sec.const_array();
     const auto qw_sec = col.qw_sec.const_array();
@@ -59,11 +61,13 @@ TEST(ShocMoments, SurfaceMomentBoundaryConditionsMatchTranslatedE3smSemantics)
     shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 400.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
-    ShocMoments::diagnose_second_moments(col, opts);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 400.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+        ShocMoments::diagnose_second_moments(col, opts);
+    });
 
     const amrex::Real ustar2 = std::sqrt(0.04 * 0.04 + 0.03 * 0.03);
     const amrex::Real wstar = std::cbrt((CONST_GRAV / 300.0) * 0.02);
@@ -92,17 +96,18 @@ TEST(ShocMoments, TopTaperDampsUpperMomentDiagnosticsOnly)
     ShocRuntimeOptions opts_taper;
     opts_taper.top_taper_depth = 150.0;
 
-    ShocStructure::diagnose_surface_layer(col_base);
-    ShocStructure::diagnose_pblh(col_base);
-    ShocStructure::diagnose_length_and_brunt(col_base, opts_base, 400.0, 400.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 300.0);
-    ShocMoments::diagnose_moments(col_base, opts_base);
-
-    ShocStructure::diagnose_surface_layer(col_taper);
-    ShocStructure::diagnose_pblh(col_taper);
-    ShocStructure::diagnose_length_and_brunt(col_taper, opts_taper, 400.0, 400.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 300.0);
-    ShocMoments::diagnose_moments(col_taper, opts_taper);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_base);
+        ShocStructure::diagnose_pblh(col_base);
+        ShocStructure::diagnose_length_and_brunt(col_base, opts_base, 400.0, 400.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 300.0);
+        ShocMoments::diagnose_moments(col_base, opts_base);
+        ShocStructure::diagnose_surface_layer(col_taper);
+        ShocStructure::diagnose_pblh(col_taper);
+        ShocStructure::diagnose_length_and_brunt(col_taper, opts_taper, 400.0, 400.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 300.0);
+        ShocMoments::diagnose_moments(col_taper, opts_taper);
+    });
 
     const int ktop_cell = col_base.layout.nlev - 1;
     const int ktop_iface = col_base.layout.nlev - 1;
@@ -135,8 +140,10 @@ TEST(ShocMoments, VarianceAndFluxHelpersMatchDowngradientForm)
         in2(0,k,0) = 0.010 + 1.0e-3 * k;
     }
 
-    ShocMoments::calc_var_or_covar(col, 1.5, isotropy_zi, tkh_zi, col.thetal, col.qw, outvar);
-    ShocMoments::calc_vertflux(col, tkh_zi, col.thetal, flux);
+    shoc_test::run_and_sync([&] {
+        ShocMoments::calc_var_or_covar(col, 1.5, isotropy_zi, tkh_zi, col.thetal, col.qw, outvar);
+        ShocMoments::calc_vertflux(col, tkh_zi, col.thetal, flux);
+    });
 
     const auto out = outvar.const_array();
     const auto vf = flux.const_array();
@@ -182,8 +189,10 @@ TEST(ShocMoments, HelperKernelsMatchTranslatedE3smFixtures)
     in2(0,2,0) = 1.0;
     in2(0,3,0) = 0.0;
 
-    ShocMoments::calc_var_or_covar(col, 1.7, isotropy_zi, tkh_zi, col.thetal, col.qw, outvar);
-    ShocMoments::calc_vertflux(col, tkh_zi, col.thetal, flux);
+    shoc_test::run_and_sync([&] {
+        ShocMoments::calc_var_or_covar(col, 1.7, isotropy_zi, tkh_zi, col.thetal, col.qw, outvar);
+        ShocMoments::calc_vertflux(col, tkh_zi, col.thetal, flux);
+    });
 
     const auto covar_fixture =
         shoc_test::read_fixture_vector("moments/e3sm_varorcovar_erf_bottom_up.txt");
@@ -204,11 +213,13 @@ TEST(ShocMoments, OnePointFiveTkeModeZerosVarianceAndThirdMoment)
     ShocRuntimeOptions opts;
     opts.shoc_1p5tke = true;
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 450.0, 450.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
-    ShocMoments::diagnose_moments(col, opts);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 450.0, 450.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+        ShocMoments::diagnose_moments(col, opts);
+    });
 
     const auto w_sec = col.w_sec.const_array();
     const auto thl_sec = col.thl_sec.const_array();
@@ -245,7 +256,9 @@ TEST(ShocMoments, ThirdMomentClippingUsesPositiveFallback)
     shoc::set_fab_val(w_sec_zi, 0.1, shoc::InitRunOn::Host);
     shoc::set_fab_val(w3, -10.0, shoc::InitRunOn::Host);
 
-    ShocMoments::clip_third_moments(col, w_sec_zi, w3);
+    shoc_test::run_and_sync([&] {
+        ShocMoments::clip_third_moments(col, w_sec_zi, w3);
+    });
 
     for (int k = 0; k <= col.layout.nlev; ++k) {
         EXPECT_DOUBLE_EQ(w3.const_array()(0,k,0), 0.02);
@@ -283,7 +296,9 @@ TEST(ShocMoments, ThirdMomentCenteredDifferencesRespectBottomUpOrientation)
         wthl_sec(0,k,0) = 0.05 * k;
     }
 
-    ShocMoments::diagnose_third_moments(col, opts);
+    shoc_test::run_and_sync([&] {
+        ShocMoments::diagnose_third_moments(col, opts);
+    });
 
     const amrex::Real c = opts.c_diag_3rd_mom;
     const amrex::Real a0 = (0.52 / (c * c)) / (c - 2.0);
@@ -331,11 +346,13 @@ TEST(ShocMoments, RandomizedMomentsStayFiniteAndBounded)
 
     for (int n = 0; n < 24; ++n) {
         auto col = shoc_test::make_randomized_column(8, gen);
-        ShocStructure::diagnose_surface_layer(col);
-        ShocStructure::diagnose_pblh(col);
-        ShocStructure::diagnose_length_and_brunt(col, opts, 550.0, 350.0);
-        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
-        ShocMoments::diagnose_moments(col, opts);
+        shoc_test::run_and_sync([&] {
+            ShocStructure::diagnose_surface_layer(col);
+            ShocStructure::diagnose_pblh(col);
+            ShocStructure::diagnose_length_and_brunt(col, opts, 550.0, 350.0);
+            ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+            ShocMoments::diagnose_moments(col, opts);
+        });
 
         const auto thl_sec = col.thl_sec.const_array();
         const auto qw_sec = col.qw_sec.const_array();

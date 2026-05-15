@@ -77,7 +77,9 @@ TEST(ShocPhysical, ColumnHeatBudgetTracksSurfaceFlux)
     const amrex::Real dt = 10.0;
     const amrex::Real rho_sfc = col.rho.const_array()(0,0,0);
 
-    ShocImplicit::update_prognostics(col, opts, dt);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, dt);
+    });
 
     const amrex::Real after = column_moist_energy(col);
     const amrex::Real expected = dt * rho_sfc * Cp_d * 0.02;
@@ -108,8 +110,10 @@ TEST(ShocPhysical, StrongerSurfaceHeatingRaisesMeanThetaMore)
     const amrex::Real weak_before = weak.thetal.const_array()(0,0,0);
     const amrex::Real strong_before = strong.thetal.const_array()(0,0,0);
 
-    ShocImplicit::update_prognostics(weak, opts, 10.0);
-    ShocImplicit::update_prognostics(strong, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(weak, opts, 10.0);
+        ShocImplicit::update_prognostics(strong, opts, 10.0);
+    });
 
     const amrex::Real weak_delta = weak.thetal.const_array()(0,0,0) - weak_before;
     const amrex::Real strong_delta = strong.thetal.const_array()(0,0,0) - strong_before;
@@ -126,10 +130,12 @@ TEST(ShocPhysical, UnstableSurfaceForcingDeepensPblMoreThanStableForcing)
     shoc::set_fab_val(stable.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
     shoc::set_fab_val(unstable.surf_lat_flux, 0.0, shoc::InitRunOn::Host);
 
-    ShocStructure::diagnose_surface_layer(stable);
-    ShocStructure::diagnose_pblh(stable);
-    ShocStructure::diagnose_surface_layer(unstable);
-    ShocStructure::diagnose_pblh(unstable);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(stable);
+        ShocStructure::diagnose_pblh(stable);
+        ShocStructure::diagnose_surface_layer(unstable);
+        ShocStructure::diagnose_pblh(unstable);
+    });
 
     EXPECT_GE(unstable.pblh.const_array()(0,0,0), stable.pblh.const_array()(0,0,0));
 }
@@ -154,9 +160,11 @@ TEST(ShocPhysical, TwoSmallStepsTrackOneLargeStep)
         shoc::set_fab_val(col->surf_lat_flux, 5.0e-5, shoc::InitRunOn::Host);
     }
 
-    ShocImplicit::update_prognostics(one_step, opts, 10.0);
-    ShocImplicit::update_prognostics(two_step, opts, 5.0);
-    ShocImplicit::update_prognostics(two_step, opts, 5.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(one_step, opts, 10.0);
+        ShocImplicit::update_prognostics(two_step, opts, 5.0);
+        ShocImplicit::update_prognostics(two_step, opts, 5.0);
+    });
 
     const auto th_one = one_step.thetal.const_array();
     const auto th_two = two_step.thetal.const_array();
@@ -197,7 +205,9 @@ TEST(ShocPhysical, SubfreezingCondensatePartitionsIntoQi)
         col.tke_tend.array()(0,k,0) = 0.0;
     }
 
-    ShocImplicit::update_prognostics(col, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocImplicit::update_prognostics(col, opts, 10.0);
+    });
 
     const auto qc_new = col.qc.const_array();
     const auto qi_new = col.qi.const_array();
@@ -224,12 +234,14 @@ TEST(ShocPhysical, TerrainLikeVerticalGridStaysFinite)
         }
     }
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 300.0, 500.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
-    ShocMoments::diagnose_moments(col, opts);
-    ShocPDF::diagnose_pdf(col, opts, 10.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 300.0, 500.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+        ShocMoments::diagnose_moments(col, opts);
+        ShocPDF::diagnose_pdf(col, opts, 10.0);
+    });
 
     const auto mix = col.shoc_mix.const_array();
     const auto brunt = col.brunt.const_array();

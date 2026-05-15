@@ -22,7 +22,9 @@ TEST(ShocTke, ShearProductionRespectsBoundariesAndShear)
         v(0,k,0,0) = 1.0 + k;
     }
 
-    ShocTKE::compute_shear_production(col, sterm_iface);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::compute_shear_production(col, sterm_iface);
+    });
     const auto sterm = sterm_iface.const_array();
 
     EXPECT_DOUBLE_EQ(sterm(0,0,0,0), 0.0);
@@ -36,7 +38,9 @@ TEST(ShocTke, ShearProductionRespectsBoundariesAndShear)
         u(0,k,0,0) = 3.0;
         v(0,k,0,0) = -2.0;
     }
-    ShocTKE::compute_shear_production(col, sterm_iface);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::compute_shear_production(col, sterm_iface);
+    });
     for (int k = 0; k <= col.layout.nlev; ++k) {
         EXPECT_DOUBLE_EQ(sterm_iface.const_array()(0,k,0,0), 0.0);
     }
@@ -69,7 +73,9 @@ TEST(ShocTke, HelperKernelsMatchTranslatedE3smFixtures)
         }
     }
 
-    ShocTKE::compute_shear_production(col, sterm_iface);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::compute_shear_production(col, sterm_iface);
+    });
     amrex::Vector<amrex::Real> brunt_int;
     ShocTKE::integrate_column_stability(col, brunt_int);
 
@@ -116,13 +122,14 @@ TEST(ShocTke, TimestepControlsTkeGrowth)
     auto col_small = shoc_test::make_column(6);
     auto col_large = shoc_test::make_column(6);
 
-    ShocStructure::diagnose_surface_layer(col_small);
-    ShocStructure::diagnose_pblh(col_small);
-    ShocStructure::diagnose_length_and_brunt(col_small, opts, 500.0, 500.0);
-
-    ShocStructure::diagnose_surface_layer(col_large);
-    ShocStructure::diagnose_pblh(col_large);
-    ShocStructure::diagnose_length_and_brunt(col_large, opts, 500.0, 500.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_small);
+        ShocStructure::diagnose_pblh(col_small);
+        ShocStructure::diagnose_length_and_brunt(col_small, opts, 500.0, 500.0);
+        ShocStructure::diagnose_surface_layer(col_large);
+        ShocStructure::diagnose_pblh(col_large);
+        ShocStructure::diagnose_length_and_brunt(col_large, opts, 500.0, 500.0);
+    });
 
     auto wthv_small = col_small.wthv_sec.array();
     auto wthv_large = col_large.wthv_sec.array();
@@ -136,8 +143,10 @@ TEST(ShocTke, TimestepControlsTkeGrowth)
     }
 
     const auto tke0 = col_small.tke.const_array()(0,0,0,0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_small, opts, 60.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_large, opts, 300.0);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::diagnose_tke_and_diffusivities(col_small, opts, 60.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_large, opts, 300.0);
+    });
 
     EXPECT_GT(col_small.tke.const_array()(0,0,0,0), tke0);
     EXPECT_GT(col_large.tke.const_array()(0,0,0,0), col_small.tke.const_array()(0,0,0,0));
@@ -152,13 +161,14 @@ TEST(ShocTke, TopTaperDampsUpperActiveLayerOnly)
     auto col_base = shoc_test::make_column(6);
     auto col_taper = shoc_test::make_column(6);
 
-    ShocStructure::diagnose_surface_layer(col_base);
-    ShocStructure::diagnose_pblh(col_base);
-    ShocStructure::diagnose_length_and_brunt(col_base, opts_base, 500.0, 500.0);
-
-    ShocStructure::diagnose_surface_layer(col_taper);
-    ShocStructure::diagnose_pblh(col_taper);
-    ShocStructure::diagnose_length_and_brunt(col_taper, opts_taper, 500.0, 500.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_base);
+        ShocStructure::diagnose_pblh(col_base);
+        ShocStructure::diagnose_length_and_brunt(col_base, opts_base, 500.0, 500.0);
+        ShocStructure::diagnose_surface_layer(col_taper);
+        ShocStructure::diagnose_pblh(col_taper);
+        ShocStructure::diagnose_length_and_brunt(col_taper, opts_taper, 500.0, 500.0);
+    });
 
     auto wthv_base = col_base.wthv_sec.array();
     auto wthv_taper = col_taper.wthv_sec.array();
@@ -171,8 +181,10 @@ TEST(ShocTke, TopTaperDampsUpperActiveLayerOnly)
         tk_taper(0,k,0,0) = 1.0;
     }
 
-    ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 120.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 120.0);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::diagnose_tke_and_diffusivities(col_base, opts_base, 120.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_taper, opts_taper, 120.0);
+    });
 
     const int ktop = col_base.layout.nlev - 1;
     EXPECT_LT(col_taper.tke.const_array()(0,ktop,0,0), col_base.tke.const_array()(0,ktop,0,0));
@@ -187,13 +199,14 @@ TEST(ShocTke, PreviousDiffusivityFeedsShearProduction)
     auto col_zero = shoc_test::make_column(6);
     auto col_carried = shoc_test::make_column(6);
 
-    ShocStructure::diagnose_surface_layer(col_zero);
-    ShocStructure::diagnose_pblh(col_zero);
-    ShocStructure::diagnose_length_and_brunt(col_zero, opts, 500.0, 500.0);
-
-    ShocStructure::diagnose_surface_layer(col_carried);
-    ShocStructure::diagnose_pblh(col_carried);
-    ShocStructure::diagnose_length_and_brunt(col_carried, opts, 500.0, 500.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_zero);
+        ShocStructure::diagnose_pblh(col_zero);
+        ShocStructure::diagnose_length_and_brunt(col_zero, opts, 500.0, 500.0);
+        ShocStructure::diagnose_surface_layer(col_carried);
+        ShocStructure::diagnose_pblh(col_carried);
+        ShocStructure::diagnose_length_and_brunt(col_carried, opts, 500.0, 500.0);
+    });
 
     auto wthv_zero = col_zero.wthv_sec.array();
     auto wthv_carried = col_carried.wthv_sec.array();
@@ -207,8 +220,10 @@ TEST(ShocTke, PreviousDiffusivityFeedsShearProduction)
     }
 
     const Real tke0 = col_zero.tke.const_array()(0,1,0,0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_zero, opts, 120.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_carried, opts, 120.0);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::diagnose_tke_and_diffusivities(col_zero, opts, 120.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_carried, opts, 120.0);
+    });
 
     EXPECT_LT(col_zero.tke.const_array()(0,1,0,0), col_carried.tke.const_array()(0,1,0,0));
     EXPECT_LT(col_zero.tke.const_array()(0,1,0,0), tke0);
@@ -223,13 +238,14 @@ TEST(ShocTke, OnePointFiveClosureUsesBruntInsteadOfBuoyancyFlux)
     ShocRuntimeOptions opts_15;
     opts_15.shoc_1p5tke = true;
 
-    ShocStructure::diagnose_surface_layer(col_default);
-    ShocStructure::diagnose_pblh(col_default);
-    ShocStructure::diagnose_length_and_brunt(col_default, opts_default, 500.0, 500.0);
-
-    ShocStructure::diagnose_surface_layer(col_15);
-    ShocStructure::diagnose_pblh(col_15);
-    ShocStructure::diagnose_length_and_brunt(col_15, opts_15, 500.0, 500.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_default);
+        ShocStructure::diagnose_pblh(col_default);
+        ShocStructure::diagnose_length_and_brunt(col_default, opts_default, 500.0, 500.0);
+        ShocStructure::diagnose_surface_layer(col_15);
+        ShocStructure::diagnose_pblh(col_15);
+        ShocStructure::diagnose_length_and_brunt(col_15, opts_15, 500.0, 500.0);
+    });
 
     auto brunt = col_15.brunt.array();
     auto wthv_default = col_default.wthv_sec.array();
@@ -246,8 +262,10 @@ TEST(ShocTke, OnePointFiveClosureUsesBruntInsteadOfBuoyancyFlux)
 
     const Real tke_default_before = col_default.tke.const_array()(0,0,0,0);
     const Real tke_15_before = col_15.tke.const_array()(0,0,0,0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 120.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_15, opts_15, 120.0);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 120.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_15, opts_15, 120.0);
+    });
 
     EXPECT_LT(col_15.tke.const_array()(0,0,0,0), tke_15_before);
     EXPECT_GT(col_default.tke.const_array()(0,0,0,0), col_15.tke.const_array()(0,0,0,0));
@@ -263,13 +281,14 @@ TEST(ShocTke, SignedProductionOptionAllowsStableBuoyancyToReduceTke)
     ShocRuntimeOptions opts_signed;
     opts_signed.signed_tke_production = true;
 
-    ShocStructure::diagnose_surface_layer(col_default);
-    ShocStructure::diagnose_pblh(col_default);
-    ShocStructure::diagnose_length_and_brunt(col_default, opts_default, 500.0, 500.0);
-
-    ShocStructure::diagnose_surface_layer(col_signed);
-    ShocStructure::diagnose_pblh(col_signed);
-    ShocStructure::diagnose_length_and_brunt(col_signed, opts_signed, 500.0, 500.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_default);
+        ShocStructure::diagnose_pblh(col_default);
+        ShocStructure::diagnose_length_and_brunt(col_default, opts_default, 500.0, 500.0);
+        ShocStructure::diagnose_surface_layer(col_signed);
+        ShocStructure::diagnose_pblh(col_signed);
+        ShocStructure::diagnose_length_and_brunt(col_signed, opts_signed, 500.0, 500.0);
+    });
 
     auto wthv_default = col_default.wthv_sec.array();
     auto wthv_signed = col_signed.wthv_sec.array();
@@ -284,8 +303,10 @@ TEST(ShocTke, SignedProductionOptionAllowsStableBuoyancyToReduceTke)
 
     const Real tke_default_before = col_default.tke.const_array()(0,0,0,0);
     const Real tke_signed_before = col_signed.tke.const_array()(0,0,0,0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 60.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col_signed, opts_signed, 60.0);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 60.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_signed, opts_signed, 60.0);
+    });
 
     EXPECT_LT(col_default.tke.const_array()(0,0,0,0), tke_default_before);
     EXPECT_LT(col_signed.tke.const_array()(0,0,0,0), tke_signed_before);
@@ -298,10 +319,12 @@ TEST(ShocTke, DiffusivitiesRemainPositiveAndFinite)
     auto col = shoc_test::make_column(6);
     ShocRuntimeOptions opts;
 
-    ShocStructure::diagnose_surface_layer(col);
-    ShocStructure::diagnose_pblh(col);
-    ShocStructure::diagnose_length_and_brunt(col, opts, 500.0, 500.0);
-    ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col);
+        ShocStructure::diagnose_pblh(col);
+        ShocStructure::diagnose_length_and_brunt(col, opts, 500.0, 500.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 300.0);
+    });
 
     const auto tke = col.tke.const_array();
     const auto tk = col.tk.const_array();
@@ -330,10 +353,12 @@ TEST(ShocTke, RandomizedColumnsStayBounded)
 
     for (int n = 0; n < 32; ++n) {
         auto col = shoc_test::make_randomized_column(8, gen);
-        ShocStructure::diagnose_surface_layer(col);
-        ShocStructure::diagnose_pblh(col);
-        ShocStructure::diagnose_length_and_brunt(col, opts, 600.0, 450.0);
-        ShocTKE::diagnose_tke_and_diffusivities(col, opts, 180.0);
+        shoc_test::run_and_sync([&] {
+            ShocStructure::diagnose_surface_layer(col);
+            ShocStructure::diagnose_pblh(col);
+            ShocStructure::diagnose_length_and_brunt(col, opts, 600.0, 450.0);
+            ShocTKE::diagnose_tke_and_diffusivities(col, opts, 180.0);
+        });
 
         const auto mix = col.shoc_mix.const_array();
         const auto tke = col.tke.const_array();
