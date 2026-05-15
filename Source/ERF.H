@@ -419,7 +419,7 @@ public:
                                   amrex::MultiFab* hfx3,
                                   amrex::MultiFab* qfx3,
                                   amrex::MultiFab* eddyDiffs,
-                                  amrex::MultiFab* z_phys_nd,
+                                  amrex::MultiFab* z_phys_nd_in,
                                   const amrex::Real& dt_advance);
 #endif
 

@@ -14,11 +14,11 @@ ERF::compute_shoc_tendencies (int lev,
                               MultiFab* hfx3,
                               MultiFab* qfx3,
                               MultiFab* eddyDiffs,
-                              MultiFab* z_phys_nd,
+                              MultiFab* z_phys_nd_in,
                               const Real& dt_advance)
 {
     AMREX_ALWAYS_ASSERT(shoc_interface[lev]);
     shoc_interface[lev]->advance(*cons, *xvel, *yvel, *zvel,
                                  tau13, tau23, hfx3, qfx3, eddyDiffs,
-                                 *z_phys_nd, Geom(lev), dt_advance);
+                                 *z_phys_nd_in, Geom(lev), dt_advance);
 }
