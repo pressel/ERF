@@ -22,6 +22,34 @@ make_shoc_layout (const amrex::Box& bx, const amrex::Geometry& geom)
     return layout;
 }
 
+template <typename F>
+inline void
+for_each_shoc_fab (ShocColumnData& col, F&& f)
+{
+    for (amrex::FArrayBox* fab : {&col.zt,&col.zi,&col.dz,&col.p_mid,&col.p_int,&col.rho,&col.theta,
+                                  &col.exner,&col.theta_v,&col.thetal,&col.qv,&col.qc,&col.qi,&col.qw,&col.tabs,&col.tke,
+                                  &col.u,&col.v,&col.w,&col.host_dse,&col.pblh,&col.obklen,&col.ustar,
+                                  &col.shoc_mix,&col.brunt,&col.isotropy,&col.tk,&col.tkh,&col.shear_prod,&col.buoy_prod,&col.diss_tke,&col.wthv_sec,
+                                  &col.shoc_cldfrac,&col.shoc_ql,&col.shoc_ql2,&col.wqls_sec,&col.shoc_cond,&col.shoc_evap,
+                                  &col.thl_sec,&col.qw_sec,&col.qwthl_sec,&col.wthl_sec,
+                                  &col.wqw_sec,&col.uw_sec,&col.vw_sec,&col.wtke_sec,&col.w3,&col.w_sec,
+                                  &col.thetal_base,&col.theta_base,&col.qv_base,&col.qc_base,&col.qi_base,
+                                  &col.u_base,&col.v_base,&col.tke_base_state,
+                                  &col.theta_tend,&col.qv_tend,&col.qc_tend,&col.qi_tend,&col.u_tend,&col.v_tend,&col.tke_tend,
+                                  &col.surf_sens_flux,&col.surf_lat_flux,&col.surf_tau_u,&col.surf_tau_v}) {
+        f(*fab);
+    }
+}
+
+inline void
+reset_shoc_column_data (ShocColumnData& col,
+                        shoc::InitRunOn init_run_on = shoc::default_init_run_on())
+{
+    for_each_shoc_fab(col, [&] (amrex::FArrayBox& fab) {
+        shoc::set_fab_val(fab, amrex::Real(0.0), init_run_on);
+    });
+}
+
 inline void
 define_shoc_column_data (ShocColumnData& col,
                          const ShocColumnLayout& layout,
@@ -58,21 +86,44 @@ define_shoc_column_data (ShocColumnData& col,
     make2(col.v_tend); make2(col.tke_tend);
     make1(col.surf_sens_flux); make1(col.surf_lat_flux); make1(col.surf_tau_u); make1(col.surf_tau_v);
 
-    for (amrex::FArrayBox* fab : {&col.zt,&col.zi,&col.dz,&col.p_mid,&col.p_int,&col.rho,&col.theta,
-                                  &col.exner,&col.theta_v,&col.thetal,&col.qv,&col.qc,&col.qi,&col.qw,&col.tabs,&col.tke,
-                                  &col.u,&col.v,&col.w,&col.host_dse,&col.pblh,&col.obklen,&col.ustar,
-                                  &col.shoc_mix,&col.brunt,&col.isotropy,&col.tk,&col.tkh,&col.shear_prod,&col.buoy_prod,&col.diss_tke,&col.wthv_sec,
-                                  &col.shoc_cldfrac,&col.shoc_ql,&col.shoc_ql2,&col.wqls_sec,&col.shoc_cond,&col.shoc_evap,
-                                  &col.thl_sec,&col.qw_sec,&col.qwthl_sec,&col.wthl_sec,
-                                  &col.wqw_sec,&col.uw_sec,&col.vw_sec,&col.wtke_sec,&col.w3,&col.w_sec,
-                                  &col.thetal_base,&col.theta_base,&col.qv_base,&col.qc_base,&col.qi_base,
-                                  &col.u_base,&col.v_base,&col.tke_base_state,
-                                  &col.theta_tend,
-                                  &col.qv_tend,&col.qc_tend,&col.qi_tend,&col.u_tend,&col.v_tend,&col.tke_tend,
-                                  &col.surf_sens_flux,&col.surf_lat_flux,&col.surf_tau_u,&col.surf_tau_v}) {
-        shoc::set_fab_val(*fab, amrex::Real(0.0), init_run_on);
-    }
+    reset_shoc_column_data(col, init_run_on);
 }
+
+inline bool
+shoc_layout_fits (const ShocColumnLayout& active,
+                  const ShocColumnLayout& capacity)
+{
+    return capacity.ncell >= active.ncell &&
+           capacity.nlev >= active.nlev &&
+           capacity.kmin == active.kmin &&
+           capacity.kmax == active.kmax;
+}
+
+class ShocColumnWorkspace
+{
+public:
+    ShocColumnData col;
+
+    void ensure_capacity (const ShocColumnLayout& layout,
+                          amrex::Arena* arena = amrex::The_Async_Arena(),
+                          shoc::InitRunOn init_run_on = shoc::default_init_run_on())
+    {
+        if (!m_defined || arena != m_arena || !shoc_layout_fits(layout, m_capacity_layout)) {
+            m_capacity_layout = layout;
+            define_shoc_column_data(col, m_capacity_layout, arena, init_run_on);
+            m_defined = true;
+            m_arena = arena;
+        } else {
+            col.layout = layout;
+            reset_shoc_column_data(col, init_run_on);
+        }
+    }
+
+private:
+    ShocColumnLayout m_capacity_layout{};
+    amrex::Arena* m_arena = nullptr;
+    bool m_defined = false;
+};
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 int

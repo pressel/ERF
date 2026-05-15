@@ -278,13 +278,17 @@ ShocDriver::advance (MultiFab& cons,
         ensure_storage(cons, xvel, yvel, *eddy_diffs);
     }
 
+    ShocColumnWorkspace workspace;
+
     for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
         const Box& vbx = mfi.validbox();
-        ShocColumnData col;
+        const ShocColumnLayout active_layout = make_shoc_layout(vbx, geom);
         {
             BL_PROFILE("SHOC::advance::define_column_data");
-            define_shoc_column_data(col, make_shoc_layout(vbx, geom));
+            workspace.ensure_capacity(active_layout, amrex::The_Async_Arena(),
+                                      shoc::default_init_run_on());
         }
+        ShocColumnData& col = workspace.col;
         {
             BL_PROFILE("SHOC::advance::preprocess");
             ShocPreprocess::fill_columns(col, mfi, cons, xvel, yvel, zvel,
