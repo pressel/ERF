@@ -58,6 +58,9 @@ set_fab_val (amrex::FArrayBox& fab, amrex::Real value)
 inline void
 sync_if_needed ()
 {
+    // Test-owned helper for host-side assertions. Production SHOC code should
+    // keep synchronization out of the runtime path and use this only through
+    // shoc_test::run_and_sync or other explicit test utilities.
 #ifdef AMREX_USE_GPU
     amrex::Gpu::streamSynchronize();
 #endif

@@ -30,6 +30,8 @@ namespace
 
     void require_full_height_shoc_boxes (const BoxArray& ba, const Box& domain)
     {
+        // Tile-local SHOC packing and writeback still assume each MFIter tile
+        // spans a complete vertical column.
         if (!shoc_boxarray_spans_full_height(ba, domain)) {
             amrex::Abort(
                 "Native SHOC currently requires each BoxArray tile to span the full vertical domain; z-split boxes are not supported.");
@@ -548,6 +550,8 @@ ShocDriver::set_diff_stresses () const
     BL_PROFILE("SHOC::set_diff_stresses");
 
     if (!uses_shoc_tendencies()) {
+        // In host_diffusion mode the host diffusion path owns the overlapping
+        // surface fluxes and stresses, so SHOC must not clear them here.
         return;
     }
 
@@ -584,6 +588,8 @@ ShocDriver::add_fast_tend (Vector<MultiFab>& S_rhs) const
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
 
     if (!uses_shoc_tendencies()) {
+        // In host_diffusion mode SHOC exports diffusivities only; it does not
+        // add overlapping explicit fast tendencies on top of host transport.
         return;
     }
 
@@ -630,6 +636,8 @@ ShocDriver::add_slow_tend (const MFIter& mfi,
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
 
     if (!uses_shoc_tendencies()) {
+        // In host_diffusion mode SHOC leaves the overlapping slow transport on
+        // the host diffusion path rather than adding internal RHS terms here.
         return;
     }
 
