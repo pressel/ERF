@@ -273,6 +273,56 @@ TEST(ShocTke, OnePointFiveClosureUsesBruntInsteadOfBuoyancyFlux)
               col_15.tke.const_array()(0,0,0,0) - tke_15_before);
 }
 
+TEST(ShocTke, OnePointFiveClosureNegativeBruntActsAsPositiveBuoyancySource)
+{
+    auto col_default = shoc_test::make_column(6);
+    auto col_15 = shoc_test::make_column(6);
+    ShocRuntimeOptions opts_default;
+    ShocRuntimeOptions opts_15;
+    opts_15.shoc_1p5tke = true;
+
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(col_default);
+        ShocStructure::diagnose_pblh(col_default);
+        ShocStructure::diagnose_length_and_brunt(col_default, opts_default, 500.0, 500.0);
+        ShocStructure::diagnose_surface_layer(col_15);
+        ShocStructure::diagnose_pblh(col_15);
+        ShocStructure::diagnose_length_and_brunt(col_15, opts_15, 500.0, 500.0);
+    });
+
+    auto brunt_default = col_default.brunt.array();
+    auto brunt_15 = col_15.brunt.array();
+    auto wthv_default = col_default.wthv_sec.array();
+    auto wthv_15 = col_15.wthv_sec.array();
+    auto tk_default = col_default.tk.array();
+    auto tk_15 = col_15.tk.array();
+    auto tke_default = col_default.tke.array();
+    auto tke_15 = col_15.tke.array();
+    for (int k = 0; k < col_default.layout.nlev; ++k) {
+        brunt_default(0,k,0,0) = -2.5e-3;
+        brunt_15(0,k,0,0) = -2.5e-3;
+        wthv_default(0,k,0,0) = 0.0;
+        wthv_15(0,k,0,0) = 0.0;
+        tk_default(0,k,0,0) = 0.0;
+        tk_15(0,k,0,0) = 0.0;
+        tke_default(0,k,0,0) = 1.0e-3;
+        tke_15(0,k,0,0) = 1.0e-3;
+    }
+
+    const Real tke_default_before = col_default.tke.const_array()(0,0,0,0);
+    const Real tke_15_before = col_15.tke.const_array()(0,0,0,0);
+    shoc_test::run_and_sync([&] {
+        ShocTKE::diagnose_tke_and_diffusivities(col_default, opts_default, 120.0);
+        ShocTKE::diagnose_tke_and_diffusivities(col_15, opts_15, 120.0);
+    });
+
+    EXPECT_NEAR(col_default.buoy_prod.const_array()(0,0,0,0), 0.0, 1.0e-14);
+    EXPECT_GT(col_15.buoy_prod.const_array()(0,0,0,0), 0.0);
+    EXPECT_LT(col_default.tke.const_array()(0,0,0,0), tke_default_before);
+    EXPECT_GT(col_15.tke.const_array()(0,0,0,0), tke_15_before);
+    EXPECT_GT(col_15.tke.const_array()(0,0,0,0), col_default.tke.const_array()(0,0,0,0));
+}
+
 TEST(ShocTke, SignedProductionOptionAllowsStableBuoyancyToReduceTke)
 {
     auto col_default = shoc_test::make_column(6);

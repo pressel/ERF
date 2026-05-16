@@ -316,3 +316,29 @@ TEST(ShocStructure, StableColumnHasPositiveBruntInBottomUpErfOrdering)
         EXPECT_GT(brunt(0,k,0), 0.0);
     }
 }
+
+TEST(ShocStructure, UnstableColumnHasNegativeBruntInBottomUpErfOrdering)
+{
+    auto col = shoc_test::make_column(5);
+    ShocRuntimeOptions opts;
+    auto thetal = col.thetal.array();
+    auto qw = col.qw.array();
+    auto qc = col.qc.array();
+    auto qi = col.qi.array();
+
+    for (int k = 0; k < col.layout.nlev; ++k) {
+        thetal(0,k,0) = 302.0 - 0.01 * col.zt.const_array()(0,k,0);
+        qw(0,k,0) = 0.0;
+        qc(0,k,0) = 0.0;
+        qi(0,k,0) = 0.0;
+    }
+
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_length_and_brunt(col, opts, 400.0, 900.0);
+    });
+
+    const auto brunt = col.brunt.const_array();
+    for (int k = 0; k < col.layout.nlev; ++k) {
+        EXPECT_LT(brunt(0,k,0), 0.0);
+    }
+}
