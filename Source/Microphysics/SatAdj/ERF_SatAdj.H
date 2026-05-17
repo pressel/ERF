@@ -192,8 +192,10 @@ public:
         erf_qsatw(tabs, pres_mbar, qsat);
 
         if ((qv + qc) > qsat) {
+#if defined(AMREX_DEBUG)
             const amrex::Real qvprev = qv;
             const amrex::Real qcprev = qc;
+#endif
 
             if (qc < 0) {
                 qv += qc;
@@ -225,9 +227,11 @@ public:
 
             erf_qsatw(tabs, pres_mbar, qsat);
             if (qv > qsat) {
+#if defined(AMREX_DEBUG)
                 const amrex::Real qvprev = qv;
                 const amrex::Real qcprev = qc;
                 const amrex::Real Tprev = tabs;
+#endif
 
                 tabs = NewtonSolveSatTemperature(fac_cond, tabs, pres_mbar, qv, qsat);
 
