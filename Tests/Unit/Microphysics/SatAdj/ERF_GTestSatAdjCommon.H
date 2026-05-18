@@ -292,7 +292,6 @@ inline void compute_satadj_invariant_errors (const amrex::MultiFab& before,
                 const amrex::Real rho_after = after_arr(i,j,k,Rho_comp);
                 const amrex::Real qt_before = before_arr(i,j,k,RhoQ1_comp) + before_arr(i,j,k,RhoQ2_comp);
                 const amrex::Real qt_after = after_arr(i,j,k,RhoQ1_comp) + after_arr(i,j,k,RhoQ2_comp);
-                const amrex::Real qv_after = after_arr(i,j,k,RhoQ1_comp) / rho_after;
                 const amrex::Real qc_after = after_arr(i,j,k,RhoQ2_comp) / rho_after;
                 CellState reference_state = make_state_from_conserved(rho_before,
                                                                       before_arr(i,j,k,RhoTheta_comp),
