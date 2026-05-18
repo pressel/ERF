@@ -66,6 +66,37 @@ std::vector<CellState> make_kernel_cases ()
     };
 }
 
+// Keep the device lambda in a namespace-scope helper. CUDA rejects extended
+// device lambdas enclosed by GTest's private TestBody() member function.
+void launch_adjust_cell_kernel (const int ncases,
+                                const amrex::Real* tabs_in_ptr,
+                                const amrex::Real* pres_in_ptr,
+                                const amrex::Real* theta_in_ptr,
+                                const amrex::Real* qv_in_ptr,
+                                const amrex::Real* qc_in_ptr,
+                                amrex::Real* tabs_out_ptr,
+                                amrex::Real* theta_out_ptr,
+                                amrex::Real* qv_out_ptr,
+                                amrex::Real* qc_out_ptr)
+{
+    amrex::ParallelFor(ncases, [=] AMREX_GPU_DEVICE (int idx) noexcept {
+        amrex::Real tabs = tabs_in_ptr[idx];
+        const amrex::Real pres_mbar = pres_in_ptr[idx];
+        amrex::Real theta = theta_in_ptr[idx];
+        amrex::Real qv = qv_in_ptr[idx];
+        amrex::Real qc = qc_in_ptr[idx];
+
+        SatAdj::AdjustSatAdjCell(kFacCond, kRdOcp, tabs, pres_mbar, theta, qv, qc);
+
+        tabs_out_ptr[idx] = tabs;
+        theta_out_ptr[idx] = theta;
+        qv_out_ptr[idx] = qv;
+        qc_out_ptr[idx] = qc;
+    });
+
+    satadj_test::sync();
+}
+
 } // namespace
 
 // Motivation: When SHOC owns condensation, SatAdj must be a no-op. This
@@ -193,22 +224,9 @@ TEST(SatAdjKernel, AdjustCellMatchesHostReferencePortable)
     amrex::Real* qv_out_ptr = d_qv_out.data();
     amrex::Real* qc_out_ptr = d_qc_out.data();
 
-    run_and_sync([=] {
-        amrex::ParallelFor(static_cast<int>(initial_cases.size()), [=] AMREX_GPU_DEVICE (int idx) noexcept {
-            amrex::Real tabs = tabs_in_ptr[idx];
-            const amrex::Real pres_mbar = pres_in_ptr[idx];
-            amrex::Real theta = theta_in_ptr[idx];
-            amrex::Real qv = qv_in_ptr[idx];
-            amrex::Real qc = qc_in_ptr[idx];
-
-            SatAdj::AdjustSatAdjCell(kFacCond, kRdOcp, tabs, pres_mbar, theta, qv, qc);
-
-            tabs_out_ptr[idx] = tabs;
-            theta_out_ptr[idx] = theta;
-            qv_out_ptr[idx] = qv;
-            qc_out_ptr[idx] = qc;
-        });
-    });
+    launch_adjust_cell_kernel(static_cast<int>(initial_cases.size()),
+                              tabs_in_ptr, pres_in_ptr, theta_in_ptr, qv_in_ptr, qc_in_ptr,
+                              tabs_out_ptr, theta_out_ptr, qv_out_ptr, qc_out_ptr);
 
     std::vector<amrex::Real> tabs_out(initial_cases.size());
     std::vector<amrex::Real> theta_out(initial_cases.size());
