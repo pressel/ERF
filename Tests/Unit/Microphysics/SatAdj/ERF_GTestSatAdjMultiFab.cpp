@@ -10,10 +10,18 @@
 
 #include "ERF_GTestSatAdjCommon.H"
 
+// These tests exercise the AMReX-portable SatAdj integration path. Setup and
+// error computation use ParallelFor so the same test code runs in CPU and GPU
+// builds. Host-side GTest assertions inspect reduced errors after
+// synchronization.
+
 using namespace satadj_test;
 
 namespace {
 
+// Exercise the public SatAdj flow used by ERF: initialize microphysics
+// storage, copy conserved state into microphysics variables, advance, and copy
+// back.
 void run_public_flow (SatAdj& satadj,
                       const SolverChoice& sc,
                       const amrex::Geometry& geom,
@@ -60,6 +68,9 @@ std::vector<CellState> make_kernel_cases ()
 
 } // namespace
 
+// Motivation: When SHOC owns condensation, SatAdj must be a no-op. This
+// protects against double-adjusting vapor and cloud water in SHOC-enabled
+// runs.
 TEST(SatAdjMultiFab, ShocNoOpKeepsStateUnchangedPortable)
 {
     const amrex::Geometry geom = make_geometry(2, 2, 1);
@@ -91,6 +102,9 @@ TEST(SatAdjMultiFab, ShocNoOpKeepsStateUnchangedPortable)
               scaled_tol(std::max(cons.max(RhoQ2_comp), cons_initial.max(RhoQ2_comp)), kStateTolFactor));
 }
 
+// Motivation: The scalar tests verify cell physics; this verifies the public
+// MultiFab copy-in, advance, and copy-out path preserves the same conserved
+// state contract and scalar-reference behavior.
 TEST(SatAdjMultiFab, PublicFlowPreservesSatAdjInvariantsPortable)
 {
     const amrex::Geometry geom = make_geometry(4, 3, 2);
@@ -128,8 +142,13 @@ TEST(SatAdjMultiFab, PublicFlowPreservesSatAdjInvariantsPortable)
     EXPECT_LE(err.max(InvariantErrQ2Ref), normalized_tol);
 }
 
+// Motivation: Production SatAdj calls AdjustSatAdjCell from ParallelFor. This
+// test checks the kernel-compiled path without duplicating CPU/GPU test logic.
 TEST(SatAdjKernel, AdjustCellMatchesHostReferencePortable)
 {
+    // Launch the scalar SatAdj helper through ParallelFor and compare with the
+    // host helper result. This verifies the device-compiled path without
+    // maintaining a separate GPU-only test implementation.
     const std::vector<CellState> initial_cases = make_kernel_cases();
     std::vector<CellState> host_reference = initial_cases;
 

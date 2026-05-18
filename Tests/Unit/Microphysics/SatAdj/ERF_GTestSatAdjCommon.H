@@ -22,6 +22,32 @@
 
 namespace satadj_test {
 
+// SatAdj unit-test contract
+// -------------------------
+// These tests check physical and numerical properties of ERF's warm-cloud
+// saturation adjustment, not hard-coded gold values.
+//
+// Core invariants:
+//   1. qt = qv + qc is conserved locally.
+//   2. At fixed pressure, T + (L/cp) qv is conserved through the phase-change
+//      update used by AdjustSatAdjCell.
+//   3. Final scalar states satisfy complementarity:
+//        qc >= 0,
+//        qv <= qsat(T,p),
+//        qc > 0 implies qv ~= qsat(T,p).
+//
+// Thermodynamics:
+//   - Use ERF thermodynamic utilities only.
+//   - Do not add an independent saturation formula to the tests.
+//   - SatAdj qsat functions take pressure in mbar.
+//   - ERF EOS temperature/theta functions take pressure in Pa.
+//
+// Portability:
+//   - Production SatAdj runs through AMReX ParallelFor.
+//   - MultiFab/kernel tests should use AMReX-portable setup and checks.
+//   - Keep GTest EXPECT/ASSERT calls on the host. Device kernels should only
+//     compute adjusted states or reduced error metrics.
+
 #ifdef AMREX_USE_FLOAT
 constexpr amrex::Real kThermoTolFactor = amrex::Real(2.0e-5);
 constexpr amrex::Real kStateTolFactor = amrex::Real(5.0e-5);
@@ -150,6 +176,10 @@ inline SolverChoice make_solver_choice (const bool use_shoc)
     return sc;
 }
 
+// Construct a state that enters the subtle evaporation-then-recondensation
+// path. Initially qt < qsat(T_i,p), so SatAdj evaporates all qc. The
+// evaporative cooling can lower qsat enough that the cell becomes
+// supersaturated and must re-enter the Newton solve.
 inline bool find_evaporation_then_recondensation_state (CellState& state)
 {
     const amrex::Real tabs = amrex::Real(285.0);
@@ -187,6 +217,9 @@ inline void run_and_sync (F&& f)
     sync();
 }
 
+// Fill a small conserved-state MultiFab with deterministic SatAdj branch
+// cases. This uses ParallelFor so the same setup path works in CPU and GPU
+// builds.
 inline void fill_conserved_state_portable (amrex::MultiFab& cons,
                                            const bool include_all_satadj_branches)
 {
@@ -280,6 +313,12 @@ inline void compute_satadj_invariant_errors (const amrex::MultiFab& before,
                                              const amrex::MultiFab& after,
                                              amrex::MultiFab& err)
 {
+    // Compare the public MultiFab flow against the scalar SatAdj helper and
+    // core conservation properties. The scalar reference is built from the
+    // pre-state because the cell solve holds pressure fixed, while post-state
+    // conserved variables do not reconstruct that fixed-pressure state
+    // uniquely. Errors are normalized by each tolerance so host-side tests can
+    // check small O(1) bounds without duplicating tolerance logic.
     for (amrex::MFIter mfi(after, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
         const amrex::Box& bx = mfi.tilebox();
         auto before_arr = before.const_array(mfi);
