@@ -193,7 +193,7 @@ and therefore
    \rho_d =
    \frac{p}{R_d T M(q_v)}.
 
-This matches :cpp:`getRhogivenTandPress` in :cpp:`Source/Utils/ERF_EOS.H`.
+This matches :cpp:`getRhogivenTandPress` in ``Source/Utils/ERF_EOS.H``.
 
 The EOS utilities rely on the constant relation
 
@@ -205,9 +205,9 @@ The EOS utilities rely on the constant relation
    \frac{1}{\gamma} = 1 - \kappa.
 
 This identity makes the pressure, temperature, Exner, and density inverse
-relations in :cpp:`Source/Utils/ERF_EOS.H` algebraically consistent.
+relations in ``Source/Utils/ERF_EOS.H`` algebraically consistent.
 
-The functions in :cpp:`Source/Utils/ERF_EOS.H` implement these relations:
+The functions in ``Source/Utils/ERF_EOS.H`` implement these relations:
 
 .. list-table::
    :header-rows: 1

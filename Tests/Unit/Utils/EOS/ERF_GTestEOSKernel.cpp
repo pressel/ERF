@@ -14,6 +14,10 @@ namespace {
 
 void launch_inverse_property_errors (amrex::Gpu::DeviceVector<amrex::Real>& errors)
 {
+    // Keep this device-path metric calculation explicit. The scalar tests
+    // check the same physical invariants on the host, while this kernel test
+    // independently proves that the EOS utilities are callable inside AMReX
+    // ParallelFor and can report normalized errors back to host-side GTest checks.
     auto* error_ptr = errors.data();
 
     amrex::ParallelFor(kNumEOSStates, [=] AMREX_GPU_DEVICE (int index) noexcept {
