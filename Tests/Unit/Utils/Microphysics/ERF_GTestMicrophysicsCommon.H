@@ -14,14 +14,24 @@
 namespace microphysics_test {
 
 #ifdef AMREX_USE_FLOAT
+// Test-only relative value tolerance; not a production threshold.
 constexpr amrex::Real kValueRelTol = amrex::Real(1.0e-4);
+// Test-only derivative tolerance; not a production threshold.
 constexpr amrex::Real kDerivativeRelTol = amrex::Real(2.0e-2);
+// Test-only empirical-branch agreement tolerance; not a production threshold.
 constexpr amrex::Real kEmpiricalAgreementRelTol = amrex::Real(1.0e-2);
+// Test-only finite-difference step chosen for stable float sweeps; not a
+// production threshold.
 constexpr amrex::Real kFiniteDiffStep = amrex::Real(5.0e-2);
 #else
+// Test-only relative value tolerance; not a production threshold.
 constexpr amrex::Real kValueRelTol = amrex::Real(1.0e-12);
+// Test-only derivative tolerance; not a production threshold.
 constexpr amrex::Real kDerivativeRelTol = amrex::Real(2.0e-5);
+// Test-only empirical-branch agreement tolerance; not a production threshold.
 constexpr amrex::Real kEmpiricalAgreementRelTol = amrex::Real(2.0e-3);
+// Test-only finite-difference step chosen for stable double sweeps; not a
+// production threshold.
 constexpr amrex::Real kFiniteDiffStep = amrex::Real(1.0e-3);
 #endif
 
@@ -33,8 +43,13 @@ constexpr amrex::Real kSwitchValueRelTol = amrex::Real(7.0e-2);
 // are about 4.92e-5 (lower) and 2.594e-2 (upper). Use about 5x the larger jump.
 constexpr amrex::Real kSwitchDerivativeRelTol = amrex::Real(1.3e-1);
 
+// Analytic reference for Gamma(1/2) = sqrt(pi); not a production threshold.
 constexpr amrex::Real kSqrtPi = amrex::Real(1.7724538509055160273);
+// Regression reference for erf_esatw(273.15, true) after the empirical Pa to
+// mbar conversion inside erf_esatw; not a production threshold.
 constexpr amrex::Real kEmpiricalTriplePointMbar = amrex::Real(6.11245202992297);
+// Same regression reference as kEmpiricalTriplePointMbar, but in the original
+// empirical Pa units before erf_esatw converts them to mbar.
 constexpr amrex::Real kEmpiricalTriplePointPa = amrex::Real(611.245202992297);
 // MUST MATCH poly_min_dtt = -70.0 in erf_use_positive_esatw_poly:
 // 273.16 - 70.0 = 203.16 K.

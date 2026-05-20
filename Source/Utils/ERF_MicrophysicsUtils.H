@@ -26,7 +26,7 @@ amrex::Real erf_gammafff (amrex::Real x){
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
 // J. Appl. Meteorol. Coefficients come from Table 4 and the value fit is valid
 // over [-90, 0] C, i.e. down to about 183.16 K. ERF intentionally clamps the
-// out-of-range above-freezing branch to 0.
+// above-freezing branch to 0.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esati (amrex::Real t) {
     amrex::Real const a0 = amrex::Real(6.11147274);
@@ -108,10 +108,11 @@ bool erf_use_positive_esatw_poly (amrex::Real t)
 //
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
 // J. Appl. Meteorol. The default branch uses the Flatau polynomial only on the
-// current positive in-range interval, approximately [-70, 70] C, and falls back
-// to Clausius-Clapeyron below that threshold or whenever the polynomial would be
-// non-positive. The optional empirical fit is originally in Pa; ERF converts it
-// to mbar / hPa before returning so both warm-water branches use the same units.
+// current positive in-range interval selected by erf_use_positive_esatw_poly,
+// currently about [-70, 70] C. Outside that interval, or whenever the
+// polynomial would be non-positive, it falls back to Clausius-Clapeyron. The
+// optional empirical fit is originally in Pa; ERF converts it to mbar / hPa
+// before returning so both warm-water branches use the same units.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esatw (amrex::Real t, bool use_empirical=false)
 {
@@ -170,9 +171,9 @@ amrex::Real erf_dtesatw_cc (amrex::Real t) {
 
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
 // J. Appl. Meteorol. Use the same branch selection as erf_esatw so the value
-// and derivative stay on the same function. Small value/derivative jumps can
-// remain at the switch because the Flatau and Clausius-Clapeyron forms are
-// independent fits rather than a matched composite model.
+// and derivative stay on the same function. Small derivative jumps can remain
+// at the switch because the Flatau and Clausius-Clapeyron forms are independent
+// fits rather than a matched composite model.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtesatw (amrex::Real t) {
     if (erf_use_positive_esatw_poly(t)) {
