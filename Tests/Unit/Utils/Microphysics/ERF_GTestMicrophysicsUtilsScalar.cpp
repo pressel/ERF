@@ -328,6 +328,15 @@ TEST(MicrophysicsQSat, IceNormalAndCappedBranchesAreConsistent)
     expect_near_relative(dqsat_capped, amrex::Real(0.0));
 }
 
+// Motivation: The public ice qsat-derivative wrapper should preserve the
+// above-freezing clamp instead of relying on callers to avoid warm inputs.
+TEST(MicrophysicsQSat, IceDerivativeClampsAboveFreezing)
+{
+    amrex::Real dqsat;
+    erf_dtqsati(amrex::Real(273.160001), amrex::Real(800.0), dqsat);
+    EXPECT_EQ(dqsat, amrex::Real(0.0));
+}
+
 // Motivation: The ice qsat helper should agree with both the finite-difference
 // derivative and the algebraic inversion of the uncapped branch.
 TEST(MicrophysicsQSat, IceNormalBranchFiniteDifferenceAndRoundTrip)

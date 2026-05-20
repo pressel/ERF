@@ -166,7 +166,43 @@ void launch_ice_derivative_sweep (amrex::Gpu::DeviceVector<amrex::Real>& tempera
     });
 }
 
+void launch_gamma_sweep (amrex::Gpu::DeviceVector<amrex::Real>& arguments,
+                         amrex::Gpu::DeviceVector<amrex::Real>& gamma_values)
+{
+    auto* argument_ptr = arguments.data();
+    auto* gamma_ptr = gamma_values.data();
+
+    amrex::ParallelFor(arguments.size(), [=] AMREX_GPU_DEVICE (int index) noexcept {
+        gamma_ptr[index] = erf_gammafff(argument_ptr[index]);
+    });
+}
+
 } // namespace
+
+// Motivation: erf_gammafff still carries an AMREX_GPU_HOST_DEVICE annotation.
+// Keep a cheap device-path check so that annotation stays exercised.
+TEST(MicrophysicsKernel, GammaHostDeviceEquivalence)
+{
+    const std::vector<amrex::Real> sample_arguments = {
+        amrex::Real(0.5), amrex::Real(1.0), amrex::Real(1.5), amrex::Real(2.5)};
+
+    amrex::Gpu::HostVector<amrex::Real> host_arguments = make_host_vector(sample_arguments);
+    amrex::Gpu::DeviceVector<amrex::Real> device_arguments(host_arguments.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_gamma(host_arguments.size());
+    amrex::Gpu::HostVector<amrex::Real> host_gamma(host_arguments.size(), amrex::Real(0.0));
+
+    copy_host_to_device(host_arguments, device_arguments);
+    launch_gamma_sweep(device_arguments, device_gamma);
+    amrex::Gpu::streamSynchronize();
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_gamma.begin(), device_gamma.end(), host_gamma.begin());
+
+    for (int index = 0; index < static_cast<int>(host_arguments.size()); ++index) {
+        const amrex::Real argument = host_arguments[index];
+        expect_sample_match("erf_gammafff", index, argument, amrex::Real(-1.0),
+                            erf_gammafff(argument), host_gamma[index], kValueRelTol);
+    }
+}
 
 // Motivation: This is the main device-path coverage for the microphysics
 // utilities. It sweeps cold, warm, and branch-window states and compares the
