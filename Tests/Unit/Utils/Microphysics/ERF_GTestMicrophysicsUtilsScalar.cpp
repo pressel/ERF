@@ -15,6 +15,25 @@ void expect_near_relative (const amrex::Real actual,
     EXPECT_NEAR(actual, expected, scaled_tol(actual, expected, factor));
 }
 
+#if GTEST_HAS_DEATH_TEST
+class ThreadsafeDeathTestScope {
+  public:
+    ThreadsafeDeathTestScope()
+        : old_style_(GTEST_FLAG_GET(death_test_style))
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+    }
+
+    ~ThreadsafeDeathTestScope()
+    {
+        GTEST_FLAG_SET(death_test_style, old_style_);
+    }
+
+  private:
+    std::string old_style_;
+};
+#endif
+
 } // namespace
 
 // Motivation: Morrison and SAM only call this gamma wrapper with positive
@@ -31,6 +50,7 @@ TEST(MicrophysicsGamma, PositiveIdentities)
 // so the wrapper must reject that unsupported branch explicitly.
 TEST(MicrophysicsGamma, RejectsNegativeArgument)
 {
+    ThreadsafeDeathTestScope death_test_scope;
     EXPECT_DEATH(
         {
             volatile amrex::Real value = erf_gammafff(-amrex::Real(0.5));
@@ -221,6 +241,7 @@ TEST(MicrophysicsIceSaturation, ValueColdContract)
 #if GTEST_HAS_DEATH_TEST
 TEST(MicrophysicsIceSaturation, RejectsTemperaturesBelowValueContract)
 {
+    ThreadsafeDeathTestScope death_test_scope;
     EXPECT_DEATH(
         {
             volatile amrex::Real value = erf_esati(amrex::Real(183.15));
@@ -234,6 +255,7 @@ TEST(MicrophysicsIceSaturation, RejectsTemperaturesBelowValueContract)
 // implicit in a comment/code mismatch.
 TEST(MicrophysicsIceSaturation, RejectsTemperaturesBelowDerivativeContract)
 {
+    ThreadsafeDeathTestScope death_test_scope;
     EXPECT_DEATH(
         {
             volatile amrex::Real value = erf_dtesati(amrex::Real(188.15));
