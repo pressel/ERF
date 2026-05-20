@@ -17,22 +17,30 @@ namespace microphysics_test {
 constexpr amrex::Real kValueRelTol = amrex::Real(1.0e-4);
 constexpr amrex::Real kDerivativeRelTol = amrex::Real(2.0e-2);
 constexpr amrex::Real kEmpiricalAgreementRelTol = amrex::Real(1.0e-2);
-constexpr amrex::Real kSwitchRelTol = amrex::Real(5.0e-2);
 constexpr amrex::Real kFiniteDiffStep = amrex::Real(5.0e-2);
-constexpr amrex::Real kKernelErrorLimit = amrex::Real(20.0);
 #else
 constexpr amrex::Real kValueRelTol = amrex::Real(1.0e-12);
 constexpr amrex::Real kDerivativeRelTol = amrex::Real(2.0e-5);
 constexpr amrex::Real kEmpiricalAgreementRelTol = amrex::Real(2.0e-3);
-constexpr amrex::Real kSwitchRelTol = amrex::Real(5.0e-2);
 constexpr amrex::Real kFiniteDiffStep = amrex::Real(1.0e-3);
-constexpr amrex::Real kKernelErrorLimit = amrex::Real(10.0);
 #endif
+
+// Measured relative value jumps at T = switch +/- 1e-3 K on this branch are
+// about 5.12e-5 (lower) and 1.386e-2 (upper). Use about 5x the larger jump to
+// characterize the independent-fit mismatch rather than machine precision.
+constexpr amrex::Real kSwitchValueRelTol = amrex::Real(7.0e-2);
+// Measured relative derivative jumps at T = switch +/- 1e-3 K on this branch
+// are about 4.92e-5 (lower) and 2.594e-2 (upper). Use about 5x the larger jump.
+constexpr amrex::Real kSwitchDerivativeRelTol = amrex::Real(1.3e-1);
 
 constexpr amrex::Real kSqrtPi = amrex::Real(1.7724538509055160273);
 constexpr amrex::Real kEmpiricalTriplePointMbar = amrex::Real(6.11245202992297);
 constexpr amrex::Real kEmpiricalTriplePointPa = amrex::Real(611.245202992297);
+// MUST MATCH poly_min_dtt = -70.0 in erf_use_positive_esatw_poly:
+// 273.16 - 70.0 = 203.16 K.
 constexpr amrex::Real kWaterLowerSwitchK = amrex::Real(203.16);
+// MUST MATCH the upper dtt < 70.0 branch in erf_use_positive_esatw_poly:
+// 273.16 + 70.0 = 343.16 K.
 constexpr amrex::Real kWaterUpperSwitchK = amrex::Real(343.16);
 
 inline amrex::Real scaled_tol (const amrex::Real actual,
@@ -69,6 +77,7 @@ inline amrex::Real central_difference (Function&& func,
 
 inline amrex::Real cc_derivative_formula (const amrex::Real temperature)
 {
+    // MUST MATCH svp2, svp3, and svpt0 in erf_dtesatw_cc.
     constexpr amrex::Real svp2 = amrex::Real(17.67);
     constexpr amrex::Real svp3 = amrex::Real(29.65);
     constexpr amrex::Real svpt0 = amrex::Real(273.15);
@@ -81,12 +90,17 @@ inline amrex::Real cc_derivative_formula (const amrex::Real temperature)
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 bool uses_normal_qsat_branch (const amrex::Real esat, const amrex::Real pressure)
 {
+    // MUST MATCH the normal-branch condition (p - esat) >= esat in
+    // erf_dtqsat_from_esat in Source/Utils/ERF_MicrophysicsUtils.H.
     return (pressure - esat) >= esat;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real capped_branch_pressure (const amrex::Real esat)
 {
+    // MUST MATCH the capped branch condition (p - esat) < esat, i.e. p < 2*esat,
+    // in erf_dtqsat_from_esat. Choosing 1.5*esat stays strictly inside the
+    // capped region whenever esat > 0.
     return amrex::Real(1.5) * esat;
 }
 

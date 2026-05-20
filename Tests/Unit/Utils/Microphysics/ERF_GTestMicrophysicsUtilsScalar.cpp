@@ -36,7 +36,7 @@ TEST(MicrophysicsGamma, RejectsNegativeArgument)
             volatile amrex::Real value = erf_gammafff(-amrex::Real(0.5));
             (void)value;
         },
-        "");
+        "x >");
 }
 #endif
 
@@ -113,8 +113,39 @@ TEST(MicrophysicsWaterSaturation, SwitchJumpsStayBounded)
     const amrex::Real high_below = erf_esatw(kWaterUpperSwitchK - amrex::Real(1.0e-3));
     const amrex::Real high_above = erf_esatw(kWaterUpperSwitchK + amrex::Real(1.0e-3));
 
-    EXPECT_NEAR(low_above, low_below, scaled_tol(low_above, low_below, kSwitchRelTol));
-    EXPECT_NEAR(high_above, high_below, scaled_tol(high_above, high_below, kSwitchRelTol));
+    EXPECT_NEAR(low_above, low_below, scaled_tol(low_above, low_below, kSwitchValueRelTol));
+    EXPECT_NEAR(high_above, high_below, scaled_tol(high_above, high_below, kSwitchValueRelTol));
+}
+
+// Motivation: The value and derivative use the same branch selector, but the
+// two fitted forms are independent. This test characterizes the derivative jump
+// directly rather than using a finite difference across the switch.
+TEST(MicrophysicsWaterSaturation, SwitchDerivativeJumpsStayBounded)
+{
+    const amrex::Real low_below = erf_dtesatw(kWaterLowerSwitchK - amrex::Real(1.0e-3));
+    const amrex::Real low_above = erf_dtesatw(kWaterLowerSwitchK + amrex::Real(1.0e-3));
+    const amrex::Real high_below = erf_dtesatw(kWaterUpperSwitchK - amrex::Real(1.0e-3));
+    const amrex::Real high_above = erf_dtesatw(kWaterUpperSwitchK + amrex::Real(1.0e-3));
+
+    EXPECT_NEAR(low_above, low_below, scaled_tol(low_above, low_below, kSwitchDerivativeRelTol));
+    EXPECT_NEAR(high_above, high_below, scaled_tol(high_above, high_below, kSwitchDerivativeRelTol));
+}
+
+// Motivation: The water branch selector is tied to the production switch in
+// erf_use_positive_esatw_poly. The positivity clause is currently defensive:
+// within the active [-70, 70] C switch interval the Flatau polynomial stays
+// positive on this branch.
+TEST(MicrophysicsWaterSaturation, BranchSelectorBoundariesAndPositivityGuard)
+{
+    EXPECT_FALSE(erf_use_positive_esatw_poly(kWaterLowerSwitchK - amrex::Real(1.0e-3)));
+    EXPECT_TRUE(erf_use_positive_esatw_poly(amrex::Real(273.16)));
+    EXPECT_FALSE(erf_use_positive_esatw_poly(kWaterUpperSwitchK + amrex::Real(1.0e-3)));
+
+    for (int dtt_c = -69; dtt_c <= 69; ++dtt_c) {
+        const amrex::Real dtt = amrex::Real(dtt_c);
+        SCOPED_TRACE(std::to_string(static_cast<double>(dtt)));
+        EXPECT_GT(erf_esatw_flatau_poly(dtt), amrex::Real(0.0));
+    }
 }
 
 // Motivation: The water saturation helper and its derivative must represent the
@@ -180,7 +211,24 @@ TEST(MicrophysicsIceSaturation, DerivativeMatchesFiniteDifferenceWithinContract)
     }
 }
 
+// Motivation: The ice saturation value fit is valid down to about 183.16 K. The
+// helper should reject colder temperatures instead of silently extending the fit.
+TEST(MicrophysicsIceSaturation, ValueColdContract)
+{
+    EXPECT_GT(erf_esati(amrex::Real(183.16) + amrex::Real(1.0e-3)), amrex::Real(0.0));
+}
+
 #if GTEST_HAS_DEATH_TEST
+TEST(MicrophysicsIceSaturation, RejectsTemperaturesBelowValueContract)
+{
+    EXPECT_DEATH(
+        {
+            volatile amrex::Real value = erf_esati(amrex::Real(183.15));
+            (void)value;
+        },
+        "dtt");
+}
+
 // Motivation: The derivative polynomial has a narrower cold contract than the
 // value polynomial. The assert documents that contract instead of leaving it
 // implicit in a comment/code mismatch.
@@ -191,9 +239,19 @@ TEST(MicrophysicsIceSaturation, RejectsTemperaturesBelowDerivativeContract)
             volatile amrex::Real value = erf_dtesati(amrex::Real(188.15));
             (void)value;
         },
-        "");
+        "dtt");
 }
 #endif
+
+// Motivation: Below freezing, saturation vapor pressure over ice should stay
+// below the corresponding supercooled-water saturation vapor pressure.
+TEST(MicrophysicsIceSaturation, IcePressureStaysBelowSupercooledWater)
+{
+    for (int temperature = 230; temperature <= 270; temperature += 5) {
+        const amrex::Real t = amrex::Real(temperature);
+        EXPECT_LT(erf_esati(t), erf_esatw(t));
+    }
+}
 
 // Motivation: The qsat helpers should differentiate the actual capped
 // implementation, not the uncapped algebraic form.
@@ -231,6 +289,30 @@ TEST(MicrophysicsQSat, WaterNormalBranchMatchesFiniteDifference)
         EXPECT_GT(dqsat, amrex::Real(0.0));
         expect_near_relative(dqsat, expected, kDerivativeRelTol);
         expect_near_relative(dqsat, finite_difference, kDerivativeRelTol);
+    }
+}
+
+// Motivation: The uncapped qsat helper should preserve the same algebraic
+// information as the underlying saturation vapor pressure when inverted.
+TEST(MicrophysicsQSat, WaterNormalBranchRoundTripRecoversEsat)
+{
+    const std::array<std::pair<amrex::Real, amrex::Real>, 2> states = {{
+        {amrex::Real(260.0), amrex::Real(800.0)},
+        {amrex::Real(300.0), amrex::Real(800.0)}
+    }};
+
+    for (const auto& state : states) {
+        const amrex::Real temperature = state.first;
+        const amrex::Real pressure = state.second;
+        const amrex::Real esat = erf_esatw(temperature);
+        SCOPED_TRACE(tp_label("water-roundtrip", temperature, pressure));
+        ASSERT_TRUE(uses_normal_qsat_branch(esat, pressure));
+
+        amrex::Real qsat;
+        erf_qsatw(temperature, pressure, qsat);
+        const amrex::Real recovered_esat = pressure * qsat / (Rd_on_Rv + qsat);
+
+        expect_near_relative(recovered_esat, esat);
     }
 }
 
@@ -274,6 +356,41 @@ TEST(MicrophysicsQSat, IceNormalAndCappedBranchesAreConsistent)
     EXPECT_LE(qsat_normal, Rd_on_Rv);
     expect_near_relative(qsat_capped, Rd_on_Rv);
     expect_near_relative(dqsat_capped, amrex::Real(0.0));
+}
+
+// Motivation: The ice qsat helper should agree with both the finite-difference
+// derivative and the algebraic inversion of the uncapped branch.
+TEST(MicrophysicsQSat, IceNormalBranchFiniteDifferenceAndRoundTrip)
+{
+    const std::array<std::pair<amrex::Real, amrex::Real>, 2> states = {{
+        {amrex::Real(240.0), amrex::Real(800.0)},
+        {amrex::Real(260.0), amrex::Real(800.0)}
+    }};
+
+    for (const auto& state : states) {
+        const amrex::Real temperature = state.first;
+        const amrex::Real pressure = state.second;
+        const amrex::Real esat = erf_esati(temperature);
+        SCOPED_TRACE(tp_label("ice-roundtrip", temperature, pressure));
+        ASSERT_TRUE(uses_normal_qsat_branch(esat, pressure));
+
+        amrex::Real qsat;
+        amrex::Real dqsat;
+        erf_qsati(temperature, pressure, qsat);
+        erf_dtqsati(temperature, pressure, dqsat);
+
+        const amrex::Real recovered_esat = pressure * qsat / (Rd_on_Rv + qsat);
+        const amrex::Real finite_difference = central_difference(
+            [pressure] (const amrex::Real value) {
+                amrex::Real qsat_local;
+                erf_qsati(value, pressure, qsat_local);
+                return qsat_local;
+            },
+            temperature);
+
+        expect_near_relative(recovered_esat, esat);
+        expect_near_relative(dqsat, finite_difference, kDerivativeRelTol);
+    }
 }
 
 // Motivation: These are physical property checks rather than regression values:

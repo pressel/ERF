@@ -301,7 +301,8 @@ contracts are slightly more explicit:
   derivative in mbar K\ :sup:`-1`. ERF uses the Flatau polynomial fit over an
   approximately :math:`[-70, 70]` C interval and falls back to the
   Clausius-Clapeyron expression outside that range, or whenever the polynomial
-  would become non-positive.
+  would become non-positive. Because those two expressions are independent fits,
+  small value and derivative jumps can remain at the switch temperatures.
 - The optional empirical branch of :cpp:`erf_esatw` uses a formula whose
   original units are Pa, but ERF converts that result to mbar (hPa) before
   returning it. This keeps both warm-water branches on the same unit system.

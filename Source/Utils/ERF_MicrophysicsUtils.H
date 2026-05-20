@@ -21,11 +21,12 @@ amrex::Real erf_gammafff (amrex::Real x){
     return std::exp(std::lgamma(x));
 }
 
-// Saturation vapor pressure of ice [mbar]
+// Saturation vapor pressure of ice [mbar / hPa].
 //
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
 // J. Appl. Meteorol. Coefficients come from Table 4 and the value fit is valid
-// over [-90, 0] C. ERF intentionally returns 0 above freezing.
+// over [-90, 0] C, i.e. down to about 183.16 K. ERF intentionally clamps the
+// out-of-range above-freezing branch to 0.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esati (amrex::Real t) {
     amrex::Real const a0 = amrex::Real(6.11147274);
@@ -51,7 +52,7 @@ amrex::Real erf_esati (amrex::Real t) {
     return esati;
 }
 
-// Clausius-Clapeyron saturation pressure over water [mbar].
+// Clausius-Clapeyron saturation pressure over water [mbar / hPa].
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esatw_cc (amrex::Real t) {
     constexpr amrex::Real svp1  = amrex::Real(0.6112);
@@ -103,14 +104,14 @@ bool erf_use_positive_esatw_poly (amrex::Real t)
            erf_esatw_flatau_poly(dtt) > amrex::Real(0.0);
 }
 
-// Saturation vapor pressure of water vapor [mbar]
+// Saturation vapor pressure of water vapor [mbar / hPa].
 //
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
-// J. Appl. Meteorol. The polynomial coefficients come from Table 4. ERF uses
-// that fit over approximately [-70, 70] C and falls back to Clausius-
-// Clapeyron below that threshold or whenever the polynomial would be
-// non-positive. The optional empirical fit is in Pa in its original form;
-// ERF converts it to mbar / hPa before returning.
+// J. Appl. Meteorol. The default branch uses the Flatau polynomial only on the
+// current positive in-range interval, approximately [-70, 70] C, and falls back
+// to Clausius-Clapeyron below that threshold or whenever the polynomial would be
+// non-positive. The optional empirical fit is originally in Pa; ERF converts it
+// to mbar / hPa before returning so both warm-water branches use the same units.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esatw (amrex::Real t, bool use_empirical=false)
 {
@@ -128,8 +129,9 @@ amrex::Real erf_esatw (amrex::Real t, bool use_empirical=false)
 }
 
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
-// J. Appl. Meteorol. The derivative fit is valid over [-85, 0] C. ERF
-// intentionally returns 0 above freezing to match erf_esati.
+// J. Appl. Meteorol. The derivative fit is valid over the narrower
+// [-85, 0] C interval, i.e. down to about 188.16 K. ERF intentionally returns
+// 0 above freezing to match erf_esati.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtesati (amrex::Real t) {
     amrex::Real const a0 = amrex::Real(0.503223089);
@@ -154,7 +156,7 @@ amrex::Real erf_dtesati (amrex::Real t) {
     return dtesati;
 }
 
-// Clausius-Clapeyron saturation-pressure derivative over water [mbar / K].
+// Clausius-Clapeyron saturation-pressure derivative over water [mbar / hPa / K].
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtesatw_cc (amrex::Real t) {
     constexpr amrex::Real svp1  = amrex::Real(0.6112);
@@ -168,7 +170,9 @@ amrex::Real erf_dtesatw_cc (amrex::Real t) {
 
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
 // J. Appl. Meteorol. Use the same branch selection as erf_esatw so the value
-// and derivative stay on the same function.
+// and derivative stay on the same function. Small value/derivative jumps can
+// remain at the switch because the Flatau and Clausius-Clapeyron forms are
+// independent fits rather than a matched composite model.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtesatw (amrex::Real t) {
     if (erf_use_positive_esatw_poly(t)) {
@@ -178,12 +182,16 @@ amrex::Real erf_dtesatw (amrex::Real t) {
     return erf_dtesatw_cc(t);
 }
 
+// Saturation mixing-ratio helper for a precomputed saturation pressure. qsat is
+// capped at Rd_on_Rv whenever esat > p/2, i.e. when max(esat, p - esat) = esat.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_qsat_from_esat (amrex::Real esat, amrex::Real p)
 {
     return Rd_on_Rv * esat / std::max(esat, p - esat);
 }
 
+// Temperature derivative of the capped saturation-mixing-ratio helper. The
+// derivative is zero on the capped branch where qsat == Rd_on_Rv.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtqsat_from_esat (amrex::Real esat, amrex::Real dtesat, amrex::Real p)
 {

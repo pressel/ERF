@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <array>
+#include <string>
+#include <vector>
 
 #include <AMReX_Gpu.H>
 #include <AMReX_GpuContainers.H>
@@ -11,101 +14,314 @@ using namespace microphysics_test;
 
 namespace {
 
-constexpr int kNumKernelMetrics = 19;
-
-void launch_microphysics_device_smoke (amrex::Gpu::DeviceVector<amrex::Real>& metrics)
+template <typename HostVectorT>
+void copy_host_to_device (const HostVectorT& host,
+                          amrex::Gpu::DeviceVector<amrex::Real>& device)
 {
-    // Keep this device-path smoke test explicit. The scalar tests exercise the
-    // physical properties in detail on the host, while this kernel test proves
-    // the current microphysics utility surface is callable inside AMReX
-    // ParallelFor and returns values that host-side GTest can inspect.
-    auto* metric_ptr = metrics.data();
+    amrex::Gpu::copy(amrex::Gpu::hostToDevice, host.begin(), host.end(), device.begin());
+}
 
-    amrex::ParallelFor(1, [=] AMREX_GPU_DEVICE (int) noexcept {
-        amrex::Real qsatw_normal;
-        amrex::Real dtqsatw_normal;
-        amrex::Real qsatw_capped;
-        amrex::Real dtqsatw_capped;
-        amrex::Real qsati_normal;
-        amrex::Real dtqsati_normal;
-        amrex::Real qsati_capped;
-        amrex::Real dtqsati_capped;
+amrex::Gpu::HostVector<amrex::Real>
+make_host_vector (const std::vector<amrex::Real>& values)
+{
+    amrex::Gpu::HostVector<amrex::Real> host(values.size());
+    std::copy(values.begin(), values.end(), host.begin());
+    return host;
+}
 
-        const amrex::Real water_normal_temperature = amrex::Real(300.0);
-        const amrex::Real water_normal_pressure = amrex::Real(800.0);
-        const amrex::Real water_capped_pressure = capped_branch_pressure(erf_esatw(water_normal_temperature));
-        const amrex::Real ice_temperature = amrex::Real(260.0);
-        const amrex::Real ice_normal_pressure = amrex::Real(800.0);
-        const amrex::Real ice_capped_pressure = capped_branch_pressure(erf_esati(ice_temperature));
+void append_dense_window (std::vector<amrex::Real>& values,
+                          const amrex::Real center)
+{
+    for (int index = -10; index <= 10; ++index) {
+        values.push_back(center + amrex::Real(index) * amrex::Real(1.0e-3));
+    }
+}
 
-        erf_qsatw(water_normal_temperature, water_normal_pressure, qsatw_normal);
-        erf_dtqsatw(water_normal_temperature, water_normal_pressure, dtqsatw_normal);
-        erf_qsatw(water_normal_temperature, water_capped_pressure, qsatw_capped);
-        erf_dtqsatw(water_normal_temperature, water_capped_pressure, dtqsatw_capped);
-        erf_qsati(ice_temperature, ice_normal_pressure, qsati_normal);
-        erf_dtqsati(ice_temperature, ice_normal_pressure, dtqsati_normal);
-        erf_qsati(ice_temperature, ice_capped_pressure, qsati_capped);
-        erf_dtqsati(ice_temperature, ice_capped_pressure, dtqsati_capped);
+std::vector<amrex::Real> make_water_temperatures ()
+{
+    std::vector<amrex::Real> temperatures;
+    temperatures.reserve(208);
 
-        metric_ptr[0] = erf_gammafff(amrex::Real(1.0));
-        metric_ptr[1] = erf_gammafff(amrex::Real(0.5));
-        metric_ptr[2] = erf_esati(ice_temperature);
-        metric_ptr[3] = erf_esatw_cc(ice_temperature);
-        metric_ptr[4] = erf_esatw(amrex::Real(190.0));
-        metric_ptr[5] = erf_esatw(amrex::Real(273.15), true);
-        metric_ptr[6] = erf_dtesati(ice_temperature);
-        metric_ptr[7] = erf_dtesatw_cc(ice_temperature);
-        metric_ptr[8] = erf_dtesatw(water_normal_temperature);
-        metric_ptr[9] = qsatw_normal;
-        metric_ptr[10] = dtqsatw_normal;
-        metric_ptr[11] = qsatw_capped;
-        metric_ptr[12] = dtqsatw_capped;
-        metric_ptr[13] = qsati_normal;
-        metric_ptr[14] = dtqsati_normal;
-        metric_ptr[15] = qsati_capped;
-        metric_ptr[16] = dtqsati_capped;
-        metric_ptr[17] = HSEutils::compute_saturation_pressure(amrex::Real(300.0), false);
-        metric_ptr[18] = HSEutils::compute_saturation_pressure(amrex::Real(300.0), true);
+    for (int value = 180; value <= 220; ++value) {
+        temperatures.push_back(amrex::Real(value));
+    }
+    for (int value = 221; value <= 310; ++value) {
+        temperatures.push_back(amrex::Real(value));
+    }
+    for (int value = 311; value <= 345; ++value) {
+        temperatures.push_back(amrex::Real(value));
+    }
+    append_dense_window(temperatures, kWaterLowerSwitchK);
+    append_dense_window(temperatures, kWaterUpperSwitchK);
+
+    return temperatures;
+}
+
+std::vector<amrex::Real> make_pressures ()
+{
+    std::vector<amrex::Real> pressures;
+    pressures.reserve(20);
+
+    for (int value = 100; value <= 1050; value += 50) {
+        pressures.push_back(amrex::Real(value));
+    }
+
+    return pressures;
+}
+
+void add_sample_failure (const char* metric,
+                         const int sample_index,
+                         const amrex::Real temperature,
+                         const amrex::Real pressure,
+                         const amrex::Real host_value,
+                         const amrex::Real device_value,
+                         const amrex::Real factor)
+{
+    ADD_FAILURE() << metric
+                  << " sample=" << sample_index
+                  << " T=" << temperature
+                  << " p=" << pressure
+                  << " host=" << host_value
+                  << " device=" << device_value
+                  << " normalized_error=" << normalized_error(device_value, host_value, factor);
+}
+
+void expect_sample_match (const char* metric,
+                          const int sample_index,
+                          const amrex::Real temperature,
+                          const amrex::Real pressure,
+                          const amrex::Real host_value,
+                          const amrex::Real device_value,
+                          const amrex::Real factor)
+{
+    const amrex::Real tol = scaled_tol(device_value, host_value, factor);
+    if (std::abs(device_value - host_value) > tol) {
+        add_sample_failure(metric, sample_index, temperature, pressure, host_value, device_value, factor);
+    }
+}
+
+void launch_water_sweep (amrex::Gpu::DeviceVector<amrex::Real>& temperatures,
+                         amrex::Gpu::DeviceVector<amrex::Real>& pressures,
+                         amrex::Gpu::DeviceVector<amrex::Real>& esat,
+                         amrex::Gpu::DeviceVector<amrex::Real>& dtesat,
+                         amrex::Gpu::DeviceVector<amrex::Real>& qsat,
+                         amrex::Gpu::DeviceVector<amrex::Real>& dtqsat)
+{
+    auto* temperature_ptr = temperatures.data();
+    auto* pressure_ptr = pressures.data();
+    auto* esat_ptr = esat.data();
+    auto* dtesat_ptr = dtesat.data();
+    auto* qsat_ptr = qsat.data();
+    auto* dtqsat_ptr = dtqsat.data();
+
+    amrex::ParallelFor(temperatures.size(), [=] AMREX_GPU_DEVICE (int index) noexcept {
+        const amrex::Real temperature = temperature_ptr[index];
+        const amrex::Real pressure = pressure_ptr[index];
+        amrex::Real qsat_value;
+        amrex::Real dtqsat_value;
+
+        esat_ptr[index] = erf_esatw(temperature);
+        dtesat_ptr[index] = erf_dtesatw(temperature);
+        erf_qsatw(temperature, pressure, qsat_value);
+        erf_dtqsatw(temperature, pressure, dtqsat_value);
+        qsat_ptr[index] = qsat_value;
+        dtqsat_ptr[index] = dtqsat_value;
+    });
+}
+
+void launch_ice_value_sweep (amrex::Gpu::DeviceVector<amrex::Real>& temperatures,
+                             amrex::Gpu::DeviceVector<amrex::Real>& esat)
+{
+    auto* temperature_ptr = temperatures.data();
+    auto* esat_ptr = esat.data();
+
+    amrex::ParallelFor(temperatures.size(), [=] AMREX_GPU_DEVICE (int index) noexcept {
+        esat_ptr[index] = erf_esati(temperature_ptr[index]);
+    });
+}
+
+void launch_ice_derivative_sweep (amrex::Gpu::DeviceVector<amrex::Real>& temperatures,
+                                  amrex::Gpu::DeviceVector<amrex::Real>& pressures,
+                                  amrex::Gpu::DeviceVector<amrex::Real>& dtesat,
+                                  amrex::Gpu::DeviceVector<amrex::Real>& qsat,
+                                  amrex::Gpu::DeviceVector<amrex::Real>& dtqsat)
+{
+    auto* temperature_ptr = temperatures.data();
+    auto* pressure_ptr = pressures.data();
+    auto* dtesat_ptr = dtesat.data();
+    auto* qsat_ptr = qsat.data();
+    auto* dtqsat_ptr = dtqsat.data();
+
+    amrex::ParallelFor(temperatures.size(), [=] AMREX_GPU_DEVICE (int index) noexcept {
+        const amrex::Real temperature = temperature_ptr[index];
+        const amrex::Real pressure = pressure_ptr[index];
+        amrex::Real qsat_value;
+        amrex::Real dtqsat_value;
+
+        dtesat_ptr[index] = erf_dtesati(temperature);
+        erf_qsati(temperature, pressure, qsat_value);
+        erf_dtqsati(temperature, pressure, dtqsat_value);
+        qsat_ptr[index] = qsat_value;
+        dtqsat_ptr[index] = dtqsat_value;
     });
 }
 
 } // namespace
 
-// Motivation: This kernel smoke test is not a replacement for the scalar
-// property tests. It exists to keep the microphysics utility surface callable
-// from AMReX device code while all GTest assertions stay on the host.
-TEST(MicrophysicsKernel, DevicePathSmoke)
+// Motivation: This is the main device-path coverage for the microphysics
+// utilities. It sweeps cold, warm, and branch-window states and compares the
+// AMReX ParallelFor results against host references sample by sample.
+TEST(MicrophysicsKernel, WaterSweptHostDeviceEquivalence)
 {
-    amrex::Gpu::DeviceVector<amrex::Real> device_metrics(kNumKernelMetrics, amrex::Real(0.0));
-    amrex::Gpu::HostVector<amrex::Real> host_metrics(device_metrics.size(), amrex::Real(0.0));
+    const auto temperatures_1d = make_water_temperatures();
+    const auto pressures_1d = make_pressures();
+    std::vector<amrex::Real> sample_temperatures;
+    std::vector<amrex::Real> sample_pressures;
+    sample_temperatures.reserve(temperatures_1d.size() * pressures_1d.size());
+    sample_pressures.reserve(temperatures_1d.size() * pressures_1d.size());
 
-    launch_microphysics_device_smoke(device_metrics);
+    for (const amrex::Real temperature : temperatures_1d) {
+        for (const amrex::Real pressure : pressures_1d) {
+            sample_temperatures.push_back(temperature);
+            sample_pressures.push_back(pressure);
+        }
+    }
+
+    amrex::Gpu::HostVector<amrex::Real> host_temperatures = make_host_vector(sample_temperatures);
+    amrex::Gpu::HostVector<amrex::Real> host_pressures = make_host_vector(sample_pressures);
+    amrex::Gpu::DeviceVector<amrex::Real> device_temperatures(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_pressures(host_pressures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_esat(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_dtesat(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_qsat(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_dtqsat(host_temperatures.size());
+    amrex::Gpu::HostVector<amrex::Real> host_esat(host_temperatures.size(), amrex::Real(0.0));
+    amrex::Gpu::HostVector<amrex::Real> host_dtesat(host_temperatures.size(), amrex::Real(0.0));
+    amrex::Gpu::HostVector<amrex::Real> host_qsat(host_temperatures.size(), amrex::Real(0.0));
+    amrex::Gpu::HostVector<amrex::Real> host_dtqsat(host_temperatures.size(), amrex::Real(0.0));
+
+    copy_host_to_device(host_temperatures, device_temperatures);
+    copy_host_to_device(host_pressures, device_pressures);
+    launch_water_sweep(device_temperatures, device_pressures, device_esat, device_dtesat, device_qsat, device_dtqsat);
     amrex::Gpu::streamSynchronize();
     amrex::Gpu::copy(amrex::Gpu::deviceToHost,
-                     device_metrics.begin(), device_metrics.end(), host_metrics.begin());
+                     device_esat.begin(), device_esat.end(), host_esat.begin());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_dtesat.begin(), device_dtesat.end(), host_dtesat.begin());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_qsat.begin(), device_qsat.end(), host_qsat.begin());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_dtqsat.begin(), device_dtqsat.end(), host_dtqsat.begin());
 
-    EXPECT_NEAR(host_metrics[0], amrex::Real(1.0), scaled_tol(host_metrics[0], amrex::Real(1.0), kValueRelTol));
-    EXPECT_NEAR(host_metrics[1], kSqrtPi, scaled_tol(host_metrics[1], kSqrtPi, kValueRelTol));
-    EXPECT_GT(host_metrics[2], amrex::Real(0.0));
-    EXPECT_GT(host_metrics[3], amrex::Real(0.0));
-    EXPECT_GT(host_metrics[4], amrex::Real(0.0));
-    EXPECT_NEAR(host_metrics[5], kEmpiricalTriplePointMbar,
-                scaled_tol(host_metrics[5], kEmpiricalTriplePointMbar, kEmpiricalAgreementRelTol));
-    EXPECT_GT(host_metrics[6], amrex::Real(0.0));
-    EXPECT_GT(host_metrics[7], amrex::Real(0.0));
-    EXPECT_GT(host_metrics[8], amrex::Real(0.0));
-    EXPECT_GE(host_metrics[9], amrex::Real(0.0));
-    EXPECT_LE(host_metrics[9], Rd_on_Rv);
-    EXPECT_GT(host_metrics[10], amrex::Real(0.0));
-    EXPECT_NEAR(host_metrics[11], Rd_on_Rv, scaled_tol(host_metrics[11], Rd_on_Rv, kValueRelTol));
-    EXPECT_NEAR(host_metrics[12], amrex::Real(0.0), scaled_tol(host_metrics[12], amrex::Real(0.0), kValueRelTol));
-    EXPECT_GE(host_metrics[13], amrex::Real(0.0));
-    EXPECT_LE(host_metrics[13], Rd_on_Rv);
-    EXPECT_GT(host_metrics[14], amrex::Real(0.0));
-    EXPECT_NEAR(host_metrics[15], Rd_on_Rv, scaled_tol(host_metrics[15], Rd_on_Rv, kValueRelTol));
-    EXPECT_NEAR(host_metrics[16], amrex::Real(0.0), scaled_tol(host_metrics[16], amrex::Real(0.0), kValueRelTol));
-    EXPECT_NEAR(host_metrics[17], amrex::Real(100.0) * erf_esatw(amrex::Real(300.0), false),
-                scaled_tol(host_metrics[17], amrex::Real(100.0) * erf_esatw(amrex::Real(300.0), false), kValueRelTol));
-    EXPECT_NEAR(host_metrics[18], amrex::Real(100.0) * erf_esatw(amrex::Real(300.0), true),
-                scaled_tol(host_metrics[18], amrex::Real(100.0) * erf_esatw(amrex::Real(300.0), true), kValueRelTol));
+    for (int index = 0; index < static_cast<int>(host_temperatures.size()); ++index) {
+        const amrex::Real temperature = host_temperatures[index];
+        const amrex::Real pressure = host_pressures[index];
+        amrex::Real qsat;
+        amrex::Real dtqsat;
+        erf_qsatw(temperature, pressure, qsat);
+        erf_dtqsatw(temperature, pressure, dtqsat);
+
+        expect_sample_match("erf_esatw", index, temperature, pressure,
+                            erf_esatw(temperature), host_esat[index], kValueRelTol);
+        expect_sample_match("erf_dtesatw", index, temperature, pressure,
+                            erf_dtesatw(temperature), host_dtesat[index], kDerivativeRelTol);
+        expect_sample_match("erf_qsatw", index, temperature, pressure,
+                            qsat, host_qsat[index], kValueRelTol);
+        expect_sample_match("erf_dtqsatw", index, temperature, pressure,
+                            dtqsat, host_dtqsat[index], kDerivativeRelTol);
+    }
+}
+
+// Motivation: Ice saturation value coverage reaches the colder 183.16 K limit,
+// while the derivative-based sweep below handles only the narrower derivative
+// contract.
+TEST(MicrophysicsKernel, IceValueSweptHostDeviceEquivalence)
+{
+    std::vector<amrex::Real> sample_temperatures;
+    sample_temperatures.reserve(91);
+    for (int index = 0; index < 90; ++index) {
+        sample_temperatures.push_back(amrex::Real(183.16) + amrex::Real(1.0e-3) + amrex::Real(index));
+    }
+    sample_temperatures.push_back(amrex::Real(273.16));
+
+    amrex::Gpu::HostVector<amrex::Real> host_temperatures = make_host_vector(sample_temperatures);
+    amrex::Gpu::DeviceVector<amrex::Real> device_temperatures(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_esat(host_temperatures.size());
+    amrex::Gpu::HostVector<amrex::Real> host_esat(host_temperatures.size(), amrex::Real(0.0));
+
+    copy_host_to_device(host_temperatures, device_temperatures);
+    launch_ice_value_sweep(device_temperatures, device_esat);
+    amrex::Gpu::streamSynchronize();
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_esat.begin(), device_esat.end(), host_esat.begin());
+
+    for (int index = 0; index < static_cast<int>(host_temperatures.size()); ++index) {
+        const amrex::Real temperature = host_temperatures[index];
+        expect_sample_match("erf_esati", index, temperature, amrex::Real(-1.0),
+                            erf_esati(temperature), host_esat[index], kValueRelTol);
+    }
+}
+
+// Motivation: This sweep keeps the derivative and qsat device coverage inside
+// the narrower ice derivative contract while also covering capped and uncapped
+// qsat behavior across the representative pressure range.
+TEST(MicrophysicsKernel, IceDerivativeAndQSatSweptHostDeviceEquivalence)
+{
+    const auto pressures_1d = make_pressures();
+    std::vector<amrex::Real> sample_temperatures;
+    std::vector<amrex::Real> sample_pressures;
+    sample_temperatures.reserve(86 * pressures_1d.size());
+    sample_pressures.reserve(86 * pressures_1d.size());
+
+    std::vector<amrex::Real> derivative_temperatures;
+    derivative_temperatures.reserve(86);
+    for (int offset = 0; offset < 85; ++offset) {
+        derivative_temperatures.push_back(amrex::Real(188.16) + amrex::Real(1.0e-3) + amrex::Real(offset));
+    }
+    derivative_temperatures.push_back(amrex::Real(273.16));
+
+    for (const amrex::Real temperature : derivative_temperatures) {
+        for (const amrex::Real pressure : pressures_1d) {
+            sample_temperatures.push_back(temperature);
+            sample_pressures.push_back(pressure);
+        }
+    }
+
+    amrex::Gpu::HostVector<amrex::Real> host_temperatures = make_host_vector(sample_temperatures);
+    amrex::Gpu::HostVector<amrex::Real> host_pressures = make_host_vector(sample_pressures);
+    amrex::Gpu::DeviceVector<amrex::Real> device_temperatures(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_pressures(host_pressures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_dtesat(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_qsat(host_temperatures.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_dtqsat(host_temperatures.size());
+    amrex::Gpu::HostVector<amrex::Real> host_dtesat(host_temperatures.size(), amrex::Real(0.0));
+    amrex::Gpu::HostVector<amrex::Real> host_qsat(host_temperatures.size(), amrex::Real(0.0));
+    amrex::Gpu::HostVector<amrex::Real> host_dtqsat(host_temperatures.size(), amrex::Real(0.0));
+
+    copy_host_to_device(host_temperatures, device_temperatures);
+    copy_host_to_device(host_pressures, device_pressures);
+    launch_ice_derivative_sweep(device_temperatures, device_pressures, device_dtesat, device_qsat, device_dtqsat);
+    amrex::Gpu::streamSynchronize();
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_dtesat.begin(), device_dtesat.end(), host_dtesat.begin());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_qsat.begin(), device_qsat.end(), host_qsat.begin());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                     device_dtqsat.begin(), device_dtqsat.end(), host_dtqsat.begin());
+
+    for (int index = 0; index < static_cast<int>(host_temperatures.size()); ++index) {
+        const amrex::Real temperature = host_temperatures[index];
+        const amrex::Real pressure = host_pressures[index];
+        amrex::Real qsat;
+        amrex::Real dtqsat;
+        erf_qsati(temperature, pressure, qsat);
+        erf_dtqsati(temperature, pressure, dtqsat);
+
+        expect_sample_match("erf_dtesati", index, temperature, pressure,
+                            erf_dtesati(temperature), host_dtesat[index], kDerivativeRelTol);
+        expect_sample_match("erf_qsati", index, temperature, pressure,
+                            qsat, host_qsat[index], kValueRelTol);
+        expect_sample_match("erf_dtqsati", index, temperature, pressure,
+                            dtqsat, host_dtqsat[index], kDerivativeRelTol);
+    }
 }
