@@ -136,6 +136,7 @@ public:
 
     // Advance solution to final time
     void Evolve ();
+    amrex::Real EvolveOneStep (amrex::Real time, amrex::Real dt_request);
 
     void PackAtmosphericStates (amrex::Vector<amrex::MultiFab*>& states, amrex::Real time);
     void ApplyOceanSurfaceState (const amrex::Vector<amrex::MultiFab*>& state, amrex::Real time);
@@ -549,6 +550,9 @@ public:
     // Primary solution data data containers
     amrex::Vector<amrex::Vector<amrex::MultiFab> > vars_new;
     amrex::Vector<amrex::Vector<amrex::MultiFab> > vars_old;
+
+    // Pressure gradient at each level
+    amrex::Vector<amrex::Vector<amrex::MultiFab> > gradp;
 
     // Velocity time averaged field
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> vel_t_avg;
@@ -1456,14 +1460,14 @@ private:
     int
     NumDataLogs () noexcept
     {
-        return datalog.size();
+        return static_cast<int>(datalog.size());
     }
 
     AMREX_FORCE_INLINE
     int
     NumDerDataLogs () noexcept
     {
-        return der_datalog.size();
+        return static_cast<int>(der_datalog.size());
     }
 
 
@@ -1478,7 +1482,7 @@ private:
     int
     NumSamplePointLogs () noexcept
     {
-        return sampleptlog.size();
+        return static_cast<int>(sampleptlog.size());
     }
 
     AMREX_FORCE_INLINE
@@ -1492,7 +1496,7 @@ private:
     int
     NumSampleLineLogs () noexcept
     {
-        return samplelinelog.size();
+        return static_cast<int>(samplelinelog.size());
     }
 
     amrex::IntVect&
@@ -1505,7 +1509,7 @@ private:
     int
     NumSamplePoints () noexcept
     {
-        return samplepoint.size();
+        return static_cast<int>(samplepoint.size());
     }
 
     amrex::IntVect&
@@ -1518,7 +1522,7 @@ private:
     int
     NumSampleLines () noexcept
     {
-        return sampleline.size();
+        return static_cast<int>(sampleline.size());
     }
 
     static amrex::Real startCPUTime;
