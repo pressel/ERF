@@ -1,6 +1,9 @@
 #ifndef ERF_HSEUTIL_H_
 #define ERF_HSEUTIL_H_
 
+#include <cmath>
+#include <limits>
+
 #include "ERF_MicrophysicsUtils.H"
 #include "ERF_Constants.H"
 #include "ERF_EOS.H"
@@ -16,6 +19,24 @@ namespace HSEutils
     // to control Newton iterations in init_isentropic_hse*
     const int MAX_ITER = 10;
     const amrex::Real TOL = Real(1.e-8);
+
+    AMREX_GPU_HOST_DEVICE
+    AMREX_FORCE_INLINE
+    Real
+    fd_step_temperature (const Real temperature)
+    {
+        return std::sqrt(std::numeric_limits<Real>::epsilon()) *
+               amrex::max(std::abs(temperature), Real(300.0));
+    }
+
+    AMREX_GPU_HOST_DEVICE
+    AMREX_FORCE_INLINE
+    Real
+    fd_step_pressure (const Real pressure)
+    {
+        return std::sqrt(std::numeric_limits<Real>::epsilon()) *
+               amrex::max(std::abs(pressure), p_0);
+    }
 
     /**
      * Function to calculate the hydrostatic density and pressure
@@ -50,13 +71,12 @@ namespace HSEutils
     {
         int iter=0;
         int max_iter=20;
-        Real eps  = Real(1.e-6);
-        Real ieps = Real(1.e6);
         while (std::abs(F)>m_tol && iter<max_iter) {
+            rd = getRhogivenThetaPress(Th, P, RdOCp, qv);
+            AMREX_ALWAYS_ASSERT(rd > amrex::Real(0));
+
             // Compute change in pressure
-            Real hi   = getRhogivenThetaPress(Th, P + eps, RdOCp, qv);
-            Real lo   = getRhogivenThetaPress(Th, P - eps, RdOCp, qv);
-            Real dFdp = one + fourth*ieps*(hi - lo)*g*dz;
+            Real dFdp = one + myhalf * (one + qt) * g * dz * rd / (Gamma * P);
             P -= F/dFdp;
             if (P < Real(1.e3)) amrex::Warning("P < 1000 [Pa]; Domain height may be too large...");
             AMREX_ALWAYS_ASSERT(P > amrex::Real(0));
@@ -166,7 +186,7 @@ namespace HSEutils
               Real dpdr = getdPdRgivenConstantTheta(r[k],theta);
               // Gamma * p_0 * std::pow( (R_d * theta / p_0), Gamma) * std::pow(r[k], Gamma-one) ;
 
-              Real drho = A / (dpdr + dz * CONST_GRAV);
+              Real drho = A / (dpdr + myhalf * dz * CONST_GRAV);
 
               r[k] = r[k] + drho;
               p[k] = getPgivenRTh(r[k]*theta);
@@ -284,7 +304,7 @@ namespace HSEutils
 
              Real dpdr = getdPdRgivenConstantTheta(r[k],theta);
 
-             Real drho = A / (dpdr + dz_loc * CONST_GRAV);
+             Real drho = A / (dpdr + myhalf * dz_loc * CONST_GRAV);
 
              r[k] = r[k] + drho;
              p[k] = getPgivenRTh(r[k]*theta);
@@ -300,6 +320,7 @@ namespace HSEutils
          // if (!converged_hse) amrex::Print() << "DOING ITERATIONS AT K = " << k << std::endl;
          // if (!converged_hse) amrex::Error("Didn't converge the iterations in init");
     }
+    r[khi+1] = r[khi];
 }
 
 AMREX_FORCE_INLINE
@@ -307,8 +328,7 @@ AMREX_GPU_HOST_DEVICE
 Real compute_saturation_pressure (const Real T_b, const bool use_empirical)
 {
     Real p_s = erf_esatw(T_b,use_empirical);
-    if (!use_empirical) p_s *= Real(100.0);
-    return p_s;
+    return p_s * Real(100.0);
 }
 
 AMREX_FORCE_INLINE
@@ -365,17 +385,21 @@ AMREX_GPU_HOST_DEVICE
 Real compute_temperature (const Real p_b, const Real q_t, const Real eq_pot_temp, const bool use_empirical,
                           const int which_zone, const Real scaled_height)
 {
-    Real T_b = Real(200.0), delta_T; // Initial guess
+    Real T_b = Real(200.0); // Initial guess
+    Real delta_T = Real(0.0);
     for (int iter=0; iter<20; iter++)
     {
+        Real eps = fd_step_temperature(T_b);
         Real F         = compute_F_for_temp(T_b      , p_b, q_t, eq_pot_temp, use_empirical, which_zone, scaled_height);
-        Real F_plus_dF = compute_F_for_temp(T_b+Real(1e-10), p_b, q_t, eq_pot_temp, use_empirical, which_zone, scaled_height);
-        Real F_prime   = (F_plus_dF - F)/Real(1e-10);
+        Real F_plus_dF = compute_F_for_temp(T_b+eps, p_b, q_t, eq_pot_temp, use_empirical, which_zone, scaled_height);
+        Real F_prime   = (F_plus_dF - F)/eps;
         delta_T = -F/F_prime;
         T_b = T_b + delta_T;
     }
 
-    if(std::fabs(delta_T) > 1e-8){
+    const Real tol_T = Real(64.0) * std::numeric_limits<Real>::epsilon() *
+                       amrex::max(std::abs(T_b), Real(300.0));
+    if(std::fabs(delta_T) > tol_T){
          amrex::Abort("Newton Raphson for temperature could not converge");
     }
 
@@ -473,18 +497,11 @@ Real compute_p_k (Real &p_k, const Real p_k_minus_1, Real &theta_k, Real& rho_k,
                   const int which_zone, const Real scaled_height, const bool T_from_theta,
                   const Real theta_0, const Real theta_tr, const Real z_tr, const Real T_tr)
 {
-    Real delta_p_k;
-
-#ifdef AMREX_USE_FLOAT
-    Real eps = Real(1e-6);
-    Real tol = Real(1e-8);
-#else
-    Real eps = Real(1e-10);
-    Real tol = Real(1e-8);
-#endif
+    Real delta_p_k = Real(0.0);
 
     for(int iter=0; iter<20; iter++)
     {
+        Real eps = fd_step_pressure(p_k);
         Real F         = compute_F(p_k      , p_k_minus_1, theta_k, rho_k, q_v_k, T_dp, T_b, dz, rho_k_minus_1,
                                    q_t, eq_pot_temp, use_empirical, which_zone, scaled_height, T_from_theta,
                                    theta_0, theta_tr, z_tr, T_tr);
@@ -496,6 +513,8 @@ Real compute_p_k (Real &p_k, const Real p_k_minus_1, Real &theta_k, Real& rho_k,
         p_k            = p_k + delta_p_k;
     }
 
+    const Real tol = Real(64.0) * std::numeric_limits<Real>::epsilon() *
+                     amrex::max(std::abs(p_k), p_0);
     if (std::fabs(delta_p_k) > tol) {
         amrex::Abort("Newton Raphson for pressure could not converge");
     }
