@@ -52,7 +52,12 @@ amrex::Real erf_esati (amrex::Real t) {
     return esati;
 }
 
-// Clausius-Clapeyron saturation pressure over water [mbar / hPa].
+// Magnus-style exponential saturation-pressure approximation over water
+// [mbar / hPa]. This closed-form formula is commonly motivated by
+// simplified integrations of the Clausius-Clapeyron relation, but ERF
+// evaluates the empirical exponential expression below rather than
+// performing a direct Clausius-Clapeyron integration. The `_cc` suffix is
+// retained for API compatibility.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esatw_cc (amrex::Real t) {
     constexpr amrex::Real svp1  = amrex::Real(0.6112);
@@ -110,9 +115,10 @@ bool erf_use_positive_esatw_poly (amrex::Real t)
 // J. Appl. Meteorol. The default branch uses the Flatau polynomial only on the
 // current positive in-range interval selected by erf_use_positive_esatw_poly,
 // currently about [-70, 70] C. Outside that interval, or whenever the
-// polynomial would be non-positive, it falls back to Clausius-Clapeyron. The
-// optional empirical fit is originally in Pa; ERF converts it to mbar / hPa
-// before returning so both warm-water branches use the same units.
+// polynomial would be non-positive, it falls back to the Magnus-style
+// exponential approximation. The optional empirical fit is originally in Pa;
+// ERF converts it to mbar / hPa before returning so both warm-water branches
+// use the same units.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_esatw (amrex::Real t, bool use_empirical=false)
 {
@@ -157,7 +163,9 @@ amrex::Real erf_dtesati (amrex::Real t) {
     return dtesati;
 }
 
-// Clausius-Clapeyron saturation-pressure derivative over water [mbar / hPa / K].
+// Temperature derivative of the Magnus-style exponential water
+// saturation-pressure approximation [mbar / hPa / K]. This differentiates
+// the closed-form formula in erf_esatw_cc.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtesatw_cc (amrex::Real t) {
     constexpr amrex::Real svp1  = amrex::Real(0.6112);
@@ -172,8 +180,8 @@ amrex::Real erf_dtesatw_cc (amrex::Real t) {
 // Flatau et al. (1992), Polynomial Fits to Saturation Vapor Pressure,
 // J. Appl. Meteorol. Use the same branch selection as erf_esatw so the value
 // and derivative stay on the same function. Small derivative jumps can remain
-// at the switch because the Flatau and Clausius-Clapeyron forms are independent
-// fits rather than a matched composite model.
+// at the switch because the Flatau polynomial and Magnus-style exponential
+// approximation are independent fits rather than a matched composite model.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real erf_dtesatw (amrex::Real t) {
     if (erf_use_positive_esatw_poly(t)) {

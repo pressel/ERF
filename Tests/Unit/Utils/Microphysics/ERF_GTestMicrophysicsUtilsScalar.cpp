@@ -26,9 +26,9 @@ TEST(MicrophysicsGamma, PositiveIdentities)
     expect_near_relative(erf_gammafff(amrex::Real(2.5)), amrex::Real(1.5) * erf_gammafff(amrex::Real(1.5)));
 }
 
-// Motivation: The Clausius-Clapeyron fallback is the cold and hot water-vapor
-// pressure closure. Its derivative should match both the analytic formula and
-// a finite-difference check.
+// Motivation: The `_cc` helper is ERF's Magnus-style exponential fallback for
+// water saturation pressure. Its derivative should match both the analytic
+// derivative of that closed-form expression and a finite-difference check.
 TEST(MicrophysicsWaterCC, DerivativeMatchesAnalyticAndFiniteDifference)
 {
     const std::array<amrex::Real, 4> temperatures = {

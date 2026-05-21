@@ -285,8 +285,11 @@ The implemented branch structure is
   update theta from the adjusted T and diagnosed pressure
 
 In the implementation, :math:`q_{sat}` and :math:`dq_{sat}/dT` are evaluated with ERF's internal thermodynamic
-utilities, pressure is passed in mbar for saturation calls, and pressure is converted back to Pa when
-recomputing :math:`\theta` from :math:`T`.
+utilities. For warm-water saturation pressure, ERF uses the Flatau polynomial on the current positive selected
+interval, about [-70, 70] C, and otherwise falls back to a Magnus-style closed-form exponential approximation.
+That fallback is commonly motivated by simplified integrations of the Clausius-Clapeyron relation, but the
+helper does not perform a direct Clausius-Clapeyron integration. Pressure is passed in mbar for saturation
+calls, and pressure is converted back to Pa when recomputing :math:`\theta` from :math:`T`.
 
 When SHOC is enabled, SatAdj condensation is disabled so that SHOC owns the phase-change adjustment and ERF
 does not double-apply condensation tendencies.

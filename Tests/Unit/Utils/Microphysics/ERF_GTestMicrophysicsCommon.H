@@ -92,7 +92,9 @@ inline amrex::Real central_difference (Function&& func,
 
 inline amrex::Real cc_derivative_formula (const amrex::Real temperature)
 {
-    // MUST MATCH svp2, svp3, and svpt0 in erf_dtesatw_cc.
+    // MUST MATCH svp2, svp3, and svpt0 in erf_dtesatw_cc. Despite the `_cc`
+    // suffix, the production helper evaluates a Magnus-style closed-form
+    // exponential approximation, not a direct Clausius-Clapeyron integration.
     constexpr amrex::Real svp2 = amrex::Real(17.67);
     constexpr amrex::Real svp3 = amrex::Real(29.65);
     constexpr amrex::Real svpt0 = amrex::Real(273.15);
