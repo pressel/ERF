@@ -288,55 +288,6 @@ In the implementation, :math:`q_{sat}` and :math:`dq_{sat}/dT` are evaluated wit
 utilities, pressure is passed in mbar for saturation calls, and pressure is converted back to Pa when
 recomputing :math:`\theta` from :math:`T`.
 
-Thermodynamic utility contracts
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Several microphysics schemes and the moist HSE / initialization utilities share
-the helper functions in ``Source/Utils/ERF_MicrophysicsUtils.H``. The theory
-above uses the warm-cloud expression for :math:`q_{sat}`. The code-level helper
-contracts are slightly more explicit:
-
-- :cpp:`erf_esatw` and :cpp:`erf_dtesatw` take temperature in K and return the
-  saturation vapor pressure over liquid water in mbar (hPa) and its temperature
-  derivative in mbar K\ :sup:`-1`. ERF uses the Flatau polynomial fit over an
-  approximately :math:`[-70, 70]` C interval and falls back to the
-  Clausius-Clapeyron expression outside that range, or whenever the polynomial
-  would become non-positive. Because those two expressions are independent fits,
-  small value and derivative jumps can remain at the switch temperatures.
-- The optional empirical branch of :cpp:`erf_esatw` uses a formula whose
-  original units are Pa, but ERF converts that result to mbar (hPa) before
-  returning it. This keeps both warm-water branches on the same unit system.
-- :cpp:`erf_esati` and :cpp:`erf_dtesati` also take temperature in K and return
-  ice saturation pressure and its derivative in mbar (hPa) and mbar K\ :sup:`-1`.
-  The value fit is used over :math:`[-90, 0]` C. ERF intentionally returns
-  zero above freezing. The derivative fit has a narrower asserted range of
-  :math:`[-85, 0]` C and likewise returns zero above freezing.
-- :cpp:`erf_qsatw` and :cpp:`erf_qsati` take pressure in mbar (hPa) and use the
-  piecewise implementation
-
-  .. math::
-
-     q_{sat} = \epsilon \frac{e_s}{\max(e_s, p - e_s)}.
-
-  In the normal branch where :math:`e_s \le p/2`, this reduces to the usual
-  ideal-gas saturation relation written above. When :math:`e_s > p/2`, the
-  helper caps :math:`q_{sat}` at :math:`\epsilon = R_d/R_v`.
-- :cpp:`erf_dtqsatw` and :cpp:`erf_dtqsati` differentiate that same piecewise
-  relation. In the normal branch,
-
-  .. math::
-
-     \frac{d q_{sat}}{dT} = \epsilon \frac{p}{(p - e_s)^2} \frac{d e_s}{dT},
-
-  and on the capped branch the derivative is zero.
-- :cpp:`erf_gammafff` is a positive-argument gamma-function wrapper used for the
-  microphysics coefficient factors in the Morrison and SAM setups. ERF enforces
-  :math:`x > 0` for that helper because the :math:`\log\Gamma` implementation
-  otherwise follows :math:`\log|\Gamma(x)|` for negative non-integers.
-
-When base-state or initialization code needs saturation vapor pressure in Pa,
-it converts the mbar (hPa) result from these helpers by multiplying by 100.
-
 When SHOC is enabled, SatAdj condensation is disabled so that SHOC owns the phase-change adjustment and ERF
 does not double-apply condensation tendencies.
 
