@@ -118,8 +118,12 @@ Real fd_step_temperature (const Real temperature)
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 Real fd_step_pressure (const Real pressure)
 {
-    return std::sqrt(std::numeric_limits<Real>::epsilon()) *
-           amrex::max(amrex::Math::abs(pressure), kP0);
+    // MUST MATCH Source/ERF_Constants.H p_0: pressure scale for
+    // finite-difference perturbations.
+    const Real p0_scale = Real(1.0e5);
+    const Real abs_pressure = amrex::Math::abs(pressure);
+    const Real scale = (abs_pressure > p0_scale) ? abs_pressure : p0_scale;
+    return std::sqrt(std::numeric_limits<Real>::epsilon()) * scale;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE

@@ -34,8 +34,12 @@ namespace HSEutils
     Real
     fd_step_pressure (const Real pressure)
     {
-        return std::sqrt(std::numeric_limits<Real>::epsilon()) *
-               amrex::max(std::abs(pressure), p_0);
+        // MUST MATCH Source/ERF_Constants.H p_0: pressure scale for
+        // finite-difference perturbations.
+        const Real p0_scale = Real(1.0e5);
+        const Real abs_pressure = std::abs(pressure);
+        const Real scale = (abs_pressure > p0_scale) ? abs_pressure : p0_scale;
+        return std::sqrt(std::numeric_limits<Real>::epsilon()) * scale;
     }
 
     /**
@@ -513,8 +517,12 @@ Real compute_p_k (Real &p_k, const Real p_k_minus_1, Real &theta_k, Real& rho_k,
         p_k            = p_k + delta_p_k;
     }
 
-    const Real tol = Real(64.0) * std::numeric_limits<Real>::epsilon() *
-                     amrex::max(std::abs(p_k), p_0);
+    // MUST MATCH Source/ERF_Constants.H p_0: pressure scale for Newton
+    // convergence.
+    const Real p0_scale = Real(1.0e5);
+    const Real abs_pressure = std::abs(p_k);
+    const Real pressure_scale = (abs_pressure > p0_scale) ? abs_pressure : p0_scale;
+    const Real tol = Real(64.0) * std::numeric_limits<Real>::epsilon() * pressure_scale;
     if (std::fabs(delta_p_k) > tol) {
         amrex::Abort("Newton Raphson for pressure could not converge");
     }
