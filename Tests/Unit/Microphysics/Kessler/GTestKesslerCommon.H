@@ -1,6 +1,7 @@
 #ifndef GTEST_KESSLER_COMMON_H_
 #define GTEST_KESSLER_COMMON_H_
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
