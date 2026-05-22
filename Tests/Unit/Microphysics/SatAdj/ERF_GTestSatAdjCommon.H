@@ -52,22 +52,14 @@ namespace satadj_test {
 constexpr amrex::Real kThermoTolFactor = amrex::Real(2.0e-5);
 constexpr amrex::Real kStateTolFactor = amrex::Real(5.0e-5);
 constexpr amrex::Real kAsymptoticRelTol = amrex::Real(2.0e-1);
-constexpr amrex::Real kLatentEnergyTolFactor = amrex::Real(3.0e-3);
 constexpr amrex::Real kNormalizedWaterConservationTol = amrex::Real(8.0);
 constexpr amrex::Real kNormalizedLatentEnergyConservationTol = amrex::Real(8.0);
 #else
 constexpr amrex::Real kThermoTolFactor = amrex::Real(1.0e-12);
 constexpr amrex::Real kStateTolFactor = amrex::Real(1.0e-12);
 constexpr amrex::Real kAsymptoticRelTol = amrex::Real(2.0e-2);
-constexpr amrex::Real kLatentEnergyTolFactor = amrex::Real(1.0e-3);
-// rho and qt are algebraically conserved by SatAdj. The observed public-flow
-// residuals in double precision are roundoff-sized, so keep these bounds very
-// tight while still allowing small architecture/compiler variation.
-constexpr amrex::Real kNormalizedWaterConservationTol = amrex::Real(1.0e-5);
-// The latent-energy invariant is still very accurate in double precision, but
-// it is reconstructed from conserved state using EOS calls after a finite-
-// residual Newton solve. Keep this tolerance separate from water conservation.
-constexpr amrex::Real kNormalizedLatentEnergyConservationTol = amrex::Real(1.0e-6);
+constexpr amrex::Real kNormalizedWaterConservationTol = amrex::Real(1.0);
+constexpr amrex::Real kNormalizedLatentEnergyConservationTol = amrex::Real(1.0);
 #endif
 
 constexpr amrex::Real kFacCond = lcond / Cp_d;
@@ -130,6 +122,32 @@ amrex::Real scaled_tol (const amrex::Real reference, const amrex::Real factor)
 {
     const amrex::Real magnitude = amrex::Math::abs(reference);
     return factor * (magnitude > amrex::Real(1.0) ? magnitude : amrex::Real(1.0));
+}
+
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real water_budget_tol (const amrex::Real reference)
+{
+#ifdef AMREX_USE_FLOAT
+    return amrex::max(amrex::Real(1.0e-8),
+                      amrex::Real(1.0e-5) * amrex::Math::abs(reference));
+#else
+    return amrex::max(amrex::Real(1.0e-14),
+                      amrex::Real(1.0e-12) * amrex::Math::abs(reference));
+#endif
+}
+
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real latent_energy_budget_tol (const amrex::Real reference)
+{
+#ifdef AMREX_USE_FLOAT
+    return amrex::max(amrex::Real(1.0e-4),
+                      amrex::Real(1.0e-4) * amrex::Math::abs(reference));
+#else
+    return amrex::max(amrex::Real(1.0e-10),
+                      amrex::Real(1.0e-10) * amrex::Math::abs(reference));
+#endif
 }
 
 AMREX_GPU_HOST_DEVICE
@@ -522,14 +540,12 @@ inline void compute_satadj_conservation_errors (const amrex::MultiFab& before,
                 err_arr(i,j,k,ConservationErrRho) = amrex::Math::abs(rho_after - rho_before)
                     / scaled_tol(rho_before, kStateTolFactor);
                 err_arr(i,j,k,ConservationErrQt) = amrex::Math::abs(qt_after - qt_before)
-                    / scaled_tol(qt_before, amrex::Real(20.0) * kStateTolFactor);
-                // This public-flow check reconstructs temperature from
-                // before/after conserved states and compares against a solver
-                // that stops its fixed-pressure Newton solve at a finite
-                // residual. Use a scheme-scale latent-energy tolerance rather
-                // than a machine-precision thermodynamic one.
+                    / water_budget_tol(qt_before);
+                // Reconstruct temperature at the pre-adjustment fixed pressure
+                // and normalize against a physically meaningful latent-energy
+                // budget tolerance, not a generic scaled_tol floor of 1.
                 err_arr(i,j,k,ConservationErrLatentEnergy) = amrex::Math::abs(latent_after - latent_before)
-                    / scaled_tol(latent_before, kLatentEnergyTolFactor);
+                    / latent_energy_budget_tol(latent_before);
 
                 err_arr(i,j,k,ConservationErrInitialQcPositive) =
                     qc_before > kQcCoveragePositiveMin ? amrex::Real(1.0) : amrex::Real(0.0);

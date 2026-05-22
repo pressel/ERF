@@ -1,5 +1,4 @@
 #include <memory>
-#include <iostream>
 #include <vector>
 
 #include <AMReX_BoxArray.H>
@@ -215,14 +214,6 @@ TEST(SatAdjMultiFab, PublicFlowConservesWaterAndLatentEnergyPortable)
     const amrex::Real initial_qc_coverage = err.max(ConservationErrInitialQcPositive);
     const amrex::Real final_qc_coverage = err.max(ConservationErrFinalQcPositive);
     const amrex::Real final_qc_zero_coverage = err.max(ConservationErrFinalQcZero);
-
-    std::cout << "SatAdj conservation normalized max errors: rho=" << rho_err
-              << ", qt=" << qt_err
-              << ", latent_energy=" << latent_energy_err
-              << "; coverage initial_qc=" << initial_qc_coverage
-              << ", final_qc=" << final_qc_coverage
-              << ", final_qc_zero=" << final_qc_zero_coverage
-              << std::endl;
 
     EXPECT_LE(rho_err, kNormalizedWaterConservationTol)
         << "Observed normalized max rho conservation error: " << rho_err;
