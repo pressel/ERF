@@ -36,11 +36,15 @@ target_sources(${erf_exe_name}
     ${CMAKE_CURRENT_SOURCE_DIR}/Utils/EOS/ERF_GTestEOSKernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Utils/Microphysics/ERF_GTestMicrophysicsUtilsScalar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Utils/Microphysics/ERF_GTestMicrophysicsUtilsKernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/GTestKesslerAdvanceBFB.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/GTestKesslerAdvanceKernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/SatAdj/ERF_GTestSatAdjThermo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/SatAdj/ERF_GTestSatAdjCell.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/SatAdj/ERF_GTestSatAdjMultiFab.cpp
 )
 build_erf_exe(${erf_exe_name})
+target_compile_definitions(${erf_exe_name} PRIVATE ERF_ENABLE_KESSLER_BFB_REFERENCE)
+target_compile_definitions(${erf_lib_name} PRIVATE ERF_ENABLE_KESSLER_BFB_REFERENCE)
 target_link_libraries(${erf_exe_name} PRIVATE GTest::gtest)
 
 include(GoogleTest)
