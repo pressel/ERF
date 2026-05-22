@@ -41,7 +41,7 @@ struct KesslerBFBTestAccessor {
 
     static void AdvanceRefactored (Kessler& kessler, const SolverChoice& solver_choice)
     {
-        kessler.AdvanceKesslerRefactored(solver_choice);
+        kessler.AdvanceKessler(solver_choice);
     }
 
     static amrex::MultiFab& MicroVar (Kessler& kessler, const int var_idx)
@@ -341,8 +341,7 @@ inline void fill_base_conserved_state_portable (amrex::MultiFab& cons,
     }
 }
 
-inline void fill_detj_portable (amrex::MultiFab& detj,
-                                const FixtureOptions& options)
+inline void fill_detj_portable (amrex::MultiFab& detj)
 {
     for (amrex::MFIter mfi(detj, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
         const amrex::Box& bx = mfi.tilebox();
@@ -647,7 +646,7 @@ struct Harness {
         if (options.with_detj) {
             detj_cc = std::make_unique<amrex::MultiFab>(ba, dm, 1, 0);
             detj_cc->setVal(amrex::Real(1.0));
-            fill_detj_portable(*detj_cc, options);
+            fill_detj_portable(*detj_cc);
         }
 
         model.Define(solver_choice);

@@ -49,6 +49,13 @@ public:
     // cloud physics
     void AdvanceKessler (const SolverChoice &solverChoice);
 
+#ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
+    // Test-only BFB reference. CUDA extended device lambdas require the
+    // enclosing member function to have public access. This method is
+    // compiled only when ERF_ENABLE_KESSLER_BFB_REFERENCE is defined.
+    void AdvanceKesslerLegacyForBFB (const SolverChoice &solverChoice);
+#endif
+
     // Set up for first time
     void
     Define (SolverChoice& sc) override
@@ -139,12 +146,6 @@ private:
 #ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
     friend struct KesslerBFBTestAccessor;
 #endif
-
-#ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
-    void AdvanceKesslerLegacyForBFB (const SolverChoice &solverChoice);
-#endif
-
-    void AdvanceKesslerRefactored (const SolverChoice &solverChoice);
 
     // Number of qmoist variables (rain_accum)
     int m_qmoist_size = 1;

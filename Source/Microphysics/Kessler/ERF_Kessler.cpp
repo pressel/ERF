@@ -10,11 +10,6 @@ using namespace amrex;
 /**
  * Compute Precipitation-related Microphysics quantities.
  */
-void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
-{
-    AdvanceKesslerRefactored(solverChoice);
-}
-
 #ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
 void Kessler::AdvanceKesslerLegacyForBFB (const SolverChoice &solverChoice)
 {
@@ -282,7 +277,7 @@ void Kessler::AdvanceKesslerLegacyForBFB (const SolverChoice &solverChoice)
 }
 #endif
 
-void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
+void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
 {
     bool do_cond = m_do_cond;
     auto tabs    = mic_fab_vars[MicVar_Kess::tabs];
