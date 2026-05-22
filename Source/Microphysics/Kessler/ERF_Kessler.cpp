@@ -448,10 +448,16 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
                 {
                     Real dJinv = (dJ_array) ? Real(1)/dJ_array(i,j,k) : Real(1);
 
-                    fz_array(i,j,k+1) = kessler_zero_small_value(fz_array(i,j,k+1));
-                    fz_array(i,j,k  ) = kessler_zero_small_value(fz_array(i,j,k  ));
+                    if (kessler_is_small_sedimentation_value(fz_array(i,j,k+1))) {
+                        fz_array(i,j,k+1) = Real(0);
+                    }
+                    if (kessler_is_small_sedimentation_value(fz_array(i,j,k  ))) {
+                        fz_array(i,j,k  ) = Real(0);
+                    }
                     Real dq_sed = dJinv * (Real(1)/rho_array(i,j,k)) * (fz_array(i,j,k+1) - fz_array(i,j,k)) * coef;
-                    dq_sed = kessler_zero_small_value(dq_sed);
+                    if (kessler_is_small_sedimentation_value(dq_sed)) {
+                        dq_sed = Real(0);
+                    }
 
                     qp_array(i,j,k) +=  dq_sed;
                     qp_array(i,j,k)  = std::max(Real(0), qp_array(i,j,k));
@@ -461,6 +467,9 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
     }
 
     if (solverChoice.moisture_type == MoistureType::Kessler_NoRain) {
+        // TODO: In a later mechanical cleanup, extract the shared saturation-adjustment
+        // helper used by both Kessler and Kessler_NoRain. This pass leaves NoRain
+        // arithmetic inline to minimize BFB-refactor risk.
         if (!do_cond) { return; }
         for ( MFIter mfi(*tabs,TilingIfNotGPU()); mfi.isValid(); ++mfi) {
             auto qv_array    = mic_fab_vars[MicVar_Kess::qv]->array(mfi);

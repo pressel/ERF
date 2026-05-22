@@ -49,12 +49,6 @@ public:
     // cloud physics
     void AdvanceKessler (const SolverChoice &solverChoice);
 
-#ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
-    void AdvanceKesslerLegacyForBFB (const SolverChoice &solverChoice);
-#endif
-
-    void AdvanceKesslerRefactored (const SolverChoice &solverChoice);
-
     // Set up for first time
     void
     Define (SolverChoice& sc) override
@@ -145,6 +139,12 @@ private:
 #ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
     friend struct KesslerBFBTestAccessor;
 #endif
+
+#ifdef ERF_ENABLE_KESSLER_BFB_REFERENCE
+    void AdvanceKesslerLegacyForBFB (const SolverChoice &solverChoice);
+#endif
+
+    void AdvanceKesslerRefactored (const SolverChoice &solverChoice);
 
     // Number of qmoist variables (rain_accum)
     int m_qmoist_size = 1;

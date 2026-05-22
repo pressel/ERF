@@ -1,9 +1,11 @@
 #ifndef GTEST_KESSLER_COMMON_H_
 #define GTEST_KESSLER_COMMON_H_
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -23,6 +25,7 @@
 #include <ERF_EOS.H>
 #include <ERF_IndexDefines.H>
 #include <ERF_Kessler.H>
+#include <ERF_KesslerUtils.H>
 #include <ERF_MicrophysicsUtils.H>
 
 #ifndef ERF_ENABLE_KESSLER_BFB_REFERENCE
@@ -398,8 +401,17 @@ inline void initialize_micro_state_portable (Kessler& kessler,
 inline BitPattern real_bits (const amrex::Real value) noexcept
 {
     BitPattern bits = 0;
-    amrex::Gpu::memcpy(&bits, &value, sizeof(amrex::Real));
+    static_assert(sizeof(bits) == sizeof(amrex::Real));
+    std::memcpy(&bits, &value, sizeof(amrex::Real));
     return bits;
+}
+
+inline amrex::Real backend_math_abs_tol (const amrex::Real expected) noexcept
+{
+    // Provenance: backend math-library variation for pow/exp-based helper paths,
+    // plus floating-point rounding. This is not a physics tolerance.
+    return amrex::Real(128) * std::numeric_limits<amrex::Real>::epsilon()
+        * std::max(amrex::Real(1), std::abs(expected));
 }
 
 inline std::string format_bits (const BitPattern bits)
@@ -494,36 +506,48 @@ inline bool condensation_qv_cap_is_reachable ()
 inline bool has_cloud_to_rain_qc_cap (const Kessler& model,
                                       const amrex::Real dt)
 {
+    // Branch-reachability instrumentation only. This calls the shared
+    // production helper; it is not an independent correctness oracle.
+    const amrex::MultiFab& tabs_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::tabs);
+    const amrex::MultiFab& pres_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::pres);
     const amrex::MultiFab& qv_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::qv);
     const amrex::MultiFab& qc_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::qcl);
     const amrex::MultiFab& qp_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::qp);
+    const amrex::MultiFab& rho_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::rho);
 
     for (amrex::MFIter mfi(qc_mf); mfi.isValid(); ++mfi) {
+        amrex::FArrayBox tabs_host = copy_fab_to_host(tabs_mf[mfi]);
+        amrex::FArrayBox pres_host = copy_fab_to_host(pres_mf[mfi]);
         amrex::FArrayBox qv_host = copy_fab_to_host(qv_mf[mfi]);
         amrex::FArrayBox qc_host = copy_fab_to_host(qc_mf[mfi]);
         amrex::FArrayBox qp_host = copy_fab_to_host(qp_mf[mfi]);
+        amrex::FArrayBox rho_host = copy_fab_to_host(rho_mf[mfi]);
 
         const amrex::Box& bx = qc_host.box();
+        auto tabs_arr = tabs_host.const_array();
+        auto pres_arr = pres_host.const_array();
+        auto qv_arr = qv_host.const_array();
         auto qc_arr = qc_host.const_array();
         auto qp_arr = qp_host.const_array();
+        auto rho_arr = rho_host.const_array();
 
         for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
             for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
                 for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    const amrex::Real qv = std::max(amrex::Real(0), qv_arr(i,j,k));
                     const amrex::Real qc = std::max(amrex::Real(0), qc_arr(i,j,k));
                     const amrex::Real qp = std::max(amrex::Real(0), qp_arr(i,j,k));
                     if (qc <= amrex::Real(0)) {
                         continue;
                     }
 
-                    amrex::Real auto_r = amrex::Real(0);
-                    if (qc > qcw0) {
-                        auto_r = alphaelq;
-                    }
-
-                    amrex::Real accrr = amrex::Real(2.2) * std::pow(qp, amrex::Real(0.875));
-                    const amrex::Real raw_cloud_to_rain = dt * (accrr * qc + auto_r * (qc - qcw0));
-                    if (raw_cloud_to_rain > qc) {
+                    amrex::Real qsat_local;
+                    amrex::Real dtqsat_local;
+                    erf_qsatw(tabs_arr(i,j,k), pres_arr(i,j,k), qsat_local);
+                    erf_dtqsatw(tabs_arr(i,j,k), pres_arr(i,j,k), dtqsat_local);
+                    const KesslerSourceTerms source_terms = kessler_warm_rain_sources(
+                        qv, qc, qp, rho_arr(i,j,k), pres_arr(i,j,k), qsat_local, dtqsat_local, dt, true);
+                    if (real_bits(source_terms.dq_cloud_to_rain) == real_bits(qc)) {
                         return true;
                     }
                 }
@@ -537,6 +561,8 @@ inline bool has_cloud_to_rain_qc_cap (const Kessler& model,
 inline bool has_rain_to_vapor_qp_cap (const Kessler& model,
                                       const amrex::Real dt)
 {
+    // Branch-reachability instrumentation only. This calls the shared
+    // production helper; it is not an independent correctness oracle.
     const amrex::MultiFab& tabs_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::tabs);
     const amrex::MultiFab& pres_mf = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::pres);
     const amrex::MultiFab& qv_mf   = KesslerBFBTestAccessor::MicroVar(model, MicVar_Kess::qv);
@@ -562,26 +588,18 @@ inline bool has_rain_to_vapor_qp_cap (const Kessler& model,
                 for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
                     const amrex::Real qv = std::max(amrex::Real(0), qv_arr(i,j,k));
                     const amrex::Real qp = std::max(amrex::Real(0), qp_arr(i,j,k));
+                    const amrex::Real rho = rho_arr(i,j,k);
                     if (qp <= amrex::Real(0)) {
                         continue;
                     }
 
                     amrex::Real qsat_local;
+                    amrex::Real dtqsat_local;
                     erf_qsatw(tabs_arr(i,j,k), pres_arr(i,j,k), qsat_local);
-                    if (!(qv < qsat_local)) {
-                        continue;
-                    }
-
-                    const amrex::Real rho = rho_arr(i,j,k);
-                    const amrex::Real coeff = amrex::Real(1.6)
-                        + amrex::Real(124.9) * std::pow(amrex::Real(0.001) * rho * qp, amrex::Real(0.2046));
-                    const amrex::Real raw_rain_to_vapor = amrex::Real(1) / (amrex::Real(0.001) * rho)
-                        * (amrex::Real(1) - qv / qsat_local)
-                        * coeff
-                        * std::pow(amrex::Real(0.001) * rho * qp, amrex::Real(0.525))
-                        / (amrex::Real(5.4e5) + amrex::Real(2.55e6) / (pres_arr(i,j,k) * qsat_local))
-                        * dt;
-                    if (raw_rain_to_vapor > qp) {
+                    erf_dtqsatw(tabs_arr(i,j,k), pres_arr(i,j,k), dtqsat_local);
+                    const KesslerSourceTerms source_terms = kessler_warm_rain_sources(
+                        qv, amrex::Real(0), qp, rho, pres_arr(i,j,k), qsat_local, dtqsat_local, dt, true);
+                    if (real_bits(source_terms.dq_rain_to_vapor) == real_bits(qp)) {
                         return true;
                     }
                 }

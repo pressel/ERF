@@ -77,6 +77,8 @@ void run_legacy_and_refactored_and_compare (const FixtureOptions& options)
 // - Not covered because they are not reachable under the current positive-qsat
 //   warm-rain contract: qsat <= 0, the condensation std::min cap against qv,
 //   and qp_avg negative clipping after qp is pre-clipped nonnegative.
+// - Machine-checked semantic branch coverage is follow-up work; this inventory
+//   is kept honest by the dedicated cap fixtures and their reachability checks.
 
 TEST(KesslerAdvanceBFB, RainDetJCropDoCondLegacyMatchesRefactored)
 {

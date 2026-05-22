@@ -43,7 +43,17 @@ target_sources(${erf_exe_name}
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/SatAdj/ERF_GTestSatAdjMultiFab.cpp
 )
 build_erf_exe(${erf_exe_name})
-target_compile_definitions(${erf_exe_name} PRIVATE ERF_ENABLE_KESSLER_BFB_REFERENCE)
+# ERF_ENABLE_KESSLER_BFB_REFERENCE is a Kessler BFB test-only hook. CMake target
+# ownership makes it awkward to isolate the production Kessler source to a
+# dedicated BFB-only object here, so keep the macro confined to the unit-test
+# source library plus the two Kessler test sources. Do not enable it for normal
+# ERF production builds.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/GTestKesslerAdvanceBFB.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/GTestKesslerAdvanceKernel.cpp
+  PROPERTIES
+    COMPILE_DEFINITIONS ERF_ENABLE_KESSLER_BFB_REFERENCE
+)
 target_compile_definitions(${erf_lib_name} PRIVATE ERF_ENABLE_KESSLER_BFB_REFERENCE)
 target_link_libraries(${erf_exe_name} PRIVATE GTest::gtest)
 

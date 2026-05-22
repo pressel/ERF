@@ -1,3 +1,4 @@
+#include <cmath>
 #include <vector>
 
 #include <AMReX_Gpu.H>
@@ -12,6 +13,24 @@
 using namespace kessler_bfb_test;
 
 namespace {
+
+void expect_helper_real_match (const amrex::Real device_value,
+                               const amrex::Real host_value,
+                               const char* label,
+                               const int idx)
+{
+#ifdef AMREX_USE_GPU
+    const amrex::Real abs_tol = backend_math_abs_tol(host_value);
+    EXPECT_LE(std::abs(device_value - host_value), abs_tol)
+        << label << " idx=" << idx
+        << " expected=" << host_value
+        << " actual=" << device_value
+        << " abs_tol=" << abs_tol;
+#else
+    EXPECT_EQ(real_bits(device_value), real_bits(host_value))
+        << label << " idx=" << idx;
+#endif
+}
 
 template <typename HostVectorT>
 void copy_host_to_device (const HostVectorT& host,
@@ -162,12 +181,12 @@ TEST(KesslerKernel, HelperHostDeviceEquivalence)
         const amrex::Real host_flux = kessler_precip_flux(rho[idx], host_terminal_velocity, qp[idx]);
         const int host_nsub = kessler_num_sedimentation_substeps(reduced[idx], dt[idx], dzmin[idx]);
 
-        EXPECT_EQ(real_bits(terminal_velocity[idx]), real_bits(host_terminal_velocity)) << idx;
-        EXPECT_EQ(real_bits(flux[idx]), real_bits(host_flux)) << idx;
+        expect_helper_real_match(terminal_velocity[idx], host_terminal_velocity, "terminal_velocity", idx);
+        expect_helper_real_match(flux[idx], host_flux, "precip_flux", idx);
         EXPECT_EQ(nsub[idx], host_nsub) << idx;
-        EXPECT_EQ(real_bits(dq_vapor_to_cloud[idx]), real_bits(host_terms.dq_vapor_to_cloud)) << idx;
-        EXPECT_EQ(real_bits(dq_cloud_to_vapor[idx]), real_bits(host_terms.dq_cloud_to_vapor)) << idx;
-        EXPECT_EQ(real_bits(dq_cloud_to_rain[idx]), real_bits(host_terms.dq_cloud_to_rain)) << idx;
-        EXPECT_EQ(real_bits(dq_rain_to_vapor[idx]), real_bits(host_terms.dq_rain_to_vapor)) << idx;
+        expect_helper_real_match(dq_vapor_to_cloud[idx], host_terms.dq_vapor_to_cloud, "dq_vapor_to_cloud", idx);
+        expect_helper_real_match(dq_cloud_to_vapor[idx], host_terms.dq_cloud_to_vapor, "dq_cloud_to_vapor", idx);
+        expect_helper_real_match(dq_cloud_to_rain[idx], host_terms.dq_cloud_to_rain, "dq_cloud_to_rain", idx);
+        expect_helper_real_match(dq_rain_to_vapor[idx], host_terms.dq_rain_to_vapor, "dq_rain_to_vapor", idx);
     }
 }

@@ -47,10 +47,16 @@ int kessler_num_sedimentation_substeps (const amrex::Real current_reduced_value,
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-amrex::Real kessler_zero_small_value (amrex::Real value) noexcept
+bool kessler_is_small_sedimentation_value (const amrex::Real value) noexcept
 {
     // MUST MATCH: current AdvanceKessler sedimentation zero threshold.
-    if (std::fabs(value) < amrex::Real(1.0e-14)) {
+    return std::fabs(value) < amrex::Real(1.0e-14);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real kessler_zero_small_value (amrex::Real value) noexcept
+{
+    if (kessler_is_small_sedimentation_value(value)) {
         value = amrex::Real(0);
     }
     return value;
