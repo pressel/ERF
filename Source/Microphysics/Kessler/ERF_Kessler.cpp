@@ -373,23 +373,15 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
 
             ParallelFor(tbz, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
             {
-                Real rho_avg, qp_avg;
+                const Real rho_km1 = (k == k_lo) ? rho_array(i,j,k) : rho_array(i,j,k-1);
+                const Real rho_k = (k == k_hi+1) ? rho_array(i,j,k-1) : rho_array(i,j,k);
+                const Real qp_km1 = (k == k_lo) ? qp_array(i,j,k) : qp_array(i,j,k-1);
+                const Real qp_k = (k == k_hi+1) ? qp_array(i,j,k-1) : qp_array(i,j,k);
+                const KesslerFaceState face_state =
+                    kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
 
-                if (k==k_lo) {
-                    rho_avg = rho_array(i,j,k);
-                    qp_avg  = qp_array(i,j,k);
-                } else if (k==k_hi+1) {
-                    rho_avg = rho_array(i,j,k-1);
-                    qp_avg  = qp_array(i,j,k-1);
-                } else {
-                    rho_avg = myhalf*(rho_array(i,j,k-1) + rho_array(i,j,k));
-                    qp_avg = myhalf*(qp_array(i,j,k-1)  + qp_array(i,j,k));
-                }
-
-                qp_avg = std::max(Real(0), qp_avg);
-
-                const Real terminal_velocity = kessler_terminal_velocity(rho_avg, qp_avg);
-                fz_array(i,j,k) = kessler_precip_flux(rho_avg, terminal_velocity, qp_avg);
+                const Real terminal_velocity = kessler_terminal_velocity(face_state.rho, face_state.qp);
+                fz_array(i,j,k) = kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
             });
         }
 
@@ -422,25 +414,19 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
 
                 ParallelFor(tbz, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
                 {
-                    Real rho_avg, qp_avg;
-                    if (k==k_lo) {
-                        rho_avg = rho_array(i,j,k);
-                        qp_avg  = qp_array(i,j,k);
-                    } else if (k==k_hi+1) {
-                        rho_avg = rho_array(i,j,k-1);
-                        qp_avg  = qp_array(i,j,k-1);
-                    } else {
-                        rho_avg = myhalf*(rho_array(i,j,k-1) + rho_array(i,j,k));
-                        qp_avg = myhalf*(qp_array(i,j,k-1)  + qp_array(i,j,k));
-                    }
+                    const Real rho_km1 = (k == k_lo) ? rho_array(i,j,k) : rho_array(i,j,k-1);
+                    const Real rho_k = (k == k_hi+1) ? rho_array(i,j,k-1) : rho_array(i,j,k);
+                    const Real qp_km1 = (k == k_lo) ? qp_array(i,j,k) : qp_array(i,j,k-1);
+                    const Real qp_k = (k == k_hi+1) ? qp_array(i,j,k-1) : qp_array(i,j,k);
+                    const KesslerFaceState face_state =
+                        kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
 
-                    qp_avg = std::max(Real(0), qp_avg);
-
-                    const Real terminal_velocity = kessler_terminal_velocity(rho_avg, qp_avg);
-                    fz_array(i,j,k) = kessler_precip_flux(rho_avg, terminal_velocity, qp_avg);
+                    const Real terminal_velocity = kessler_terminal_velocity(face_state.rho, face_state.qp);
+                    fz_array(i,j,k) = kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
 
                     if(k==k_lo){
-                        rain_accum_array(i,j,k) = rain_accum_array(i,j,k) + rho_avg*qp_avg*terminal_velocity*dtn/Real(1000.0)*Real(1000.0);
+                        rain_accum_array(i,j,k) = rain_accum_array(i,j,k)
+                                                + face_state.rho * face_state.qp * terminal_velocity * dtn / Real(1000.0) * Real(1000.0);
                     }
                 });
 
@@ -454,7 +440,8 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
                     if (kessler_is_small_sedimentation_value(fz_array(i,j,k  ))) {
                         fz_array(i,j,k  ) = Real(0);
                     }
-                    Real dq_sed = dJinv * (Real(1)/rho_array(i,j,k)) * (fz_array(i,j,k+1) - fz_array(i,j,k)) * coef;
+                    Real dq_sed = kessler_sedimentation_tendency(
+                        fz_array(i,j,k+1), fz_array(i,j,k), rho_array(i,j,k), dJinv, coef);
                     if (kessler_is_small_sedimentation_value(dq_sed)) {
                         dq_sed = Real(0);
                     }
@@ -467,9 +454,6 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
     }
 
     if (solverChoice.moisture_type == MoistureType::Kessler_NoRain) {
-        // TODO: In a later mechanical cleanup, extract the shared saturation-adjustment
-        // helper used by both Kessler and Kessler_NoRain. This pass leaves NoRain
-        // arithmetic inline to minimize BFB-refactor risk.
         if (!do_cond) { return; }
         for ( MFIter mfi(*tabs,TilingIfNotGPU()); mfi.isValid(); ++mfi) {
             auto qv_array    = mic_fab_vars[MicVar_Kess::qv]->array(mfi);
@@ -492,29 +476,22 @@ void Kessler::AdvanceKesslerRefactored (const SolverChoice &solverChoice)
                 qc_array(i,j,k) = std::max(Real(0), qc_array(i,j,k));
 
                 Real qsat, dtqsat;
-                Real dq_clwater_to_vapor, dq_vapor_to_clwater;
 
                 Real pressure = pres_array(i,j,k);
                 erf_qsatw(tabs_array(i,j,k), pressure, qsat);
                 erf_dtqsatw(tabs_array(i,j,k), pressure, dtqsat);
 
-                dq_vapor_to_clwater = Real(0);
-                dq_clwater_to_vapor = Real(0);
+                const KesslerSaturationAdjustment saturation_adjustment =
+                    kessler_saturation_adjustment(qv_array(i,j,k), qc_array(i,j,k), qsat, dtqsat, do_cond);
 
-                Real fac = (L_v/Cp_d)*dtqsat;
-
-                if (qv_array(i,j,k) > qsat){
-                    dq_vapor_to_clwater = std::min(qv_array(i,j,k), (qv_array(i,j,k)-qsat)/(Real(1) + fac));
-                }
-                if (qv_array(i,j,k) < qsat && qc_array(i,j,k) > Real(0)){
-                    dq_clwater_to_vapor = std::min(qc_array(i,j,k), (qsat - qv_array(i,j,k))/(Real(1) + fac));
-                }
-
-                qv_array(i,j,k) += -dq_vapor_to_clwater + dq_clwater_to_vapor;
-                qc_array(i,j,k) +=  dq_vapor_to_clwater - dq_clwater_to_vapor;
+                qv_array(i,j,k) += -saturation_adjustment.dq_vapor_to_cloud
+                                 +  saturation_adjustment.dq_cloud_to_vapor;
+                qc_array(i,j,k) +=  saturation_adjustment.dq_vapor_to_cloud
+                                 -  saturation_adjustment.dq_cloud_to_vapor;
 
                 Real theta_over_T = theta_array(i,j,k)/tabs_array(i,j,k);
-                theta_array(i,j,k) += theta_over_T * d_fac_cond * (dq_vapor_to_clwater - dq_clwater_to_vapor);
+                theta_array(i,j,k) += theta_over_T * d_fac_cond
+                    * (saturation_adjustment.dq_vapor_to_cloud - saturation_adjustment.dq_cloud_to_vapor);
 
                 qv_array(i,j,k) = std::max(Real(0), qv_array(i,j,k));
                 qc_array(i,j,k) = std::max(Real(0), qc_array(i,j,k));
