@@ -25,14 +25,9 @@
 #include <ERF_DataStruct.H>
 #include <ERF_EOS.H>
 #include <ERF_IndexDefines.H>
+#include <ERF_Kessler.H>
 #include <ERF_KesslerUtils.H>
 #include <ERF_MicrophysicsUtils.H>
-
-// Test-only visibility for Kessler internal MultiFab state. This avoids
-// production accessors while keeping the task tests-only.
-#define private public
-#include <ERF_Kessler.H>
-#undef private
 
 namespace kessler_test {
 

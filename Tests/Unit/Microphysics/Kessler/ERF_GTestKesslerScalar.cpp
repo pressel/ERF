@@ -538,7 +538,25 @@ TEST(KesslerScalar, CopyStateToMicro_PressureStoredInMbar)
     amrex::DistributionMapping dm(ba);
     amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
     cons.setVal(amrex::Real(0.0));
-    fill_local_source_only_state_portable(cons);
+
+    const amrex::Real tabs = amrex::Real(290.0);
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    amrex::Real qsat;
+    amrex::Real dtqsat;
+    erf_qsatw(tabs, pres_mbar, qsat);
+    erf_dtqsatw(tabs, pres_mbar, dtqsat);
+    const PrimitiveState state = make_primitive_state(
+        tabs, pres_mbar, qsat + amrex::Real(2.0e-4), amrex::Real(5.0e-5), amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                set_conserved_cell(arr, i, j, k, state);
+            });
+        });
+    }
 
     std::unique_ptr<amrex::MultiFab> z_phys_nd;
     std::unique_ptr<amrex::MultiFab> detJ_cc;
@@ -548,15 +566,30 @@ TEST(KesslerScalar, CopyStateToMicro_PressureStoredInMbar)
     kessler.Define(sc);
     kessler.Set_dzmin(geom.CellSize(2));
     kessler.Init(cons, ba, geom, kDefaultDt, z_phys_nd, detJ_cc);
-    run_and_sync([&] { kessler.Copy_State_to_Micro(cons); });
+    run_and_sync([&] {
+        kessler.Copy_State_to_Micro(cons);
+        kessler.Advance(kDefaultDt, sc);
+        kessler.Copy_Micro_to_State(cons);
+    });
 
-    const amrex::Real rho = cons.max(Rho_comp);
-    const amrex::Real rhotheta = cons.max(RhoTheta_comp);
-    const amrex::Real qv = cons.max(RhoQ1_comp) / rho;
-    const amrex::Real expected_pres_mbar = getPgivenRTh(rhotheta, qv) * amrex::Real(0.01);
-    const amrex::Real actual_pres_mbar = kessler.mic_fab_vars[MicVar_Kess::pres]->max(0);
+    const KesslerSourceTerms expected_sources = reference_warm_rain_sources(
+        state.qv, state.qc, state.qp, state.rho, state.pres_mbar, qsat, dtqsat, kDefaultDt, true);
+    amrex::Real qv_expected = state.qv;
+    amrex::Real qc_expected = state.qc;
+    amrex::Real qp_expected = state.qp;
+    apply_local_sources(qv_expected, qc_expected, qp_expected, expected_sources);
 
-    EXPECT_NEAR(actual_pres_mbar, expected_pres_mbar, formula_abs_tol(expected_pres_mbar));
+    amrex::Real theta_expected = state.theta;
+    theta_expected += (state.theta / state.tabs) * (lcond / sc.c_p)
+        * (expected_sources.dq_vapor_to_cloud
+           - expected_sources.dq_cloud_to_vapor
+           - expected_sources.dq_rain_to_vapor);
+
+    EXPECT_NEAR(cons.max(RhoQ1_comp), state.rho * qv_expected, formula_abs_tol(state.rho * qv_expected));
+    EXPECT_NEAR(cons.max(RhoQ2_comp), state.rho * qc_expected, formula_abs_tol(state.rho * qc_expected));
+    EXPECT_NEAR(cons.max(RhoQ3_comp), state.rho * qp_expected, exact_zero_or_near_zero_tol());
+    EXPECT_NEAR(cons.max(RhoTheta_comp), state.rho * theta_expected,
+                formula_abs_tol(state.rho * theta_expected));
 }
 
 // Motivation: Copy_Micro_to_State must write qv, qc, and qp back as rho-
@@ -569,6 +602,18 @@ TEST(KesslerScalar, CopyMicroToState_WritesQvQcQpAsRhoWeightedConservedScalars)
     amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
     cons.setVal(amrex::Real(0.0));
 
+    const PrimitiveState state = make_primitive_state(
+        amrex::Real(289.0), amrex::Real(910.0), amrex::Real(8.0e-3), amrex::Real(4.0e-4), amrex::Real(7.0e-4));
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                set_conserved_cell(arr, i, j, k, state);
+            });
+        });
+    }
+
     std::unique_ptr<amrex::MultiFab> z_phys_nd;
     std::unique_ptr<amrex::MultiFab> detJ_cc;
     Kessler kessler;
@@ -578,21 +623,14 @@ TEST(KesslerScalar, CopyMicroToState_WritesQvQcQpAsRhoWeightedConservedScalars)
     kessler.Set_dzmin(geom.CellSize(2));
     kessler.Init(cons, ba, geom, kDefaultDt, z_phys_nd, detJ_cc);
 
-    const amrex::Real rho = amrex::Real(1.15);
-    const amrex::Real qv = amrex::Real(8.0e-3);
-    const amrex::Real qc = amrex::Real(4.0e-4);
-    const amrex::Real qp = amrex::Real(7.0e-4);
+    run_and_sync([&] {
+        kessler.Copy_State_to_Micro(cons);
+        kessler.Copy_Micro_to_State(cons);
+    });
 
-    kessler.mic_fab_vars[MicVar_Kess::rho]->setVal(rho);
-    kessler.mic_fab_vars[MicVar_Kess::qv]->setVal(qv);
-    kessler.mic_fab_vars[MicVar_Kess::qcl]->setVal(qc);
-    kessler.mic_fab_vars[MicVar_Kess::qp]->setVal(qp);
-
-    run_and_sync([&] { kessler.Copy_Micro_to_State(cons); });
-
-    EXPECT_NEAR(cons.max(RhoQ1_comp), rho * qv, formula_abs_tol(rho * qv));
-    EXPECT_NEAR(cons.max(RhoQ2_comp), rho * qc, formula_abs_tol(rho * qc));
-    EXPECT_NEAR(cons.max(RhoQ3_comp), rho * qp, formula_abs_tol(rho * qp));
+    EXPECT_NEAR(cons.max(RhoQ1_comp), state.rho * state.qv, formula_abs_tol(state.rho * state.qv));
+    EXPECT_NEAR(cons.max(RhoQ2_comp), state.rho * state.qc, formula_abs_tol(state.rho * state.qc));
+    EXPECT_NEAR(cons.max(RhoQ3_comp), state.rho * state.qp, formula_abs_tol(state.rho * state.qp));
 }
 
 // Motivation: Copy_Micro_to_State writes the current microphysics theta back to
@@ -606,6 +644,18 @@ TEST(KesslerScalar, CopyMicroToState_WritesCurrentMicroThetaToRhoTheta)
     amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
     cons.setVal(amrex::Real(0.0));
 
+    const PrimitiveState state = make_primitive_state(
+        amrex::Real(292.0), amrex::Real(940.0), amrex::Real(6.0e-3), amrex::Real(1.0e-4), amrex::Real(0.0));
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                set_conserved_cell(arr, i, j, k, state);
+            });
+        });
+    }
+
     std::unique_ptr<amrex::MultiFab> z_phys_nd;
     std::unique_ptr<amrex::MultiFab> detJ_cc;
     Kessler kessler;
@@ -615,14 +665,13 @@ TEST(KesslerScalar, CopyMicroToState_WritesCurrentMicroThetaToRhoTheta)
     kessler.Set_dzmin(geom.CellSize(2));
     kessler.Init(cons, ba, geom, kDefaultDt, z_phys_nd, detJ_cc);
 
-    const amrex::Real rho = amrex::Real(1.08);
-    const amrex::Real theta = amrex::Real(302.5);
-    kessler.mic_fab_vars[MicVar_Kess::rho]->setVal(rho);
-    kessler.mic_fab_vars[MicVar_Kess::theta]->setVal(theta);
+    run_and_sync([&] {
+        kessler.Copy_State_to_Micro(cons);
+        kessler.Copy_Micro_to_State(cons);
+    });
 
-    run_and_sync([&] { kessler.Copy_Micro_to_State(cons); });
-
-    EXPECT_NEAR(cons.max(RhoTheta_comp), rho * theta, formula_abs_tol(rho * theta));
+    EXPECT_NEAR(cons.max(RhoTheta_comp), state.rho * state.theta,
+                formula_abs_tol(state.rho * state.theta));
 }
 
 // Motivation: This is a characterization test, not a correctness test. It
