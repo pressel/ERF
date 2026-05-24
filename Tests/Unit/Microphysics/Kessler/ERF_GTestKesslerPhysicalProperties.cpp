@@ -92,8 +92,8 @@ inline KesslerFaceState reference_column_face_state (const std::array<PrimitiveS
         face_state.rho = states[1].rho;
         face_state.qp = states[1].qp;
     } else {
-        face_state.rho = myhalf * (states[0].rho + states[1].rho);
-        face_state.qp = myhalf * (states[0].qp + states[1].qp);
+        face_state.rho = states[1].rho;
+        face_state.qp = states[1].qp;
     }
 
     face_state.qp = std::max(amrex::Real(0.0), face_state.qp);
@@ -124,7 +124,9 @@ inline SedimentationColumnState advance_reference_sedimentation_column (
         for (int face_k = 0; face_k < 3; ++face_k) {
             const KesslerFaceState face_state = reference_column_face_state(result.states, face_k);
             const amrex::Real terminal_velocity = reference_terminal_velocity(face_state.rho, face_state.qp);
-            face_fluxes[face_k] = reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
+            const amrex::Real max_flux = face_state.rho * face_state.qp / coef;
+            face_fluxes[face_k] = amrex::min(
+                reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
         }
 
         result.rain_accum += face_fluxes[0] * substep_dt / amrex::Real(1000.0) * amrex::Real(1000.0);
@@ -203,7 +205,8 @@ TEST(KesslerPhysicalProperties, PhysicalProperties_LocalSourcesConserveTotalWate
                      " qp=" + std::to_string(static_cast<double>(test_case.qp)));
         const KesslerSourceTerms source_terms = kessler_warm_rain_sources(
             test_case.qv, test_case.qc, test_case.qp, test_case.rho, test_case.pressure_mbar,
-            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond);
+            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond,
+            kSatAdjLatentOverCp);
         amrex::Real qv = test_case.qv;
         amrex::Real qc = test_case.qc;
         amrex::Real qp = test_case.qp;
@@ -225,7 +228,8 @@ TEST(KesslerPhysicalProperties, PhysicalProperties_LocalSourcesDoNotCreateNegati
         SCOPED_TRACE(case_label(test_case));
         const KesslerSourceTerms source_terms = kessler_warm_rain_sources(
             test_case.qv, test_case.qc, test_case.qp, test_case.rho, test_case.pressure_mbar,
-            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond);
+            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond,
+            kSatAdjLatentOverCp);
         amrex::Real qv = test_case.qv;
         amrex::Real qc = test_case.qc;
         amrex::Real qp = test_case.qp;
@@ -243,13 +247,16 @@ TEST(KesslerPhysicalProperties, PhysicalProperties_WarmRainSourcesRespectAvailab
 {
     const KesslerSourceTerms cloud_evap = kessler_warm_rain_sources(
         amrex::Real(8.0e-3), amrex::Real(1.0e-4), amrex::Real(0.0), amrex::Real(1.0),
-        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(1.0), true);
+        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(1.0), true,
+        kSatAdjLatentOverCp);
     const KesslerSourceTerms cloud_to_rain = kessler_warm_rain_sources(
         amrex::Real(1.0e-2), amrex::Real(2.0e-4), amrex::Real(1.0), amrex::Real(1.0),
-        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(10.0), true);
+        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(10.0), true,
+        kSatAdjLatentOverCp);
     const KesslerSourceTerms rain_evap = kessler_warm_rain_sources(
         amrex::Real(1.0e-3), amrex::Real(2.0e-4), amrex::Real(1.0e-4), amrex::Real(1.2),
-        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.02), amrex::Real(200.0), true);
+        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.02), amrex::Real(200.0), true,
+        kSatAdjLatentOverCp);
 
     EXPECT_LE(cloud_evap.dq_cloud_to_vapor, amrex::Real(1.0e-4) + formula_abs_tol(amrex::Real(1.0e-4)));
     EXPECT_LE(cloud_to_rain.dq_cloud_to_rain, amrex::Real(2.0e-4) + formula_abs_tol(amrex::Real(2.0e-4)));
@@ -389,58 +396,22 @@ TEST(KesslerPhysicalProperties, KesslerPublicFlow_SedimentationSubstepsUseVeloci
               std::max(qp_tol, rain_tol));
 }
 
-// Motivation: This is a characterization test, not a correctness test. It
-// pins current behavior so that any future change must also address
-// `DISABLED_KesslerPublicFlow_LocalSourcesConserveTotalWaterAndLatentEnergyProxy`.
-TEST(KesslerPhysicalProperties, Characterization_KesslerPublicFlow_LocalSourcesLatentEnergyProxyCurrentBehavior)
-{
-    const amrex::Geometry geom = make_geometry(4, 3, 2);
-    amrex::BoxArray ba(geom.Domain());
-    amrex::DistributionMapping dm(ba);
-    amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
-    cons.setVal(amrex::Real(0.0));
-    fill_local_source_only_state_portable(cons);
-    amrex::MultiFab cons_before(ba, dm, RhoQ3_comp + 1, 1);
-    copy_multifab(cons, cons_before);
-
-    std::unique_ptr<amrex::MultiFab> z_phys_nd;
-    std::unique_ptr<amrex::MultiFab> detJ_cc;
-    Kessler kessler;
-    SolverChoice sc = make_solver_choice(MoistureType::Kessler, false);
-    run_kessler_public_flow(kessler, sc, geom, cons, z_phys_nd, detJ_cc);
-
-    const ColumnBudget before = compute_column_budget(geom, cons_before, *kessler.Qmoist_Ptr(0));
-    const ColumnBudget after = compute_column_budget(geom, cons, *kessler.Qmoist_Ptr(0));
-    const int num_terms = geom.Domain().numPts();
-
-    EXPECT_NEAR(after.rho_sum, before.rho_sum, property_accumulation_tol(num_terms, before.rho_sum));
-    EXPECT_NEAR(after.total_water_sum + after.rain_accum_sum,
-                before.total_water_sum,
-                property_accumulation_tol(num_terms, before.total_water_sum));
-    EXPECT_GT(std::abs(after.latent_proxy_sum - before.latent_proxy_sum),
-              property_accumulation_tol(num_terms, before.latent_proxy_sum));
-}
-
 // Motivation: Expected behavior:
 //   In the no-sedimentation public-flow case, rho, rho*(qv+qc+qp), and the
-//   latent-energy proxy rho*[T + (lcond/cp) qv] should be conserved.
+//   latent-energy proxy rho*[T + (L_v/cp) qv] should be conserved.
 // Observed current behavior:
-//   Current development conserves rho and total water here, but the latent-
-//   energy proxy exposes the saturation/theta latent-factor inconsistency.
+//   The saturation solve and theta update should use the same latent factor.
 // Minimal reproducer:
 //   A 4x3x2 deterministic fixture with qp == 0 in every cell.
-// Why disabled:
-//   The current production latent factors are intentionally preserved.
-// Enable trigger:
-//   Production should adopt a consistent latent factor across saturation and
-//   theta updates.
-TEST(KesslerPhysicalProperties, DISABLED_KesslerPublicFlow_LocalSourcesConserveTotalWaterAndLatentEnergyProxy)
+TEST(KesslerPhysicalProperties, KesslerPublicFlow_LocalSourcesConserveTotalWaterAndLatentEnergyProxy)
 {
     const amrex::Geometry geom = make_geometry(4, 3, 2);
     amrex::BoxArray ba(geom.Domain());
     amrex::DistributionMapping dm(ba);
     amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
+    amrex::MultiFab err(ba, dm, NumConservationErrComps, 0);
     cons.setVal(amrex::Real(0.0));
+    err.setVal(amrex::Real(0.0));
     fill_local_source_only_state_portable(cons);
     amrex::MultiFab cons_before(ba, dm, RhoQ3_comp + 1, 1);
     copy_multifab(cons, cons_before);
@@ -450,64 +421,18 @@ TEST(KesslerPhysicalProperties, DISABLED_KesslerPublicFlow_LocalSourcesConserveT
     Kessler kessler;
     SolverChoice sc = make_solver_choice(MoistureType::Kessler, false);
     run_kessler_public_flow(kessler, sc, geom, cons, z_phys_nd, detJ_cc);
+    compute_kessler_conservation_errors(cons_before, cons, err);
 
-    const ColumnBudget before = compute_column_budget(geom, cons_before, *kessler.Qmoist_Ptr(0));
-    const ColumnBudget after = compute_column_budget(geom, cons, *kessler.Qmoist_Ptr(0));
-    const int num_terms = geom.Domain().numPts();
-
-    EXPECT_NEAR(after.rho_sum, before.rho_sum, property_accumulation_tol(num_terms, before.rho_sum));
-    EXPECT_NEAR(after.total_water_sum + after.rain_accum_sum,
-                before.total_water_sum,
-                property_accumulation_tol(num_terms, before.total_water_sum));
-    EXPECT_NEAR(after.latent_proxy_sum,
-                before.latent_proxy_sum,
-                property_accumulation_tol(num_terms, before.latent_proxy_sum));
-}
-
-// Motivation: This is a characterization test, not a correctness test. It
-// pins current behavior so that any future change must also address
-// `DISABLED_KesslerPublicFlow_ColumnWaterBudgetIncludesSurfaceRain`.
-TEST(KesslerPhysicalProperties, Characterization_ColumnWaterBudgetCurrentBehavior)
-{
-    const amrex::Geometry geom = make_geometry(1, 1, 4);
-    amrex::BoxArray ba(geom.Domain());
-    amrex::DistributionMapping dm(ba);
-    amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
-    cons.setVal(amrex::Real(0.0));
-    fill_conserved_column_state_portable(cons);
-    amrex::MultiFab cons_before(ba, dm, RhoQ3_comp + 1, 1);
-    copy_multifab(cons, cons_before);
-
-    std::unique_ptr<amrex::MultiFab> z_phys_nd;
-    std::unique_ptr<amrex::MultiFab> detJ_cc;
-    Kessler kessler;
-    SolverChoice sc = make_solver_choice(MoistureType::Kessler, false);
-    run_kessler_public_flow(kessler, sc, geom, cons, z_phys_nd, detJ_cc);
-
-    const ColumnBudget before = compute_column_budget(geom, cons_before, *kessler.Qmoist_Ptr(0));
-    const ColumnBudget after = compute_column_budget(geom, cons, *kessler.Qmoist_Ptr(0));
-    const amrex::Real lhs = before.total_water_sum;
-    const amrex::Real rhs = after.total_water_sum + after.rain_accum_sum;
-
-    EXPECT_GT(rhs, lhs);
-    EXPECT_GT(std::abs(lhs - rhs), property_accumulation_tol(4, lhs));
+    EXPECT_LE(err.max(ConservationErrRho), amrex::Real(1.0));
+    EXPECT_LE(err.max(ConservationErrTotalWater), amrex::Real(1.0));
+    EXPECT_LE(err.max(ConservationErrLatentProxy), amrex::Real(1.0));
+    EXPECT_NEAR(sum_multifab_scalar(*kessler.Qmoist_Ptr(0)), amrex::Real(0.0), exact_zero_or_near_zero_tol());
 }
 
 // Motivation: Expected behavior:
 //   In a flat column with zero top precipitation flux, total column water plus
 //   surface rain accumulation should be conserved.
-// Observed current behavior:
-//   Current development produces more final column water plus rain accumulation
-//   than the initial column water for this deterministic column fixture.
-// Minimal reproducer:
-//   A 1x1x4 flat column with top-cell qp == 0 and nonzero interior/bottom qp.
-// Why disabled:
-//   This is a suspected production bug and must not be weakened in a tests-only
-//   prompt.
-// Enable trigger:
-//   Production should satisfy the public-flow rain-budget contract for the
-//   deterministic column fixture.
-TEST(KesslerPhysicalProperties, DISABLED_KesslerPublicFlow_ColumnWaterBudgetIncludesSurfaceRain)
+TEST(KesslerPhysicalProperties, KesslerPublicFlow_ColumnWaterBudgetIncludesSurfaceRain)
 {
     const amrex::Geometry geom = make_geometry(1, 1, 4);
     amrex::BoxArray ba(geom.Domain());
@@ -532,19 +457,9 @@ TEST(KesslerPhysicalProperties, DISABLED_KesslerPublicFlow_ColumnWaterBudgetIncl
     EXPECT_NEAR(lhs, rhs, property_accumulation_tol(4, lhs));
 }
 
-// Motivation: Expected behavior:
-//   With detJ weighting present, initial sum detJ*rho*(qv+qc+qp)*dz should
-//   equal final detJ-weighted column water plus surface rain.
-// Observed current behavior:
-//   detJ-weighted rain-budget semantics are not yet documented by production.
-// Minimal reproducer:
-//   A 1x1x4 column with deterministic detJ values and zero top qp.
-// Why disabled:
-//   This remains a documentation-contract question pending physics-owner
-//   confirmation.
-// Enable trigger:
-//   Document and confirm the detJ-weighted rain-budget convention.
-TEST(KesslerPhysicalProperties, DISABLED_KesslerPublicFlow_DetJWeightedColumnWaterBudgetIncludesSurfaceRain)
+// Motivation: With detJ weighting present, initial sum detJ*rho*(qv+qc+qp)*dz
+// should equal final detJ-weighted column water plus surface rain.
+TEST(KesslerPhysicalProperties, KesslerPublicFlow_DetJWeightedColumnWaterBudgetIncludesSurfaceRain)
 {
     const amrex::Geometry geom = make_geometry(1, 1, 4);
     amrex::BoxArray ba(geom.Domain());

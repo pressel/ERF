@@ -68,7 +68,7 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
 
                 const KesslerSourceTerms source_terms = kessler_warm_rain_sources(
                     qv_array(i,j,k), qc_array(i,j,k), qp_array(i,j,k), rho_array(i,j,k),
-                    pressure, qsat_local, dtqsat_local, dtn, do_cond);
+                    pressure, qsat_local, dtqsat_local, dtn, do_cond, d_fac_cond);
 
                 qv_array(i,j,k) += -source_terms.dq_vapor_to_cloud
                                  +  source_terms.dq_cloud_to_vapor
@@ -163,11 +163,13 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                         kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
 
                     const Real terminal_velocity = kessler_terminal_velocity(face_state.rho, face_state.qp);
-                    fz_array(i,j,k) = kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
+                    const Real max_flux = face_state.rho * face_state.qp / coef;
+                    fz_array(i,j,k) = amrex::min(
+                        kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
 
                     if(k==k_lo){
                         rain_accum_array(i,j,k) = rain_accum_array(i,j,k)
-                                                + face_state.rho * face_state.qp * terminal_velocity * dtn / Real(1000.0) * Real(1000.0);
+                                                + fz_array(i,j,k) * dtn / Real(1000.0) * Real(1000.0);
                     }
                 });
 
@@ -175,14 +177,20 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                 {
                     Real dJinv = (dJ_array) ? Real(1)/dJ_array(i,j,k) : Real(1);
 
-                    if (kessler_is_small_sedimentation_value(fz_array(i,j,k+1))) {
-                        fz_array(i,j,k+1) = Real(0);
+                    // Threshold local face-flux copies only. Neighboring cells share fz
+                    // faces, so the cell update must not mutate fz while applying the
+                    // small-value cutoff.
+                    Real f_hi = fz_array(i,j,k+1);
+                    Real f_lo = fz_array(i,j,k  );
+
+                    if (kessler_is_small_sedimentation_value(f_hi)) {
+                        f_hi = Real(0);
                     }
-                    if (kessler_is_small_sedimentation_value(fz_array(i,j,k  ))) {
-                        fz_array(i,j,k  ) = Real(0);
+                    if (kessler_is_small_sedimentation_value(f_lo)) {
+                        f_lo = Real(0);
                     }
                     Real dq_sed = kessler_sedimentation_tendency(
-                        fz_array(i,j,k+1), fz_array(i,j,k), rho_array(i,j,k), dJinv, coef);
+                        f_hi, f_lo, rho_array(i,j,k), dJinv, coef);
                     if (kessler_is_small_sedimentation_value(dq_sed)) {
                         dq_sed = Real(0);
                     }
@@ -223,7 +231,8 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                 erf_dtqsatw(tabs_array(i,j,k), pressure, dtqsat);
 
                 const KesslerSaturationAdjustment saturation_adjustment =
-                    kessler_saturation_adjustment(qv_array(i,j,k), qc_array(i,j,k), qsat, dtqsat, do_cond);
+                    kessler_saturation_adjustment(qv_array(i,j,k), qc_array(i,j,k), qsat, dtqsat,
+                                                  do_cond, d_fac_cond);
 
                 qv_array(i,j,k) += -saturation_adjustment.dq_vapor_to_cloud
                                  +  saturation_adjustment.dq_cloud_to_vapor;

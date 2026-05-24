@@ -55,7 +55,7 @@ TEST(KesslerScalar, SaturationAdjustment_NoOpAtSaturation)
     const amrex::Real dtqsat = amrex::Real(0.02);
 
     const KesslerSaturationAdjustment actual =
-        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true);
+        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
 
     EXPECT_NEAR(actual.dq_vapor_to_cloud, amrex::Real(0.0), exact_zero_or_near_zero_tol());
     EXPECT_NEAR(actual.dq_cloud_to_vapor, amrex::Real(0.0), exact_zero_or_near_zero_tol());
@@ -72,9 +72,9 @@ TEST(KesslerScalar, SaturationAdjustment_CondensationMatchesIndependentReference
     const amrex::Real dtqsat = amrex::Real(0.03);
 
     const KesslerSaturationAdjustment actual =
-        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true);
+        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
     const KesslerSaturationAdjustment expected =
-        reference_saturation_adjustment(qv, qc, qsat, dtqsat, true);
+        reference_saturation_adjustment(qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
 
     expect_sat_adjustment_match(actual, expected);
 }
@@ -89,9 +89,9 @@ TEST(KesslerScalar, SaturationAdjustment_CloudEvaporationMatchesIndependentRefer
     const amrex::Real dtqsat = amrex::Real(0.02);
 
     const KesslerSaturationAdjustment actual =
-        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true);
+        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
     const KesslerSaturationAdjustment expected =
-        reference_saturation_adjustment(qv, qc, qsat, dtqsat, true);
+        reference_saturation_adjustment(qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
 
     expect_sat_adjustment_match(actual, expected);
 }
@@ -106,7 +106,7 @@ TEST(KesslerScalar, SaturationAdjustment_CloudEvaporationCappedByCloudWater)
     const amrex::Real dtqsat = amrex::Real(0.01);
 
     const KesslerSaturationAdjustment actual =
-        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true);
+        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
 
     EXPECT_NEAR(actual.dq_cloud_to_vapor, qc, formula_abs_tol(qc));
     EXPECT_NEAR(actual.dq_vapor_to_cloud, amrex::Real(0.0), exact_zero_or_near_zero_tol());
@@ -124,7 +124,8 @@ TEST(KesslerScalar, SaturationAdjustment_DoCondFalseSuppressesCondensationAndClo
     for (const auto& [qv, qc, qsat] : cases) {
         SCOPED_TRACE("qv=" + std::to_string(static_cast<double>(qv)));
         const KesslerSaturationAdjustment actual =
-            kessler_saturation_adjustment(qv, qc, qsat, amrex::Real(0.03), false);
+            kessler_saturation_adjustment(qv, qc, qsat, amrex::Real(0.03), false,
+                                          kSatAdjLatentOverCp);
         EXPECT_NEAR(actual.dq_vapor_to_cloud, amrex::Real(0.0), exact_zero_or_near_zero_tol());
         EXPECT_NEAR(actual.dq_cloud_to_vapor, amrex::Real(0.0), exact_zero_or_near_zero_tol());
     }
@@ -149,7 +150,8 @@ TEST(KesslerScalar, SaturationAdjustment_AnalyticDerivativeInSmoothCondensationB
     const auto branch = [=] (const amrex::Real qv_value,
                              const amrex::Real qsat_value,
                              const amrex::Real dtqsat_value) {
-        return kessler_saturation_adjustment(qv_value, qc, qsat_value, dtqsat_value, true).dq_vapor_to_cloud;
+        return kessler_saturation_adjustment(qv_value, qc, qsat_value, dtqsat_value, true,
+                                             kSatAdjLatentOverCp).dq_vapor_to_cloud;
     };
 
     const amrex::Real d_dq_dqv = central_difference(
@@ -185,7 +187,8 @@ TEST(KesslerScalar, SaturationAdjustment_CondensationQvCapUnreachableForValidPos
         SCOPED_TRACE("qv=" + std::to_string(static_cast<double>(qv)) +
                      " qsat=" + std::to_string(static_cast<double>(qsat)));
         const KesslerSaturationAdjustment actual =
-            kessler_saturation_adjustment(qv, amrex::Real(1.0e-3), qsat, dtqsat, true);
+            kessler_saturation_adjustment(qv, amrex::Real(1.0e-3), qsat, dtqsat, true,
+                                          kSatAdjLatentOverCp);
         EXPECT_LE(actual.dq_vapor_to_cloud, qv + formula_abs_tol(qv));
         EXPECT_NEAR(actual.dq_vapor_to_cloud,
                     (qv > qsat) ? (qv - qsat) / (amrex::Real(1.0) + kSatAdjLatentOverCp * dtqsat)
@@ -202,7 +205,7 @@ TEST(KesslerScalar, WarmRainSources_TotalWaterConservedByLocalSources)
     const KesslerSourceTerms source_terms = kessler_warm_rain_sources(
         amrex::Real(9.0e-3), amrex::Real(2.0e-3), amrex::Real(1.5e-3),
         amrex::Real(1.1), amrex::Real(900.0), amrex::Real(1.0e-2),
-        amrex::Real(0.02), amrex::Real(2.0), true);
+        amrex::Real(0.02), amrex::Real(2.0), true, kSatAdjLatentOverCp);
 
     const amrex::Real source_sum =
         (-source_terms.dq_vapor_to_cloud + source_terms.dq_cloud_to_vapor + source_terms.dq_rain_to_vapor)
@@ -224,10 +227,12 @@ TEST(KesslerScalar, WarmRainSources_AutoconversionThresholdBelowEqualAbove)
         SCOPED_TRACE("qc=" + std::to_string(static_cast<double>(qc)));
         const KesslerSourceTerms actual = kessler_warm_rain_sources(
             amrex::Real(1.0e-2), qc, amrex::Real(0.0), amrex::Real(1.0),
-            amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.02), amrex::Real(1.0), true);
+            amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.02), amrex::Real(1.0), true,
+            kSatAdjLatentOverCp);
         const KesslerSourceTerms expected = reference_warm_rain_sources(
             amrex::Real(1.0e-2), qc, amrex::Real(0.0), amrex::Real(1.0),
-            amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.02), amrex::Real(1.0), true);
+            amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.02), amrex::Real(1.0), true,
+            kSatAdjLatentOverCp);
         expect_source_terms_match(actual, expected);
     }
 }
@@ -240,9 +245,31 @@ TEST(KesslerScalar, WarmRainSources_CloudToRainCappedByCloudWater)
     const amrex::Real qc = amrex::Real(2.0e-4);
     const KesslerSourceTerms actual = kessler_warm_rain_sources(
         amrex::Real(1.0e-2), qc, amrex::Real(1.0), amrex::Real(1.0),
-        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(10.0), true);
+        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(10.0), true,
+        kSatAdjLatentOverCp);
 
     EXPECT_NEAR(actual.dq_cloud_to_rain, qc, formula_abs_tol(qc));
+}
+
+// Motivation: Cloud-to-rain conversion can only consume cloud water that
+// remains after saturation adjustment has already evaporated or condensed
+// cloud water. This protects the composed source ordering.
+TEST(KesslerScalar, WarmRainSources_CloudToRainCappedByRemainingCloudAfterSaturationAdjustment)
+{
+    const amrex::Real qv = amrex::Real(8.0e-3);
+    const amrex::Real qc = amrex::Real(4.0e-4);
+    const amrex::Real qp = amrex::Real(2.0e-2);
+    const amrex::Real qsat = amrex::Real(1.0e-2);
+    const amrex::Real dtqsat = amrex::Real(0.02);
+    const KesslerSourceTerms actual = kessler_warm_rain_sources(
+        qv, qc, qp, amrex::Real(1.0), amrex::Real(900.0), qsat, dtqsat, amrex::Real(20.0), true,
+        kSatAdjLatentOverCp);
+    const KesslerSaturationAdjustment sat = reference_saturation_adjustment(
+        qv, qc, qsat, dtqsat, true, kSatAdjLatentOverCp);
+    const amrex::Real available_cloud = amrex::max(
+        amrex::Real(0.0), qc + sat.dq_vapor_to_cloud - sat.dq_cloud_to_vapor);
+
+    EXPECT_NEAR(actual.dq_cloud_to_rain, available_cloud, formula_abs_tol(available_cloud));
 }
 
 // Motivation: For fixed cloud water with autoconversion disabled, accretion is
@@ -259,7 +286,8 @@ TEST(KesslerScalar, WarmRainSources_AccretionMonotoneInRainWater)
     for (const amrex::Real qp : qp_values) {
         SCOPED_TRACE("qp=" + std::to_string(static_cast<double>(qp)));
         const KesslerSourceTerms actual = kessler_warm_rain_sources(
-            qv, qc, qp, amrex::Real(1.1), amrex::Real(900.0), qv, amrex::Real(0.02), amrex::Real(1.0), true);
+            qv, qc, qp, amrex::Real(1.1), amrex::Real(900.0), qv, amrex::Real(0.02), amrex::Real(1.0),
+            true, kSatAdjLatentOverCp);
         EXPECT_GE(actual.dq_cloud_to_rain, amrex::Real(0.0));
         if (previous >= amrex::Real(0.0)) {
             EXPECT_GE(actual.dq_cloud_to_rain + formula_abs_tol(actual.dq_cloud_to_rain), previous);
@@ -268,29 +296,31 @@ TEST(KesslerScalar, WarmRainSources_AccretionMonotoneInRainWater)
     }
 }
 
-// Motivation: Rain evaporation requires both rain water and subsaturation.
-// This protects three distinct branch guards in the composed warm-rain helper.
-TEST(KesslerScalar, WarmRainSources_RainEvaporationRequiresRainAndSubsaturation)
+// Motivation: Rain evaporation requires rain water, subsaturation, and
+// remaining linearized capacity after cloud evaporation.
+TEST(KesslerScalar, WarmRainSources_RainEvaporationRequiresRainSubsaturationAndRemainingCapacity)
 {
     struct Case {
         amrex::Real qp;
         amrex::Real qv;
+        amrex::Real qc;
         amrex::Real qsat;
         bool expect_positive;
     };
 
     const std::array<Case, 3> cases = {{
-        {amrex::Real(0.0), amrex::Real(9.0e-3), amrex::Real(1.0e-2), false},
-        {amrex::Real(2.0e-3), amrex::Real(1.0e-2), amrex::Real(1.0e-2), false},
-        {amrex::Real(2.0e-3), amrex::Real(9.0e-3), amrex::Real(1.0e-2), true}
+        {amrex::Real(0.0), amrex::Real(9.0e-3), amrex::Real(0.0), amrex::Real(1.0e-2), false},
+        {amrex::Real(2.0e-3), amrex::Real(1.0e-2), amrex::Real(0.0), amrex::Real(1.0e-2), false},
+        {amrex::Real(2.0e-3), amrex::Real(9.0e-3), amrex::Real(0.0), amrex::Real(1.0e-2), true}
     }};
 
     for (const auto& test_case : cases) {
         SCOPED_TRACE("qp=" + std::to_string(static_cast<double>(test_case.qp)) +
                      " qv=" + std::to_string(static_cast<double>(test_case.qv)));
         const KesslerSourceTerms actual = kessler_warm_rain_sources(
-            test_case.qv, amrex::Real(5.0e-4), test_case.qp, amrex::Real(1.1),
-            amrex::Real(900.0), test_case.qsat, amrex::Real(0.02), amrex::Real(2.0), true);
+            test_case.qv, test_case.qc, test_case.qp, amrex::Real(1.1),
+            amrex::Real(900.0), test_case.qsat, amrex::Real(0.02), amrex::Real(2.0), true,
+            kSatAdjLatentOverCp);
         if (test_case.expect_positive) {
             EXPECT_GT(actual.dq_rain_to_vapor, amrex::Real(0.0));
         } else {
@@ -305,8 +335,9 @@ TEST(KesslerScalar, WarmRainSources_RainEvaporationCappedByRainWater)
 {
     const amrex::Real qp = amrex::Real(1.0e-4);
     const KesslerSourceTerms actual = kessler_warm_rain_sources(
-        amrex::Real(1.0e-3), amrex::Real(5.0e-4), qp, amrex::Real(1.2),
-        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(200.0), true);
+        amrex::Real(1.0e-3), amrex::Real(0.0), qp, amrex::Real(1.2),
+        amrex::Real(900.0), amrex::Real(1.0e-2), amrex::Real(0.01), amrex::Real(200.0), true,
+        kSatAdjLatentOverCp);
 
     EXPECT_NEAR(actual.dq_rain_to_vapor, qp, formula_abs_tol(qp));
 }
@@ -323,7 +354,8 @@ TEST(KesslerScalar, WarmRainSources_NoNegativeTendenciesForValidInputs)
         SCOPED_TRACE(case_label(test_case));
         const KesslerSourceTerms actual = kessler_warm_rain_sources(
             test_case.qv, test_case.qc, test_case.qp, test_case.rho, test_case.pressure_mbar,
-            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond);
+            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond,
+            kSatAdjLatentOverCp);
 
         EXPECT_GE(actual.dq_vapor_to_cloud, -exact_zero_or_near_zero_tol());
         EXPECT_GE(actual.dq_cloud_to_vapor, -exact_zero_or_near_zero_tol());
@@ -456,8 +488,8 @@ TEST(KesslerScalar, FaceState_BottomTopInteriorBranches)
     EXPECT_NEAR(bottom.qp, amrex::Real(0.3), formula_abs_tol(amrex::Real(0.3)));
     EXPECT_NEAR(top.rho, amrex::Real(1.0), formula_abs_tol(amrex::Real(1.0)));
     EXPECT_NEAR(top.qp, amrex::Real(0.2), formula_abs_tol(amrex::Real(0.2)));
-    EXPECT_NEAR(interior.rho, amrex::Real(1.05), formula_abs_tol(amrex::Real(1.05)));
-    EXPECT_NEAR(interior.qp, amrex::Real(0.25), formula_abs_tol(amrex::Real(0.25)));
+    EXPECT_NEAR(interior.rho, amrex::Real(1.1), formula_abs_tol(amrex::Real(1.1)));
+    EXPECT_NEAR(interior.qp, amrex::Real(0.3), formula_abs_tol(amrex::Real(0.3)));
 }
 
 // Motivation: Face rain water is clipped nonnegative after branch selection.
@@ -470,16 +502,16 @@ TEST(KesslerScalar, FaceState_ClipsNegativeFaceRainWater)
     EXPECT_NEAR(actual.qp, amrex::Real(0.0), exact_zero_or_near_zero_tol());
 }
 
-// Motivation: The current face-state contract averages neighboring qp first,
-// then clips the averaged face value. This protects the branch order, not a
-// physically stronger invariant.
-TEST(KesslerScalar, FaceState_AveragesThenClips)
+// Motivation: Interior sedimentation faces use the upper-cell donor state for
+// downward precipitation transport, then clip the donor rain water
+// nonnegative.
+TEST(KesslerScalar, FaceState_UsesUpperCellDonorThenClips)
 {
-    // MUST MATCH: production face-state averaging and clipping order.
+    // MUST MATCH: production interior donor-cell selection and clipping order.
     const KesslerFaceState actual =
         kessler_face_state(1, 0, 2, amrex::Real(1.0), amrex::Real(1.0), -amrex::Real(0.2), amrex::Real(0.1));
 
-    EXPECT_NEAR(actual.qp, amrex::Real(0.0), exact_zero_or_near_zero_tol());
+    EXPECT_NEAR(actual.qp, amrex::Real(0.1), formula_abs_tol(amrex::Real(0.1)));
 }
 
 // Motivation: Equal face fluxes imply zero sedimentation tendency. This is the
@@ -564,14 +596,15 @@ TEST(KesslerScalar, CopyStateToMicro_PressureStoredInMbar)
     });
 
     const KesslerSourceTerms expected_sources = reference_warm_rain_sources(
-        state.qv, state.qc, state.qp, state.rho, state.pres_mbar, qsat, dtqsat, kDefaultDt, true);
+        state.qv, state.qc, state.qp, state.rho, state.pres_mbar, qsat, dtqsat, kDefaultDt, true,
+        kSatAdjLatentOverCp);
     amrex::Real qv_expected = state.qv;
     amrex::Real qc_expected = state.qc;
     amrex::Real qp_expected = state.qp;
     apply_local_sources(qv_expected, qc_expected, qp_expected, expected_sources);
 
     amrex::Real theta_expected = state.theta;
-    theta_expected += (state.theta / state.tabs) * (lcond / sc.c_p)
+    theta_expected += (state.theta / state.tabs) * (L_v / sc.c_p)
         * (expected_sources.dq_vapor_to_cloud
            - expected_sources.dq_cloud_to_vapor
            - expected_sources.dq_rain_to_vapor);
@@ -649,11 +682,10 @@ TEST(KesslerScalar, CopyMicroToState_WritesCurrentMicroThetaToRhoTheta)
                 formula_abs_tol(state.rho * state.theta));
 }
 
-// Motivation: Full cloud and rain evaporation currently both use the original
-// subsaturation deficit. This is a characterization test, not a correctness
-// test. It pins current behavior so that any future change must also address
-// `DISABLED_CloudAndRainEvaporationDoNotBothConsumeSameSubsaturation`.
-TEST(KesslerScalar, Characterization_CloudAndRainEvaporationCurrentlyShareOriginalDeficit)
+// Motivation: Cloud evaporation should consume the linearized subsaturation
+// capacity before rain evaporation can act. Once cloud evaporation exhausts
+// that capacity, rain evaporation must remain zero.
+TEST(KesslerScalar, WarmRainSources_CloudEvaporationConsumesSubsaturationBeforeRainEvaporation)
 {
     const amrex::Real qv = amrex::Real(8.0e-3);
     const amrex::Real qc = amrex::Real(4.0e-3);
@@ -663,18 +695,13 @@ TEST(KesslerScalar, Characterization_CloudAndRainEvaporationCurrentlyShareOrigin
     const amrex::Real rho = amrex::Real(1.0);
     const amrex::Real dt = amrex::Real(80.0);
     const KesslerSourceTerms actual = kessler_warm_rain_sources(
-        qv, qc, qp, rho, amrex::Real(900.0), qsat, dtqsat, dt, true);
-    const amrex::Real linearized_capacity = (qsat - qv) / (amrex::Real(1.0) + kSatAdjLatentOverCp * dtqsat);
+        qv, qc, qp, rho, amrex::Real(900.0), qsat, dtqsat, dt, true,
+        kSatAdjLatentOverCp);
+    const amrex::Real linearized_capacity =
+        (qsat - qv) / (amrex::Real(1.0) + kSatAdjLatentOverCp * dtqsat);
 
-    EXPECT_GT(actual.dq_cloud_to_vapor + actual.dq_rain_to_vapor, linearized_capacity);
-}
-
-// Motivation: This is a characterization test, not a correctness test. It
-// pins current behavior so that any future change must also address
-// `DISABLED_SaturationThetaUsesConsistentLatentHeatFactor`.
-TEST(KesslerScalar, Characterization_SaturationThetaCurrentlyUseDifferentLatentFactors)
-{
-    EXPECT_NE(kSatAdjLatentOverCp, kThetaLatentOverCp);
+    EXPECT_NEAR(actual.dq_cloud_to_vapor, linearized_capacity, formula_abs_tol(linearized_capacity));
+    EXPECT_NEAR(actual.dq_rain_to_vapor, amrex::Real(0.0), exact_zero_or_near_zero_tol());
 }
 
 // Motivation: This is a characterization test, not a correctness test. It
@@ -720,21 +747,10 @@ TEST(KesslerScalar, SubstepCountUsesTerminalVelocityCFL)
               reference_velocity_cfl_substeps(velocity, dt, dz));
 }
 
-// Motivation: Expected behavior:
-//   Total vapor supplied by cloud evaporation plus rain evaporation should not
-//   exceed the linearized subsaturation capacity.
-// Observed current behavior:
-//   Cloud evaporation and rain evaporation both consume the original deficit.
-// Minimal reproducer:
-//   qv = 8.0e-3, qc = 4.0e-3, qp = 2.0e-3, qsat = 1.0e-2, dtqsat = 0.02,
-//   rho = 1.0, dt = 80.0.
-// Why disabled:
-//   Current development allows both evaporation paths to contribute from the
-//   same original deficit.
-// Enable trigger:
-//   Production should re-evaluate subsaturation capacity after each phase
-//   change or otherwise enforce a shared-deficit contract.
-TEST(KesslerScalar, DISABLED_CloudAndRainEvaporationDoNotBothConsumeSameSubsaturation)
+// Motivation: Total vapor supplied by cloud evaporation plus rain evaporation
+// must not exceed the linearized subsaturation capacity. Rain evaporation may
+// only use the capacity remaining after cloud evaporation.
+TEST(KesslerScalar, CloudAndRainEvaporationDoNotBothConsumeSameSubsaturation)
 {
     const amrex::Real qv = amrex::Real(8.0e-3);
     const amrex::Real qc = amrex::Real(4.0e-3);
@@ -744,7 +760,8 @@ TEST(KesslerScalar, DISABLED_CloudAndRainEvaporationDoNotBothConsumeSameSubsatur
     const amrex::Real rho = amrex::Real(1.0);
     const amrex::Real dt = amrex::Real(80.0);
     const KesslerSourceTerms actual = kessler_warm_rain_sources(
-        qv, qc, qp, rho, amrex::Real(900.0), qsat, dtqsat, dt, true);
+        qv, qc, qp, rho, amrex::Real(900.0), qsat, dtqsat, dt, true,
+        kSatAdjLatentOverCp);
     const amrex::Real linearized_capacity = (qsat - qv) / (amrex::Real(1.0) + kSatAdjLatentOverCp * dtqsat);
 
     EXPECT_LE(actual.dq_cloud_to_vapor + actual.dq_rain_to_vapor,
@@ -754,17 +771,7 @@ TEST(KesslerScalar, DISABLED_CloudAndRainEvaporationDoNotBothConsumeSameSubsatur
 // Motivation: Expected behavior:
 //   Saturation adjustment and theta update should use thermodynamically
 //   consistent latent-heat-over-cp factors.
-// Observed current behavior:
-//   The saturation helper uses L_v / Cp_d while the theta update uses
-//   lcond / sc.c_p.
-// Minimal reproducer:
-//   Compare the two factors with the default dry-air cp.
-// Why disabled:
-//   Current development intentionally preserves the existing factors.
-// Enable trigger:
-//   Production should adopt one thermodynamically consistent latent factor for
-//   both the saturation and theta updates.
-TEST(KesslerScalar, DISABLED_SaturationThetaUsesConsistentLatentHeatFactor)
+TEST(KesslerScalar, SaturationThetaUsesConsistentLatentHeatFactor)
 {
     EXPECT_EQ(kSatAdjLatentOverCp, kThetaLatentOverCp);
 }

@@ -53,7 +53,7 @@ public:
     void
     Define (SolverChoice& sc) override
     {
-        m_fac_cond = lcond / sc.c_p;
+        m_fac_cond = L_v / sc.c_p;
         m_axis     = sc.ave_plane;
         m_do_cond  = (!sc.use_shoc);
     }

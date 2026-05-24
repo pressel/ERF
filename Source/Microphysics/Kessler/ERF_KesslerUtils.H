@@ -68,12 +68,12 @@ KesslerSaturationAdjustment kessler_saturation_adjustment (const amrex::Real qv,
                                                            const amrex::Real qc,
                                                            const amrex::Real qsat,
                                                            const amrex::Real dtqsat,
-                                                           const bool do_cond) noexcept
+                                                           const bool do_cond,
+                                                           const amrex::Real latent_over_cp) noexcept
 {
     KesslerSaturationAdjustment source_terms{amrex::Real(0), amrex::Real(0)};
 
-    // MUST MATCH: current AdvanceKessler latent-heat saturation factor.
-    const amrex::Real fac = (L_v / Cp_d) * dtqsat;
+    const amrex::Real fac = latent_over_cp * dtqsat;
 
     // MUST MATCH: current AdvanceKessler condensation branch behavior.
     if ((qv > qsat) && do_cond) {
@@ -107,8 +107,8 @@ KesslerFaceState kessler_face_state (const int k,
         face_state.rho = rho_km1;
         face_state.qp = qp_km1;
     } else {
-        face_state.rho = myhalf * (rho_km1 + rho_k);
-        face_state.qp = myhalf * (qp_km1 + qp_k);
+        face_state.rho = rho_k;
+        face_state.qp = qp_k;
     }
 
     // MUST MATCH: current AdvanceKessler nonnegative face qp clipping.
@@ -136,34 +136,47 @@ KesslerSourceTerms kessler_warm_rain_sources (const amrex::Real qv,
                                               const amrex::Real qsat,
                                               const amrex::Real dtqsat,
                                               const amrex::Real dt,
-                                              const bool do_cond) noexcept
+                                              const bool do_cond,
+                                              const amrex::Real latent_over_cp) noexcept
 {
     // Units must match current AdvanceKessler: q* are mass fractions, rho is in
     // the production density units currently carried by Kessler, pressure is in
     // the current production mbar units, and dt is in seconds.
     const KesslerSaturationAdjustment saturation_adjustment =
-        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, do_cond);
+        kessler_saturation_adjustment(qv, qc, qsat, dtqsat, do_cond, latent_over_cp);
     KesslerSourceTerms source_terms{
         saturation_adjustment.dq_vapor_to_cloud,
         saturation_adjustment.dq_cloud_to_vapor,
         amrex::Real(0),
         amrex::Real(0)};
 
-    if ((qp > amrex::Real(0)) && (qv < qsat)) {
+    const amrex::Real capacity = amrex::max(
+        amrex::Real(0), (qsat - qv) / (amrex::Real(1) + latent_over_cp * dtqsat));
+    const amrex::Real remaining_capacity = amrex::max(
+        amrex::Real(0), capacity - saturation_adjustment.dq_cloud_to_vapor);
+    const amrex::Real qv_eff = qv
+        - saturation_adjustment.dq_vapor_to_cloud
+        + saturation_adjustment.dq_cloud_to_vapor;
+
+    if ((qp > amrex::Real(0)) && (qsat > amrex::Real(0))
+        && (pressure_current_units > amrex::Real(0))
+        && (qv_eff < qsat) && (remaining_capacity > amrex::Real(0))) {
         // MUST MATCH: current AdvanceKessler rain-evaporation coefficients and exponents.
         const amrex::Real coeff = amrex::Real(1.6)
             + amrex::Real(124.9) * std::pow(amrex::Real(0.001) * rho * qp, amrex::Real(0.2046));
-        source_terms.dq_rain_to_vapor = amrex::Real(1) / (amrex::Real(0.001) * rho)
-            * (amrex::Real(1) - qv / qsat)
+        const amrex::Real raw_rain_to_vapor = amrex::Real(1) / (amrex::Real(0.001) * rho)
+            * (amrex::Real(1) - qv_eff / qsat)
             * coeff
             * std::pow(amrex::Real(0.001) * rho * qp, amrex::Real(0.525))
             / (amrex::Real(5.4e5) + amrex::Real(2.55e6) / (pressure_current_units * qsat))
             * dt;
-        source_terms.dq_rain_to_vapor = std::min({qp, source_terms.dq_rain_to_vapor});
+        source_terms.dq_rain_to_vapor = amrex::min(qp, amrex::min(raw_rain_to_vapor, remaining_capacity));
     }
 
     if (qc > amrex::Real(0)) {
         const amrex::Real qcc = qc;
+        const amrex::Real available_cloud = amrex::max(
+            amrex::Real(0), qc + saturation_adjustment.dq_vapor_to_cloud - saturation_adjustment.dq_cloud_to_vapor);
         amrex::Real auto_r = amrex::Real(0);
         if (qcc > qcw0) {
             // MUST MATCH: current AdvanceKessler autoconversion trigger.
@@ -174,7 +187,7 @@ KesslerSourceTerms kessler_warm_rain_sources (const amrex::Real qv,
         amrex::Real accrr = amrex::Real(0);
         accrr = amrex::Real(2.2) * std::pow(qp, amrex::Real(0.875));
         source_terms.dq_cloud_to_rain = dt * (accrr * qcc + auto_r * (qcc - qcw0));
-        source_terms.dq_cloud_to_rain = std::min(source_terms.dq_cloud_to_rain, qc);
+        source_terms.dq_cloud_to_rain = amrex::min(source_terms.dq_cloud_to_rain, available_cloud);
     }
 
     return source_terms;

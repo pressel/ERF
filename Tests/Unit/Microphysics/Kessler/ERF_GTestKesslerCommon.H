@@ -62,7 +62,7 @@ namespace kessler_test {
 
 constexpr amrex::Real kRdOcp = R_d / Cp_d;
 constexpr amrex::Real kSatAdjLatentOverCp = L_v / Cp_d;
-constexpr amrex::Real kThetaLatentOverCp = lcond / Cp_d;
+constexpr amrex::Real kThetaLatentOverCp = L_v / Cp_d;
 constexpr amrex::Real kDefaultDt = amrex::Real(1.0);
 
 enum StateDiffComp {
@@ -275,10 +275,11 @@ KesslerSaturationAdjustment reference_saturation_adjustment (const amrex::Real q
                                                              const amrex::Real qc,
                                                              const amrex::Real qsat,
                                                              const amrex::Real dtqsat,
-                                                             const bool do_cond) noexcept
+                                                             const bool do_cond,
+                                                             const amrex::Real latent_over_cp) noexcept
 {
     KesslerSaturationAdjustment source_terms{amrex::Real(0.0), amrex::Real(0.0)};
-    const amrex::Real denom = amrex::Real(1.0) + kSatAdjLatentOverCp * dtqsat;
+    const amrex::Real denom = amrex::Real(1.0) + latent_over_cp * dtqsat;
 
     if ((qv > qsat) && do_cond) {
         source_terms.dq_vapor_to_cloud = amrex::min(qv, (qv - qsat) / denom);
@@ -299,37 +300,48 @@ KesslerSourceTerms reference_warm_rain_sources (const amrex::Real qv,
                                                 const amrex::Real qsat,
                                                 const amrex::Real dtqsat,
                                                 const amrex::Real dt,
-                                                const bool do_cond) noexcept
+                                                const bool do_cond,
+                                                const amrex::Real latent_over_cp) noexcept
 {
     const KesslerSaturationAdjustment sat =
-        reference_saturation_adjustment(qv, qc, qsat, dtqsat, do_cond);
+        reference_saturation_adjustment(qv, qc, qsat, dtqsat, do_cond, latent_over_cp);
     KesslerSourceTerms source_terms{
         sat.dq_vapor_to_cloud,
         sat.dq_cloud_to_vapor,
         amrex::Real(0.0),
         amrex::Real(0.0)};
 
-    if ((qp > amrex::Real(0.0)) && (qv < qsat)) {
+    const amrex::Real capacity = amrex::max(
+        amrex::Real(0.0), (qsat - qv) / (amrex::Real(1.0) + latent_over_cp * dtqsat));
+    const amrex::Real remaining_capacity = amrex::max(
+        amrex::Real(0.0), capacity - sat.dq_cloud_to_vapor);
+    const amrex::Real qv_eff = qv - sat.dq_vapor_to_cloud + sat.dq_cloud_to_vapor;
+
+    if ((qp > amrex::Real(0.0)) && (qsat > amrex::Real(0.0))
+        && (pressure_mbar > amrex::Real(0.0))
+        && (qv_eff < qsat) && (remaining_capacity > amrex::Real(0.0))) {
         // MUST MATCH: Kessler rain-evaporation closure coefficients.
         const amrex::Real scaled_mass = amrex::Real(0.001) * rho * qp;
         const amrex::Real coeff = amrex::Real(1.6)
             + amrex::Real(124.9) * std::pow(scaled_mass, amrex::Real(0.2046));
         const amrex::Real raw = amrex::Real(1.0) / (amrex::Real(0.001) * rho)
-            * (amrex::Real(1.0) - qv / qsat)
+            * (amrex::Real(1.0) - qv_eff / qsat)
             * coeff
             * std::pow(scaled_mass, amrex::Real(0.525))
             / (amrex::Real(5.4e5) + amrex::Real(2.55e6) / (pressure_mbar * qsat))
             * dt;
-        source_terms.dq_rain_to_vapor = amrex::min(qp, raw);
+        source_terms.dq_rain_to_vapor = amrex::min(qp, amrex::min(raw, remaining_capacity));
     }
 
     if (qc > amrex::Real(0.0)) {
+        const amrex::Real available_cloud = amrex::max(
+            amrex::Real(0.0), qc + sat.dq_vapor_to_cloud - sat.dq_cloud_to_vapor);
         // MUST MATCH: qcw0 and alphaelq Kessler autoconversion parameters.
         const amrex::Real auto_r = (qc > qcw0) ? alphaelq : amrex::Real(0.0);
         // MUST MATCH: Kessler accretion coefficient and exponent.
         const amrex::Real accretion_rate = amrex::Real(2.2) * std::pow(qp, amrex::Real(0.875));
         const amrex::Real raw = dt * (accretion_rate * qc + auto_r * (qc - qcw0));
-        source_terms.dq_cloud_to_rain = amrex::min(raw, qc);
+        source_terms.dq_cloud_to_rain = amrex::min(raw, available_cloud);
     }
 
     return source_terms;

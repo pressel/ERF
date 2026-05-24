@@ -40,10 +40,12 @@ void launch_helper_kernel (const int ncases,
     amrex::ParallelFor(ncases, [=] AMREX_GPU_DEVICE (int idx) noexcept {
         const KernelCase test_case = cases_ptr[idx];
         const KesslerSaturationAdjustment sat = kessler_saturation_adjustment(
-            test_case.qv, test_case.qc, test_case.qsat, test_case.dtqsat, test_case.do_cond);
+            test_case.qv, test_case.qc, test_case.qsat, test_case.dtqsat,
+            test_case.do_cond, kSatAdjLatentOverCp);
         const KesslerSourceTerms sources = kessler_warm_rain_sources(
             test_case.qv, test_case.qc, test_case.qp, test_case.rho, test_case.pressure_mbar,
-            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond);
+            test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond,
+            kSatAdjLatentOverCp);
         const amrex::Real velocity = kessler_terminal_velocity(test_case.rho, test_case.qp);
         const amrex::Real flux = kessler_precip_flux(test_case.rho, velocity, test_case.qp);
         const KesslerFaceState face = kessler_face_state(
@@ -96,10 +98,12 @@ std::vector<KernelCase> make_branch_coverage_cases ()
 KernelOutputs host_reference (const KernelCase& test_case)
 {
     const KesslerSaturationAdjustment sat = kessler_saturation_adjustment(
-        test_case.qv, test_case.qc, test_case.qsat, test_case.dtqsat, test_case.do_cond);
+        test_case.qv, test_case.qc, test_case.qsat, test_case.dtqsat,
+        test_case.do_cond, kSatAdjLatentOverCp);
     const KesslerSourceTerms sources = kessler_warm_rain_sources(
         test_case.qv, test_case.qc, test_case.qp, test_case.rho, test_case.pressure_mbar,
-        test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond);
+        test_case.qsat, test_case.dtqsat, test_case.dt, test_case.do_cond,
+        kSatAdjLatentOverCp);
     const amrex::Real velocity = kessler_terminal_velocity(test_case.rho, test_case.qp);
     const amrex::Real flux = kessler_precip_flux(test_case.rho, velocity, test_case.qp);
     const KesslerFaceState face = kessler_face_state(
