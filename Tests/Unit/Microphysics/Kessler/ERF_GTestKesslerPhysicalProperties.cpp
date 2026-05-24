@@ -138,16 +138,16 @@ TEST(KesslerPhysicalProperties, PhysicalProperties_TerminalVelocityAndFluxAreNon
 // divergence. This is a physical-property sign test, not a formula copy test.
 TEST(KesslerPhysicalProperties, PhysicalProperties_SedimentationTendencyHasFluxDivergenceSign)
 {
-    const amrex::Real positive = kessler_sedimentation_tendency(
+    const amrex::Real positive_tendency = kessler_sedimentation_tendency(
         amrex::Real(5.0e-3), amrex::Real(1.0e-3), amrex::Real(1.0), amrex::Real(1.0), amrex::Real(0.5));
-    const amrex::Real zero = kessler_sedimentation_tendency(
+    const amrex::Real zero_tendency = kessler_sedimentation_tendency(
         amrex::Real(2.0e-3), amrex::Real(2.0e-3), amrex::Real(1.0), amrex::Real(1.0), amrex::Real(0.5));
-    const amrex::Real negative = kessler_sedimentation_tendency(
+    const amrex::Real negative_tendency = kessler_sedimentation_tendency(
         amrex::Real(1.0e-3), amrex::Real(5.0e-3), amrex::Real(1.0), amrex::Real(1.0), amrex::Real(0.5));
 
-    EXPECT_GT(positive, amrex::Real(0.0));
-    EXPECT_NEAR(zero, amrex::Real(0.0), exact_zero_or_near_zero_tol());
-    EXPECT_LT(negative, amrex::Real(0.0));
+    EXPECT_GT(positive_tendency, amrex::Real(0.0));
+    EXPECT_NEAR(zero_tendency, amrex::Real(0.0), exact_zero_or_near_zero_tol());
+    EXPECT_LT(negative_tendency, amrex::Real(0.0));
 }
 
 // Motivation: Kessler_NoRain should not change qp or rain accumulation through
