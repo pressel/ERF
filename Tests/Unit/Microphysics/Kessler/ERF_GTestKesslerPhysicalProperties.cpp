@@ -25,6 +25,149 @@ void initialize_kessler (Kessler& kessler,
     kessler.Init(cons, cons.boxArray(), geom, kDefaultDt, z_phys_nd, detJ_cc);
 }
 
+struct SedimentationColumnState {
+    std::array<PrimitiveState, 2> states;
+    amrex::Real rain_accum;
+};
+
+struct SedimentationColumnRegressionReference {
+    SedimentationColumnState velocity_reference;
+    SedimentationColumnState flux_like_reference;
+    int velocity_substeps;
+    int flux_like_substeps;
+};
+
+inline std::array<PrimitiveState, 2> make_velocity_cfl_sensitive_column_states ()
+{
+    amrex::Real qsat_bottom;
+    amrex::Real qsat_top;
+    erf_qsatw(amrex::Real(289.0), amrex::Real(900.0), qsat_bottom);
+    erf_qsatw(amrex::Real(288.0), amrex::Real(900.0), qsat_top);
+
+    return {
+        make_primitive_state(amrex::Real(289.0), amrex::Real(900.0),
+                             qsat_bottom + amrex::Real(2.0e-4), amrex::Real(0.0), amrex::Real(1.0e-3)),
+        make_primitive_state(amrex::Real(288.0), amrex::Real(900.0),
+                             qsat_top + amrex::Real(2.0e-4), amrex::Real(0.0), amrex::Real(0.0))
+    };
+}
+
+inline void fill_velocity_cfl_sensitive_column_state_portable (
+    amrex::MultiFab& cons,
+    const std::array<PrimitiveState, 2>& states)
+{
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                set_conserved_cell(arr, i, j, k, (k == 0) ? states[0] : states[1]);
+            });
+        });
+    }
+}
+
+inline void fill_reference_rain_accum_portable (amrex::MultiFab& rain_accum,
+                                                const amrex::Real bottom_rain_accum)
+{
+    for (amrex::MFIter mfi(rain_accum, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = rain_accum.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                arr(i,j,k) = (k == 0) ? bottom_rain_accum : amrex::Real(0.0);
+            });
+        });
+    }
+}
+
+inline KesslerFaceState reference_column_face_state (const std::array<PrimitiveState, 2>& states,
+                                                     const int face_k)
+{
+    KesslerFaceState face_state{amrex::Real(0.0), amrex::Real(0.0)};
+    if (face_k == 0) {
+        face_state.rho = states[0].rho;
+        face_state.qp = states[0].qp;
+    } else if (face_k == 2) {
+        face_state.rho = states[1].rho;
+        face_state.qp = states[1].qp;
+    } else {
+        face_state.rho = myhalf * (states[0].rho + states[1].rho);
+        face_state.qp = myhalf * (states[0].qp + states[1].qp);
+    }
+
+    face_state.qp = std::max(amrex::Real(0.0), face_state.qp);
+    return face_state;
+}
+
+// Provenance: pow roundoff in terminal velocity, arithmetic over a small fixed
+// column, accumulation over n substeps, and float-vs-double scaling.
+inline amrex::Real sedimentation_cfl_reference_tol (const int n_substeps,
+                                                    const amrex::Real scale)
+{
+    return std::max(backend_math_abs_tol(scale),
+                    property_accumulation_tol(2 * std::max(1, n_substeps), scale));
+}
+
+inline SedimentationColumnState advance_reference_sedimentation_column (
+    const std::array<PrimitiveState, 2>& initial_states,
+    const amrex::Real dt,
+    const amrex::Real dz,
+    const int n_substeps)
+{
+    SedimentationColumnState result{initial_states, amrex::Real(0.0)};
+    const amrex::Real substep_dt = dt / static_cast<amrex::Real>(n_substeps);
+    const amrex::Real coef = substep_dt / dz;
+
+    for (int nsub = 0; nsub < n_substeps; ++nsub) {
+        std::array<amrex::Real, 3> face_fluxes{};
+        for (int face_k = 0; face_k < 3; ++face_k) {
+            const KesslerFaceState face_state = reference_column_face_state(result.states, face_k);
+            const amrex::Real terminal_velocity = reference_terminal_velocity(face_state.rho, face_state.qp);
+            face_fluxes[face_k] = reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
+        }
+
+        result.rain_accum += face_fluxes[0] * substep_dt / amrex::Real(1000.0) * amrex::Real(1000.0);
+        for (int k = 0; k < 2; ++k) {
+            amrex::Real dq_sed = reference_sedimentation_tendency(
+                face_fluxes[k + 1], face_fluxes[k], result.states[k].rho, amrex::Real(1.0), coef);
+            if (kessler_is_small_sedimentation_value(dq_sed)) {
+                dq_sed = amrex::Real(0.0);
+            }
+            result.states[k].qp += dq_sed;
+            result.states[k].qp = std::max(amrex::Real(0.0), result.states[k].qp);
+        }
+    }
+
+    return result;
+}
+
+inline SedimentationColumnRegressionReference make_sedimentation_cfl_regression_reference (
+    const std::array<PrimitiveState, 2>& initial_states,
+    const amrex::Real dt,
+    const amrex::Real dz)
+{
+    amrex::Real max_terminal_velocity = amrex::Real(0.0);
+    amrex::Real max_flux_like_value = amrex::Real(0.0);
+    for (int face_k = 0; face_k < 3; ++face_k) {
+        const KesslerFaceState face_state = reference_column_face_state(initial_states, face_k);
+        const amrex::Real terminal_velocity = reference_terminal_velocity(face_state.rho, face_state.qp);
+        const amrex::Real flux_like_value = reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
+        max_terminal_velocity = std::max(max_terminal_velocity, terminal_velocity);
+        max_flux_like_value = std::max(max_flux_like_value, flux_like_value);
+    }
+
+    const int velocity_substeps = reference_velocity_cfl_substeps(max_terminal_velocity, dt, dz);
+    const int flux_like_substeps = reference_substeps_from_reduced_value(max_flux_like_value, dt, dz);
+
+    return {
+        advance_reference_sedimentation_column(initial_states, dt, dz, velocity_substeps),
+        advance_reference_sedimentation_column(initial_states, dt, dz, flux_like_substeps),
+        velocity_substeps,
+        flux_like_substeps
+    };
+}
+
 } // namespace
 
 // Motivation: Local warm-rain source terms exchange water among qv, qc, and
@@ -185,6 +328,65 @@ TEST(KesslerPhysicalProperties, PhysicalProperties_KesslerNoRainDoesNotAdvanceRa
 
     EXPECT_LE(err.max(RainStateErrQp), formula_abs_tol(cons_before.max(RhoQ3_comp)));
     EXPECT_LE(err.max(RainStateErrRainAccum), exact_zero_or_near_zero_tol());
+}
+
+// Motivation: The scalar substep helper test proves the terminal-velocity CFL
+// formula, but it does not prove `AdvanceKessler` passes terminal velocity into
+// that helper. This public-flow regression uses a column where velocity-based
+// and flux-like substep counts differ, then compares the production result to
+// an independent velocity-subcycled reference. It intentionally avoids the
+// shared-face threshold branch and does not assert the full column water budget.
+TEST(KesslerPhysicalProperties, KesslerPublicFlow_SedimentationSubstepsUseVelocityCFL)
+{
+    const amrex::Geometry geom = make_geometry(1, 1, 2);
+    amrex::BoxArray ba(geom.Domain());
+    amrex::DistributionMapping dm(ba);
+    amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
+    amrex::MultiFab velocity_cons(ba, dm, RhoQ3_comp + 1, 1);
+    amrex::MultiFab flux_like_cons(ba, dm, RhoQ3_comp + 1, 1);
+    amrex::MultiFab velocity_rain(ba, dm, 1, 1);
+    amrex::MultiFab flux_like_rain(ba, dm, 1, 1);
+    amrex::MultiFab velocity_err(ba, dm, NumRainStateErrComps, 0);
+    amrex::MultiFab flux_like_err(ba, dm, NumRainStateErrComps, 0);
+    cons.setVal(amrex::Real(0.0));
+    velocity_cons.setVal(amrex::Real(0.0));
+    flux_like_cons.setVal(amrex::Real(0.0));
+    velocity_rain.setVal(amrex::Real(0.0));
+    flux_like_rain.setVal(amrex::Real(0.0));
+    velocity_err.setVal(amrex::Real(0.0));
+    flux_like_err.setVal(amrex::Real(0.0));
+
+    const std::array<PrimitiveState, 2> initial_states = make_velocity_cfl_sensitive_column_states();
+    fill_velocity_cfl_sensitive_column_state_portable(cons, initial_states);
+    const SedimentationColumnRegressionReference reference =
+        make_sedimentation_cfl_regression_reference(initial_states, kDefaultDt, geom.CellSize(2));
+
+    EXPECT_NE(reference.velocity_substeps, reference.flux_like_substeps);
+
+    fill_velocity_cfl_sensitive_column_state_portable(velocity_cons, reference.velocity_reference.states);
+    fill_velocity_cfl_sensitive_column_state_portable(flux_like_cons, reference.flux_like_reference.states);
+    fill_reference_rain_accum_portable(velocity_rain, reference.velocity_reference.rain_accum);
+    fill_reference_rain_accum_portable(flux_like_rain, reference.flux_like_reference.rain_accum);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc;
+    Kessler kessler;
+    SolverChoice sc = make_solver_choice(MoistureType::Kessler, true);
+    run_kessler_public_flow(kessler, sc, geom, cons, z_phys_nd, detJ_cc);
+
+    compute_rain_state_difference(cons, velocity_cons, *kessler.Qmoist_Ptr(0), velocity_rain, velocity_err);
+    compute_rain_state_difference(cons, flux_like_cons, *kessler.Qmoist_Ptr(0), flux_like_rain, flux_like_err);
+
+    const amrex::Real qp_scale = std::max(reference.velocity_reference.states[0].rho * reference.velocity_reference.states[0].qp,
+                                          reference.velocity_reference.states[1].rho * reference.velocity_reference.states[1].qp);
+    const amrex::Real qp_tol = sedimentation_cfl_reference_tol(reference.velocity_substeps, qp_scale);
+    const amrex::Real rain_tol = sedimentation_cfl_reference_tol(reference.velocity_substeps,
+                                                                 reference.velocity_reference.rain_accum);
+
+    EXPECT_LE(velocity_err.max(RainStateErrQp), qp_tol);
+    EXPECT_LE(velocity_err.max(RainStateErrRainAccum), rain_tol);
+    EXPECT_GT(std::max(flux_like_err.max(RainStateErrQp), flux_like_err.max(RainStateErrRainAccum)),
+              std::max(qp_tol, rain_tol));
 }
 
 // Motivation: This is a characterization test, not a correctness test. It
