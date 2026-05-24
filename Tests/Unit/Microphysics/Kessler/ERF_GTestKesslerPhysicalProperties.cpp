@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <memory>
 
 #include <AMReX_BoxArray.H>
@@ -85,16 +88,9 @@ inline KesslerFaceState reference_column_face_state (const std::array<PrimitiveS
                                                      const int face_k)
 {
     KesslerFaceState face_state{amrex::Real(0.0), amrex::Real(0.0)};
-    if (face_k == 0) {
-        face_state.rho = states[0].rho;
-        face_state.qp = states[0].qp;
-    } else if (face_k == 2) {
-        face_state.rho = states[1].rho;
-        face_state.qp = states[1].qp;
-    } else {
-        face_state.rho = states[1].rho;
-        face_state.qp = states[1].qp;
-    }
+    const int donor_k = kessler_face_donor_k(face_k, 1);
+    face_state.rho = states[donor_k].rho;
+    face_state.qp = states[donor_k].qp;
 
     face_state.qp = std::max(amrex::Real(0.0), face_state.qp);
     return face_state;
@@ -129,7 +125,7 @@ inline SedimentationColumnState advance_reference_sedimentation_column (
                 reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
         }
 
-        result.rain_accum += face_fluxes[0] * substep_dt / amrex::Real(1000.0) * amrex::Real(1000.0);
+        result.rain_accum += kessler_rain_accumulation_increment(face_fluxes[0] * substep_dt);
         for (int k = 0; k < 2; ++k) {
             amrex::Real dq_sed = reference_sedimentation_tendency(
                 face_fluxes[k + 1], face_fluxes[k], result.states[k].rho, amrex::Real(1.0), coef);
@@ -474,6 +470,37 @@ TEST(KesslerPhysicalProperties, KesslerPublicFlow_DetJWeightedColumnWaterBudgetI
     std::unique_ptr<amrex::MultiFab> detJ_cc = std::make_unique<amrex::MultiFab>(ba, dm, 1, 1);
     detJ_cc->setVal(amrex::Real(1.0));
     fill_detj_portable(*detJ_cc);
+
+    Kessler kessler;
+    SolverChoice sc = make_solver_choice(MoistureType::Kessler, false);
+    run_kessler_public_flow(kessler, sc, geom, cons, z_phys_nd, detJ_cc);
+
+    const ColumnBudget before = compute_column_budget(geom, cons_before, *kessler.Qmoist_Ptr(0), detJ_cc.get());
+    const ColumnBudget after = compute_column_budget(geom, cons, *kessler.Qmoist_Ptr(0), detJ_cc.get());
+
+    EXPECT_NEAR(before.total_water_sum,
+                after.total_water_sum + after.rain_accum_sum,
+                property_accumulation_tol(4, before.total_water_sum));
+}
+
+// Motivation: Compressed cells with detJ < 1 tighten the donor-cell water
+// capacity that can leave through a sedimentation face in one substep. The
+// detJ-weighted column water budget should still balance against surface rain.
+TEST(KesslerPhysicalProperties, KesslerPublicFlow_DetJWeightedColumnWaterBudgetIncludesSurfaceRainWithCompressedCells)
+{
+    const amrex::Geometry geom = make_geometry(1, 1, 4);
+    amrex::BoxArray ba(geom.Domain());
+    amrex::DistributionMapping dm(ba);
+    amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
+    cons.setVal(amrex::Real(0.0));
+    fill_conserved_column_state_portable(cons);
+    amrex::MultiFab cons_before(ba, dm, RhoQ3_comp + 1, 1);
+    copy_multifab(cons, cons_before);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc = std::make_unique<amrex::MultiFab>(ba, dm, 1, 1);
+    detJ_cc->setVal(amrex::Real(1.0));
+    fill_compressed_detj_portable(*detJ_cc);
 
     Kessler kessler;
     SolverChoice sc = make_solver_choice(MoistureType::Kessler, false);

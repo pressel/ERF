@@ -1,6 +1,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <tuple>
 
 #include <AMReX_BoxArray.H>
 #include <AMReX_DistributionMapping.H>
@@ -478,11 +479,11 @@ TEST(KesslerScalar, PrecipFlux_AnalyticDerivativeInPositiveDomain)
 TEST(KesslerScalar, FaceState_BottomTopInteriorBranches)
 {
     const KesslerFaceState bottom =
-        kessler_face_state(0, 0, 2, amrex::Real(1.0), amrex::Real(1.1), amrex::Real(0.2), amrex::Real(0.3));
+        kessler_face_state(0, 2, amrex::Real(1.0), amrex::Real(1.1), amrex::Real(0.2), amrex::Real(0.3));
     const KesslerFaceState top =
-        kessler_face_state(3, 0, 2, amrex::Real(1.0), amrex::Real(1.1), amrex::Real(0.2), amrex::Real(0.3));
+        kessler_face_state(3, 2, amrex::Real(1.0), amrex::Real(1.1), amrex::Real(0.2), amrex::Real(0.3));
     const KesslerFaceState interior =
-        kessler_face_state(1, 0, 2, amrex::Real(1.0), amrex::Real(1.1), amrex::Real(0.2), amrex::Real(0.3));
+        kessler_face_state(1, 2, amrex::Real(1.0), amrex::Real(1.1), amrex::Real(0.2), amrex::Real(0.3));
 
     EXPECT_NEAR(bottom.rho, amrex::Real(1.1), formula_abs_tol(amrex::Real(1.1)));
     EXPECT_NEAR(bottom.qp, amrex::Real(0.3), formula_abs_tol(amrex::Real(0.3)));
@@ -492,12 +493,19 @@ TEST(KesslerScalar, FaceState_BottomTopInteriorBranches)
     EXPECT_NEAR(interior.qp, amrex::Real(0.3), formula_abs_tol(amrex::Real(0.3)));
 }
 
+TEST(KesslerScalar, FaceDonorK_BottomInteriorTopRule)
+{
+    EXPECT_EQ(kessler_face_donor_k(0, 2), 0);
+    EXPECT_EQ(kessler_face_donor_k(1, 2), 1);
+    EXPECT_EQ(kessler_face_donor_k(3, 2), 2);
+}
+
 // Motivation: Face rain water is clipped nonnegative after branch selection.
 // This protects the physical sanity of the precipitating face state.
 TEST(KesslerScalar, FaceState_ClipsNegativeFaceRainWater)
 {
     const KesslerFaceState actual =
-        kessler_face_state(1, 0, 2, amrex::Real(1.0), amrex::Real(1.1), -amrex::Real(0.2), -amrex::Real(0.1));
+        kessler_face_state(1, 2, amrex::Real(1.0), amrex::Real(1.1), -amrex::Real(0.2), -amrex::Real(0.1));
 
     EXPECT_NEAR(actual.qp, amrex::Real(0.0), exact_zero_or_near_zero_tol());
 }
@@ -509,7 +517,7 @@ TEST(KesslerScalar, FaceState_UsesUpperCellDonorThenClips)
 {
     // MUST MATCH: production interior donor-cell selection and clipping order.
     const KesslerFaceState actual =
-        kessler_face_state(1, 0, 2, amrex::Real(1.0), amrex::Real(1.0), -amrex::Real(0.2), amrex::Real(0.1));
+        kessler_face_state(1, 2, amrex::Real(1.0), amrex::Real(1.0), -amrex::Real(0.2), amrex::Real(0.1));
 
     EXPECT_NEAR(actual.qp, amrex::Real(0.1), formula_abs_tol(amrex::Real(0.1)));
 }
@@ -714,18 +722,22 @@ TEST(KesslerScalar, Characterization_SedimentationThresholdUsesAbsoluteOneEMinus
     EXPECT_FALSE(kessler_is_small_sedimentation_value(amrex::Real(1.0e-14)));
 }
 
-// Motivation: Rain accumulation currently preserves the exact
-// `/ Real(1000.0) * Real(1000.0)` cancellation expression. This is a
-// characterization test, not a correctness test.
-TEST(KesslerScalar, Characterization_RainAccumulationPreservesCurrentUnitCancellationExpression)
+// Motivation: Rain accumulation converts precipitation mass per area to liquid
+// water depth in millimeters using ERF constants for water density and unit
+// conversion.
+TEST(KesslerScalar, RainAccumulationConvertsMassPerAreaToMillimeters)
 {
     const amrex::Real rho = amrex::Real(1.2);
     const amrex::Real qp = amrex::Real(8.0e-4);
     const amrex::Real velocity = kessler_terminal_velocity(rho, qp);
     const amrex::Real dt = amrex::Real(2.0);
-    const amrex::Real current_expression = rho * qp * velocity * dt / amrex::Real(1000.0) * amrex::Real(1000.0);
+    const amrex::Real precip_mass_per_area = rho * qp * velocity * dt;
+    const amrex::Real current_expression = kessler_rain_accumulation_increment(precip_mass_per_area);
+    const amrex::Real expected = precip_mass_per_area
+        * (amrex::Real(1.0) / rhor)
+        * amrex::Real(1000.0);
 
-    EXPECT_NEAR(current_expression, rho * qp * velocity * dt, backend_math_abs_tol(current_expression));
+    EXPECT_NEAR(current_expression, expected, backend_math_abs_tol(current_expression));
 }
 
 // Motivation: The sedimentation substep count contract is a terminal-velocity

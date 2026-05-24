@@ -107,7 +107,7 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                 const Real qp_km1 = (k == k_lo) ? qp_array(i,j,k) : qp_array(i,j,k-1);
                 const Real qp_k = (k == k_hi+1) ? qp_array(i,j,k-1) : qp_array(i,j,k);
                 const KesslerFaceState face_state =
-                    kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
+                    kessler_face_state(k, k_hi, rho_km1, rho_k, qp_km1, qp_k);
 
                 const Real terminal_velocity = kessler_terminal_velocity(face_state.rho, face_state.qp);
                 fz_array(i,j,k) = kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp);
@@ -131,7 +131,7 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                                                              const Real qp_km1 = (k == k_lo) ? qp_arr(i,j,k) : qp_arr(i,j,k-1);
                                                              const Real qp_k = (k == k_hi+1) ? qp_arr(i,j,k-1) : qp_arr(i,j,k);
                                                              const KesslerFaceState face_state =
-                                                                 kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
+                                                                 kessler_face_state(k, k_hi, rho_km1, rho_k, qp_km1, qp_k);
                                                              return { kessler_terminal_velocity(face_state.rho, face_state.qp) };
                                                          });
         int n_substep = kessler_num_sedimentation_substeps(get<0>(max_terminal_velocity),
@@ -159,17 +159,24 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                     const Real rho_k = (k == k_hi+1) ? rho_array(i,j,k-1) : rho_array(i,j,k);
                     const Real qp_km1 = (k == k_lo) ? qp_array(i,j,k) : qp_array(i,j,k-1);
                     const Real qp_k = (k == k_hi+1) ? qp_array(i,j,k-1) : qp_array(i,j,k);
+                    const int donor_k = kessler_face_donor_k(k, k_hi);
                     const KesslerFaceState face_state =
-                        kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
+                        kessler_face_state(k, k_hi, rho_km1, rho_k, qp_km1, qp_k);
 
                     const Real terminal_velocity = kessler_terminal_velocity(face_state.rho, face_state.qp);
-                    const Real max_flux = face_state.rho * face_state.qp / coef;
+                    const Real donor_detJ = (dJ_array) ? dJ_array(i,j,donor_k) : Real(1);
+                    // Limit the outgoing donor-face flux by the donor cell's available
+                    // detJ-weighted precipitating water. This prevents over-removal for detJ < 1
+                    // before the nonnegative qp clip.
+                    const Real max_flux = face_state.rho * face_state.qp * donor_detJ / coef;
                     fz_array(i,j,k) = amrex::min(
                         kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
 
                     if(k==k_lo){
+                        // Convert precipitation mass per unit area [kg m^-2] to water depth [mm]:
+                        // divide by liquid-water density [kg m^-3], then multiply by mm per m.
                         rain_accum_array(i,j,k) = rain_accum_array(i,j,k)
-                                                + fz_array(i,j,k) * dtn / Real(1000.0) * Real(1000.0);
+                                                + kessler_rain_accumulation_increment(fz_array(i,j,k) * dtn);
                     }
                 });
 

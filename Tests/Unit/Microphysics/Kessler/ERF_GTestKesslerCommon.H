@@ -440,7 +440,7 @@ int reference_substeps_from_reduced_value (const amrex::Real reduced_value,
                                            const amrex::Real dz) noexcept
 {
     return static_cast<int>(std::ceil((reduced_value + std::numeric_limits<amrex::Real>::epsilon())
-                                      * (dt / dz) / myhalf));
+                                      * (dt / dz) / kessler_sedimentation_cfl_max));
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -449,7 +449,7 @@ int reference_velocity_cfl_substeps (const amrex::Real terminal_velocity,
                                      const amrex::Real dz) noexcept
 {
     return static_cast<int>(std::ceil((terminal_velocity + std::numeric_limits<amrex::Real>::epsilon())
-                                      * (dt / dz) / myhalf));
+                                      * (dt / dz) / kessler_sedimentation_cfl_max));
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -641,6 +641,19 @@ inline void fill_detj_portable (amrex::MultiFab& detj)
         run_and_sync([=] {
             amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 arr(i,j,k) = amrex::Real(1.0) + amrex::Real(0.1) * (i + 2 * j + 3 * k);
+            });
+        });
+    }
+}
+
+inline void fill_compressed_detj_portable (amrex::MultiFab& detj)
+{
+    for (amrex::MFIter mfi(detj, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = detj.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                arr(i,j,k) = amrex::Real(0.25) + amrex::Real(0.25) * k;
             });
         });
     }

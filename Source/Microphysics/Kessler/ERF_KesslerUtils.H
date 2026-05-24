@@ -28,6 +28,17 @@ struct KesslerFaceState {
     amrex::Real qp;
 };
 
+static constexpr amrex::Real kessler_sedimentation_cfl_max = myhalf;
+static constexpr amrex::Real kessler_water_depth_m_per_kg_m2 = amrex::Real(1.0) / rhor;
+static constexpr amrex::Real kessler_millimeters_per_meter = amrex::Real(1000.0);
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+int kessler_face_donor_k (const int k,
+                          const int k_hi) noexcept
+{
+    return (k == k_hi + 1) ? k - 1 : k;
+}
+
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real kessler_terminal_velocity (const amrex::Real rho,
                                        const amrex::Real qp) noexcept
@@ -53,7 +64,15 @@ int kessler_num_sedimentation_substeps (const amrex::Real current_reduced_value,
 {
     // MUST MATCH: current AdvanceKessler CFL_MAX precipitation substep formula.
     return static_cast<int>(std::ceil((current_reduced_value + std::numeric_limits<amrex::Real>::epsilon())
-                                      * (dt / dzmin) / myhalf));
+                                      * (dt / dzmin) / kessler_sedimentation_cfl_max));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real kessler_rain_accumulation_increment (const amrex::Real precip_mass_per_area) noexcept
+{
+    return precip_mass_per_area
+        * kessler_water_depth_m_per_kg_m2
+        * kessler_millimeters_per_meter;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -90,7 +109,6 @@ KesslerSaturationAdjustment kessler_saturation_adjustment (const amrex::Real qv,
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 KesslerFaceState kessler_face_state (const int k,
-                                     const int k_lo,
                                      const int k_hi,
                                      const amrex::Real rho_km1,
                                      const amrex::Real rho_k,
@@ -99,11 +117,9 @@ KesslerFaceState kessler_face_state (const int k,
 {
     KesslerFaceState face_state{amrex::Real(0), amrex::Real(0)};
 
-    // MUST MATCH: current AdvanceKessler bottom/top face boundary behavior.
-    if (k == k_lo) {
-        face_state.rho = rho_k;
-        face_state.qp = qp_k;
-    } else if (k == k_hi + 1) {
+    // Downward sedimentation uses the upper-cell donor state at interior faces.
+    // The top boundary face uses the top cell below the boundary.
+    if (k == k_hi + 1) {
         face_state.rho = rho_km1;
         face_state.qp = qp_km1;
     } else {
@@ -154,6 +170,10 @@ KesslerSourceTerms kessler_warm_rain_sources (const amrex::Real qv,
         amrex::Real(0), (qsat - qv) / (amrex::Real(1) + latent_over_cp * dtqsat));
     const amrex::Real remaining_capacity = amrex::max(
         amrex::Real(0), capacity - saturation_adjustment.dq_cloud_to_vapor);
+    // Saturation adjustment returns at most one nonzero phase-change direction:
+    // condensation reduces vapor in supersaturation, while cloud evaporation
+    // increases vapor in subsaturation. Rain evaporation uses the vapor state
+    // after that cloud adjustment.
     const amrex::Real qv_eff = qv
         - saturation_adjustment.dq_vapor_to_cloud
         + saturation_adjustment.dq_cloud_to_vapor;

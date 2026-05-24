@@ -49,7 +49,7 @@ void launch_helper_kernel (const int ncases,
         const amrex::Real velocity = kessler_terminal_velocity(test_case.rho, test_case.qp);
         const amrex::Real flux = kessler_precip_flux(test_case.rho, velocity, test_case.qp);
         const KesslerFaceState face = kessler_face_state(
-            test_case.face_k, test_case.face_k_lo, test_case.face_k_hi,
+            test_case.face_k, test_case.face_k_hi,
             test_case.face_rho_km1, test_case.face_rho_k,
             test_case.face_qp_km1, test_case.face_qp_k);
         const amrex::Real sedimentation = kessler_sedimentation_tendency(
@@ -107,7 +107,7 @@ KernelOutputs host_reference (const KernelCase& test_case)
     const amrex::Real velocity = kessler_terminal_velocity(test_case.rho, test_case.qp);
     const amrex::Real flux = kessler_precip_flux(test_case.rho, velocity, test_case.qp);
     const KesslerFaceState face = kessler_face_state(
-        test_case.face_k, test_case.face_k_lo, test_case.face_k_hi,
+        test_case.face_k, test_case.face_k_hi,
         test_case.face_rho_km1, test_case.face_rho_k,
         test_case.face_qp_km1, test_case.face_qp_k);
 
