@@ -114,14 +114,23 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
             });
         }
 
-        auto const& ma_fz_arr = fz.const_arrays();
+        auto const& ma_rho_arr = mic_fab_vars[MicVar_Kess::rho]->const_arrays();
+        auto const& ma_qp_arr = mic_fab_vars[MicVar_Kess::qp]->const_arrays();
         GpuTuple<Real> max = ParReduce(TypeList<ReduceOpMax>{},
                                        TypeList<Real>{},
                                        fz, IntVect(0),
                                        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
                                        -> GpuTuple<Real>
                                        {
-                                           return { ma_fz_arr[box_no](i,j,k) };
+                                           const auto& rho_arr = ma_rho_arr[box_no];
+                                           const auto& qp_arr = ma_qp_arr[box_no];
+                                           const Real rho_km1 = (k == k_lo) ? rho_arr(i,j,k) : rho_arr(i,j,k-1);
+                                           const Real rho_k = (k == k_hi+1) ? rho_arr(i,j,k-1) : rho_arr(i,j,k);
+                                           const Real qp_km1 = (k == k_lo) ? qp_arr(i,j,k) : qp_arr(i,j,k-1);
+                                           const Real qp_k = (k == k_hi+1) ? qp_arr(i,j,k-1) : qp_arr(i,j,k);
+                                           const KesslerFaceState face_state =
+                                               kessler_face_state(k, k_lo, k_hi, rho_km1, rho_k, qp_km1, qp_k);
+                                           return { kessler_terminal_velocity(face_state.rho, face_state.qp) };
                                        });
         int n_substep = kessler_num_sedimentation_substeps(get<0>(max), dt, m_dzmin);
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(n_substep >= 1,

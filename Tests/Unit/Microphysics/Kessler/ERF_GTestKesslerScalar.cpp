@@ -649,23 +649,6 @@ TEST(KesslerScalar, CopyMicroToState_WritesCurrentMicroThetaToRhoTheta)
                 formula_abs_tol(state.rho * state.theta));
 }
 
-// Motivation: This is a characterization test, not a correctness test. It
-// pins current behavior so that any future change must also address
-// `DISABLED_SubstepCountUsesTerminalVelocityCFL`.
-TEST(KesslerScalar, Characterization_SubstepCountCurrentlyUsesFluxLikeReducedValue)
-{
-    const amrex::Real rho = amrex::Real(1.16);
-    const amrex::Real qp = amrex::Real(1.0e-3);
-    const amrex::Real dt = amrex::Real(1.0);
-    const amrex::Real dz = amrex::Real(1.0);
-    const amrex::Real velocity = kessler_terminal_velocity(rho, qp);
-    const amrex::Real reduced_flux_like_value = kessler_precip_flux(rho, velocity, qp);
-
-    EXPECT_EQ(kessler_num_sedimentation_substeps(reduced_flux_like_value, dt, dz),
-              reference_substeps_from_reduced_value(reduced_flux_like_value, dt, dz));
-    EXPECT_EQ(kessler_num_sedimentation_substeps(reduced_flux_like_value, dt, dz), 1);
-}
-
 // Motivation: Full cloud and rain evaporation currently both use the original
 // subsaturation deficit. This is a characterization test, not a correctness
 // test. It pins current behavior so that any future change must also address
@@ -718,19 +701,11 @@ TEST(KesslerScalar, Characterization_RainAccumulationPreservesCurrentUnitCancell
     EXPECT_NEAR(current_expression, rho * qp * velocity * dt, backend_math_abs_tol(current_expression));
 }
 
-// Motivation: Expected behavior:
-//   The sedimentation substep count should be based on a terminal-velocity CFL,
-//   n = ceil((V_terminal + eps) * dt / dz / CFL_MAX).
-// Observed current behavior:
-//   The current call path reduces a flux-like value rho * V_terminal * qp.
-// Minimal reproducer:
-//   rho = 1.16, qp = 1.0e-3, dt = 1.0, dz = 1.0, CFL_MAX = 0.5.
-// Why disabled:
-//   Current development uses the reduced flux-like value, so the physical CFL
-//   contract does not hold yet.
-// Enable trigger:
-//   Production should reduce a terminal velocity rather than rho*V*qp.
-TEST(KesslerScalar, DISABLED_SubstepCountUsesTerminalVelocityCFL)
+// Motivation: The sedimentation substep count contract is a terminal-velocity
+// CFL, n = ceil((V_terminal + eps) * dt / dz / CFL_MAX). A flux-like reduced
+// value rho * V_terminal * qp is dimensionally different and must not be used
+// as a drop-in replacement for the CFL quantity.
+TEST(KesslerScalar, SubstepCountUsesTerminalVelocityCFL)
 {
     const amrex::Real rho = amrex::Real(1.16);
     const amrex::Real qp = amrex::Real(1.0e-3);
@@ -739,7 +714,9 @@ TEST(KesslerScalar, DISABLED_SubstepCountUsesTerminalVelocityCFL)
     const amrex::Real velocity = reference_terminal_velocity(rho, qp);
     const amrex::Real reduced_flux_like_value = reference_precip_flux(rho, velocity, qp);
 
-    EXPECT_EQ(kessler_num_sedimentation_substeps(reduced_flux_like_value, dt, dz),
+    EXPECT_EQ(kessler_num_sedimentation_substeps(velocity, dt, dz),
+              reference_velocity_cfl_substeps(velocity, dt, dz));
+    EXPECT_NE(kessler_num_sedimentation_substeps(reduced_flux_like_value, dt, dz),
               reference_velocity_cfl_substeps(velocity, dt, dz));
 }
 
