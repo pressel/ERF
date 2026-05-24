@@ -416,19 +416,7 @@ TEST(KesslerPhysicalProperties, KesslerFullRain_DoCondFalseStillRunsRainPath)
     amrex::DistributionMapping dm(ba);
     amrex::MultiFab cons(ba, dm, RhoQ3_comp + 1, 1);
     cons.setVal(amrex::Real(0.0));
-
-    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.tilebox();
-        auto arr = cons.array(mfi);
-        run_and_sync([=] {
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                PrimitiveState state = (k == 3)
-                    ? make_primitive_state(amrex::Real(284.0), amrex::Real(850.0), amrex::Real(7.0e-3), amrex::Real(2.0e-4), amrex::Real(0.0))
-                    : make_primitive_state(amrex::Real(288.0), amrex::Real(900.0), amrex::Real(1.20e-2), qcw0 + amrex::Real(3.0e-4), amrex::Real(1.0e-3));
-                set_conserved_cell(arr, i, j, k, state);
-            });
-        });
-    }
+    fill_do_cond_false_rain_path_state_portable(cons);
     amrex::MultiFab cons_before(ba, dm, RhoQ3_comp + 1, 1);
     copy_multifab(cons, cons_before);
 

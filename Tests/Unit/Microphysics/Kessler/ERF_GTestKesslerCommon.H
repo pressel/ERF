@@ -152,6 +152,24 @@ inline amrex::Real formula_rel_tol (const amrex::Real expected)
     return formula_abs_tol(expected);
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real portable_formula_abs_tol (const amrex::Real expected) noexcept
+{
+#ifdef AMREX_USE_FLOAT
+    const amrex::Real factor = amrex::Real(64.0);
+#else
+    const amrex::Real factor = amrex::Real(32.0);
+#endif
+    return factor * std::numeric_limits<amrex::Real>::epsilon() *
+           amrex::max(amrex::Real(1.0), amrex::Math::abs(expected));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real portable_formula_rel_tol (const amrex::Real expected) noexcept
+{
+    return portable_formula_abs_tol(expected);
+}
+
 // Absolute tolerance for pow-based helper comparisons.
 // Provenance: backend math-library variation for pow on CPU/GPU, floating-point
 // roundoff, and float-vs-double scaling.
@@ -526,6 +544,22 @@ inline void fill_conserved_state_portable (amrex::MultiFab& cons)
     }
 }
 
+// Keep device lambdas in namespace-scope helpers. CUDA rejects extended
+// device lambdas enclosed by GTest's private TestBody() member function.
+inline void fill_conserved_state_uniform_portable (amrex::MultiFab& cons,
+                                                   const PrimitiveState& state)
+{
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                set_conserved_cell(arr, i, j, k, state);
+            });
+        });
+    }
+}
+
 inline void fill_local_source_only_state_portable (amrex::MultiFab& cons)
 {
     for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
@@ -595,6 +629,24 @@ inline void fill_detj_portable (amrex::MultiFab& detj)
         run_and_sync([=] {
             amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 arr(i,j,k) = amrex::Real(1.0) + amrex::Real(0.1) * (i + 2 * j + 3 * k);
+            });
+        });
+    }
+}
+
+inline void fill_do_cond_false_rain_path_state_portable (amrex::MultiFab& cons)
+{
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const PrimitiveState state = (k == 3)
+                    ? make_primitive_state(amrex::Real(284.0), amrex::Real(850.0),
+                                           amrex::Real(7.0e-3), amrex::Real(2.0e-4), amrex::Real(0.0))
+                    : make_primitive_state(amrex::Real(288.0), amrex::Real(900.0),
+                                           amrex::Real(1.20e-2), qcw0 + amrex::Real(3.0e-4), amrex::Real(1.0e-3));
+                set_conserved_cell(arr, i, j, k, state);
             });
         });
     }
@@ -681,11 +733,12 @@ inline void compute_kessler_conservation_errors (const amrex::MultiFab& before,
                 const amrex::Real latent_before = rho_before * (tabs_before + kThetaLatentOverCp * qv_before);
                 const amrex::Real latent_after = rho_after * (tabs_after + kThetaLatentOverCp * qv_after);
 
-                err_arr(i,j,k,ConservationErrRho) = normalized_error(rho_after, rho_before, formula_rel_tol(rho_before));
+                err_arr(i,j,k,ConservationErrRho) = normalized_error(
+                    rho_after, rho_before, portable_formula_rel_tol(rho_before));
                 err_arr(i,j,k,ConservationErrTotalWater) = normalized_error(
-                    qtot_after, qtot_before, formula_rel_tol(qtot_before));
+                    qtot_after, qtot_before, portable_formula_rel_tol(qtot_before));
                 err_arr(i,j,k,ConservationErrLatentProxy) = normalized_error(
-                    latent_after, latent_before, formula_rel_tol(latent_before));
+                    latent_after, latent_before, portable_formula_rel_tol(latent_before));
             });
         });
     }

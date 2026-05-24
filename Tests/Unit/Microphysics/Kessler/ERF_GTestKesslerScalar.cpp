@@ -547,16 +547,7 @@ TEST(KesslerScalar, CopyStateToMicro_PressureStoredInMbar)
     erf_dtqsatw(tabs, pres_mbar, dtqsat);
     const PrimitiveState state = make_primitive_state(
         tabs, pres_mbar, qsat + amrex::Real(2.0e-4), amrex::Real(5.0e-5), amrex::Real(0.0));
-
-    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.tilebox();
-        auto arr = cons.array(mfi);
-        run_and_sync([=] {
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                set_conserved_cell(arr, i, j, k, state);
-            });
-        });
-    }
+    fill_conserved_state_uniform_portable(cons, state);
 
     std::unique_ptr<amrex::MultiFab> z_phys_nd;
     std::unique_ptr<amrex::MultiFab> detJ_cc;
@@ -604,15 +595,7 @@ TEST(KesslerScalar, CopyMicroToState_WritesQvQcQpAsRhoWeightedConservedScalars)
 
     const PrimitiveState state = make_primitive_state(
         amrex::Real(289.0), amrex::Real(910.0), amrex::Real(8.0e-3), amrex::Real(4.0e-4), amrex::Real(7.0e-4));
-    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.tilebox();
-        auto arr = cons.array(mfi);
-        run_and_sync([=] {
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                set_conserved_cell(arr, i, j, k, state);
-            });
-        });
-    }
+    fill_conserved_state_uniform_portable(cons, state);
 
     std::unique_ptr<amrex::MultiFab> z_phys_nd;
     std::unique_ptr<amrex::MultiFab> detJ_cc;
@@ -646,15 +629,7 @@ TEST(KesslerScalar, CopyMicroToState_WritesCurrentMicroThetaToRhoTheta)
 
     const PrimitiveState state = make_primitive_state(
         amrex::Real(292.0), amrex::Real(940.0), amrex::Real(6.0e-3), amrex::Real(1.0e-4), amrex::Real(0.0));
-    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.tilebox();
-        auto arr = cons.array(mfi);
-        run_and_sync([=] {
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                set_conserved_cell(arr, i, j, k, state);
-            });
-        });
-    }
+    fill_conserved_state_uniform_portable(cons, state);
 
     std::unique_ptr<amrex::MultiFab> z_phys_nd;
     std::unique_ptr<amrex::MultiFab> detJ_cc;
