@@ -17,6 +17,7 @@
 #include <AMReX_DistributionMapping.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_Gpu.H>
+#include <AMReX_GpuAtomic.H>
 #include <AMReX_GpuContainers.H>
 #include <AMReX_Geometry.H>
 #include <AMReX_MFIter.H>
@@ -405,16 +406,102 @@ inline void fill_full_sam_sedimentation_column_state_portable (amrex::MultiFab& 
     }
 }
 
+#define SAM_BFB_BRANCH_HIT_FIELDS(X) \
+    X(cloud_noop) \
+    X(cloud_t_bgmin_or_less) \
+    X(cloud_t_between_bgmin_bgmax) \
+    X(cloud_t_bgmax_or_greater) \
+    X(cloud_qt_gt_qsat) \
+    X(cloud_qt_le_qsat) \
+    X(cloud_evap_all_then_recheck) \
+    X(cloud_newton) \
+    X(cloud_condensate_limiter) \
+    X(icefall_noop) \
+    X(icefall_bottom_face) \
+    X(icefall_interior_face) \
+    X(icefall_top_face) \
+    X(icefall_detj_present) \
+    X(precip_noop) \
+    X(precip_cloud_only) \
+    X(precip_only) \
+    X(precip_cloud_and_precip) \
+    X(precip_water_autoconversion_off) \
+    X(precip_water_autoconversion_on) \
+    X(precip_ice_autoconversion_off) \
+    X(precip_ice_autoconversion_on) \
+    X(precip_rain_accretion_off) \
+    X(precip_rain_accretion_on) \
+    X(precip_snow_accretion_off) \
+    X(precip_snow_accretion_on) \
+    X(precip_graupel_accretion_off) \
+    X(precip_graupel_accretion_on) \
+    X(precip_sink_limited_cloud_water) \
+    X(precip_sink_limited_cloud_ice) \
+    X(precip_evaporation_off) \
+    X(precip_evaporation_on) \
+    X(precip_evaporation_species_limited) \
+    X(precipfall_noop) \
+    X(precipfall_bottom_face) \
+    X(precipfall_interior_face) \
+    X(precipfall_top_face) \
+    X(precipfall_detj_present) \
+    X(precipfall_zero_flux_below_threshold) \
+    X(precipfall_nonzero_rain_flux) \
+    X(precipfall_nonzero_snow_flux) \
+    X(precipfall_nonzero_graupel_flux) \
+    X(precipfall_surface_rain_accum) \
+    X(precipfall_surface_snow_accum) \
+    X(precipfall_surface_graupel_accum) \
+    X(precipfall_nonnegative_clipping)
+
+struct SAMBFBBranchHits {
+#define X(name) amrex::Long name{0};
+    SAM_BFB_BRANCH_HIT_FIELDS(X)
+#undef X
+};
+
+enum SAMBFBBranchHitIndex : int {
+#define X(name) k_##name,
+    SAM_BFB_BRANCH_HIT_FIELDS(X)
+#undef X
+    k_num_branch_hits
+};
+
+constexpr int kSAMBFBBranchHitCount = k_num_branch_hits;
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void sam_bfb_record_hit (amrex::Long* hits,
+                         const int index) noexcept
+{
+    amrex::Gpu::Atomic::AddNoRet(&hits[index], amrex::Long(1));
+}
+
+inline void sam_bfb_accumulate_hit (SAMBFBBranchHits& hits,
+                                    const int index,
+                                    const amrex::Long count)
+{
+    switch (index) {
+#define X(name) case k_##name: hits.name += count; break;
+        SAM_BFB_BRANCH_HIT_FIELDS(X)
+#undef X
+    default:
+        AMREX_ALWAYS_ASSERT(false);
+    }
+}
+
+#undef SAM_BFB_BRANCH_HIT_FIELDS
+
 inline amrex::Long component_mismatch_count (const amrex::MultiFab& lhs,
                                              const amrex::MultiFab& rhs,
-                                             const int comp)
+                                             const int comp,
+                                             const amrex::IntVect& ngrow = amrex::IntVect(0))
 {
     auto lhs_arrays = lhs.const_arrays();
     auto rhs_arrays = rhs.const_arrays();
     amrex::GpuTuple<amrex::Long> reduced = amrex::ParReduce(
         amrex::TypeList<amrex::ReduceOpSum>{},
         amrex::TypeList<amrex::Long>{},
-        lhs, amrex::IntVect(0),
+        lhs, ngrow,
         [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Long> {
             return {lhs_arrays[box_no](i,j,k,comp) == rhs_arrays[box_no](i,j,k,comp) ? 0L : 1L};
         });
@@ -422,20 +509,23 @@ inline amrex::Long component_mismatch_count (const amrex::MultiFab& lhs,
 }
 
 inline amrex::Long scalar_mismatch_count (const amrex::MultiFab& lhs,
-                                          const amrex::MultiFab& rhs)
+                                          const amrex::MultiFab& rhs,
+                                          const amrex::IntVect& ngrow = amrex::IntVect(0))
 {
     auto lhs_arrays = lhs.const_arrays();
     auto rhs_arrays = rhs.const_arrays();
     amrex::GpuTuple<amrex::Long> reduced = amrex::ParReduce(
         amrex::TypeList<amrex::ReduceOpSum>{},
         amrex::TypeList<amrex::Long>{},
-        lhs, amrex::IntVect(0),
+        lhs, ngrow,
         [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Long> {
             return {lhs_arrays[box_no](i,j,k) == rhs_arrays[box_no](i,j,k) ? 0L : 1L};
         });
     return amrex::get<0>(reduced);
 }
 
+// Frozen reference copied from development @ b9247103a856e0552cf47f050e9a7c8b7846a96a
+// for the Phase 1 SAM BFB guard. Rebase this copy deliberately, not incidentally.
 class SAMCurrentBehaviorReference {
 public:
     using FabPtr = std::shared_ptr<amrex::MultiFab>;
@@ -496,6 +586,8 @@ public:
         rho1d.resize({zlo}, {zhi});
         pres1d.resize({zlo}, {zhi});
         tabs1d.resize({zlo}, {zhi});
+
+        ResetBranchHits();
     }
 
     void Copy_State_to_Micro (const amrex::MultiFab& cons_in)
@@ -592,6 +684,21 @@ public:
         return mic_fab_vars[MicVarMap[varIdx]].get();
     }
 
+    SAMBFBBranchHits BranchHits ()
+    {
+        amrex::Gpu::HostVector<amrex::Long> branch_hits_host(kSAMBFBBranchHitCount, 0);
+        amrex::Gpu::copyAsync(amrex::Gpu::deviceToHost,
+                              m_branch_hits_device.begin(), m_branch_hits_device.end(),
+                              branch_hits_host.begin());
+        amrex::Gpu::streamSynchronize();
+
+        SAMBFBBranchHits branch_hits = m_branch_hits_host;
+        for (int index = 0; index < kSAMBFBBranchHitCount; ++index) {
+            sam_bfb_accumulate_hit(branch_hits, index, branch_hits_host[index]);
+        }
+        return branch_hits;
+    }
+
 private:
     static AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     amrex::Real NewtonIterSat (int& i, int& j, int& k,
@@ -607,7 +714,8 @@ private:
                                const amrex::Array4<amrex::Real>& qc_array,
                                const amrex::Array4<amrex::Real>& qi_array,
                                const amrex::Array4<amrex::Real>& qn_array,
-                               const amrex::Array4<amrex::Real>& qt_array)
+                               const amrex::Array4<amrex::Real>& qt_array,
+                               amrex::Long* branch_hits)
     {
         amrex::Real tol = amrex::Real(1.0e-4);
         amrex::Real omn, domn;
@@ -622,6 +730,8 @@ private:
         amrex::Real delta_qv, delta_qc, delta_qi;
         amrex::Real tabs = tabs_array(i,j,k);
         amrex::Real pres = pres_array(i,j,k);
+
+        sam_bfb_record_hit(branch_hits, k_cloud_newton);
 
         niter = 0;
         dtabs = 1;
@@ -668,9 +778,12 @@ private:
 
         qsat += dqsat * dtabs;
 
+        sam_bfb_record_hit(branch_hits, k_cloud_condensate_limiter);
         delta_qv = qv_array(i,j,k) - qsat;
-        delta_qc = std::max(-qc_array(i,j,k), delta_qv * omn);
-        delta_qi = std::max(-qi_array(i,j,k), delta_qv * (one - omn));
+        const amrex::Real unclamped_delta_qc = delta_qv * omn;
+        const amrex::Real unclamped_delta_qi = delta_qv * (one - omn);
+        delta_qc = std::max(-qc_array(i,j,k), unclamped_delta_qc);
+        delta_qi = std::max(-qi_array(i,j,k), unclamped_delta_qi);
 
         qv_array(i,j,k) = qsat;
         qc_array(i,j,k) += delta_qc;
@@ -679,6 +792,18 @@ private:
         qt_array(i,j,k) = qv_array(i,j,k) + qn_array(i,j,k);
 
         return tabs;
+    }
+
+    void ResetBranchHits ()
+    {
+        m_branch_hits_host = SAMBFBBranchHits{};
+        m_branch_hits_device.resize(kSAMBFBBranchHitCount);
+
+        amrex::Gpu::HostVector<amrex::Long> zero_hits(kSAMBFBBranchHitCount, 0);
+        amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice,
+                              zero_hits.begin(), zero_hits.end(),
+                              m_branch_hits_device.begin());
+        amrex::Gpu::streamSynchronize();
     }
 
 public:
@@ -796,7 +921,10 @@ public:
 private:
     void Cloud (const SolverChoice& sc)
     {
-        if (!m_do_cond) { return; }
+        if (!m_do_cond) {
+            sam_bfb_accumulate_hit(m_branch_hits_host, k_cloud_noop, 1);
+            return;
+        }
 
         constexpr amrex::Real an = one / (tbgmax - tbgmin);
         constexpr amrex::Real bn = tbgmin * an;
@@ -817,6 +945,7 @@ private:
         const int i_hi = domain.bigEnd(0);
         const int j_lo = domain.smallEnd(1);
         const int j_hi = domain.bigEnd(1);
+        amrex::Long* branch_hits = m_branch_hits_device.data();
 
         for (amrex::MFIter mfi(*(mic_fab_vars[MicVar::tabs]), amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
             auto qt_array = mic_fab_vars[MicVar::qt]->array(mfi);
@@ -848,6 +977,7 @@ private:
                 omn = one;
                 if (SAM_moisture_type == 1) {
                     if (tabs_array(i,j,k) >= tbgmax) {
+                        sam_bfb_record_hit(branch_hits, k_cloud_t_bgmax_or_greater);
                         omn = one;
                         delta_qi = qci_array(i,j,k);
                         qci_array(i,j,k) = zero;
@@ -855,6 +985,7 @@ private:
                         tabs_array(i,j,k) -= fac_fus * delta_qi;
                         theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), pres_array(i,j,k), rdOcp);
                     } else if (tabs_array(i,j,k) <= tbgmin) {
+                        sam_bfb_record_hit(branch_hits, k_cloud_t_bgmin_or_less);
                         omn = zero;
                         delta_qc = qcl_array(i,j,k);
                         qcl_array(i,j,k) = zero;
@@ -862,6 +993,7 @@ private:
                         tabs_array(i,j,k) += fac_fus * delta_qc;
                         theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), pres_array(i,j,k), rdOcp);
                     } else {
+                        sam_bfb_record_hit(branch_hits, k_cloud_t_between_bgmin_bgmax);
                         omn = an * tabs_array(i,j,k) - bn;
                         delta_qc = qcl_array(i,j,k) - qn_array(i,j,k) * omn;
                         delta_qi = qci_array(i,j,k) - qn_array(i,j,k) * (one - omn);
@@ -884,14 +1016,18 @@ private:
                 qsat = omn * qsatw + (one - omn) * qsati;
 
                 if (qt_array(i,j,k) > qsat) {
+                    sam_bfb_record_hit(branch_hits, k_cloud_qt_gt_qsat);
                     tabs_array(i,j,k) = NewtonIterSat(i, j, k, SAM_moisture_type,
                                                       fac_cond, fac_fus, fac_sub,
                                                       an, bn,
                                                       tabs_array, pres_array,
                                                       qv_array, qcl_array, qci_array,
-                                                      qn_array, qt_array);
+                                                      qn_array, qt_array,
+                                                      branch_hits);
                     theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), amrex::Real(100.0) * pres_array(i,j,k), rdOcp);
                 } else {
+                    sam_bfb_record_hit(branch_hits, k_cloud_qt_le_qsat);
+                    sam_bfb_record_hit(branch_hits, k_cloud_evap_all_then_recheck);
                     delta_qv = qcl_array(i,j,k) + qci_array(i,j,k);
                     delta_qc = qcl_array(i,j,k);
                     delta_qi = qci_array(i,j,k);
@@ -914,7 +1050,8 @@ private:
                                                           an, bn,
                                                           tabs_array, pres_array,
                                                           qv_array, qcl_array, qci_array,
-                                                          qn_array, qt_array);
+                                                          qn_array, qt_array,
+                                                          branch_hits);
                         theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), amrex::Real(100.0) * pres_array(i,j,k), rdOcp);
                     }
                 }
@@ -926,6 +1063,7 @@ private:
     {
         if (sc.moisture_type == MoistureType::SAM_NoIce ||
             sc.moisture_type == MoistureType::SAM_NoPrecip_NoIce) {
+            sam_bfb_accumulate_hit(m_branch_hits_host, k_icefall_noop, 1);
             return;
         }
 
@@ -941,6 +1079,7 @@ private:
         auto qn = mic_fab_vars[MicVar::qn];
         auto qt = mic_fab_vars[MicVar::qt];
         auto rho = mic_fab_vars[MicVar::rho];
+        amrex::Long* branch_hits = m_branch_hits_device.data();
 
         amrex::MultiFab fz;
         const amrex::IntVect ng = qcl->nGrowVect();
@@ -960,12 +1099,15 @@ private:
                 amrex::Real rho_avg;
                 amrex::Real qci_avg;
                 if (k == k_lo) {
+                    sam_bfb_record_hit(branch_hits, k_icefall_bottom_face);
                     rho_avg = rho_array(i,j,k);
                     qci_avg = qci_array(i,j,k);
                 } else if (k == k_hi + 1) {
+                    sam_bfb_record_hit(branch_hits, k_icefall_top_face);
                     rho_avg = rho_array(i,j,k-1);
                     qci_avg = qci_array(i,j,k-1);
                 } else {
+                    sam_bfb_record_hit(branch_hits, k_icefall_interior_face);
                     rho_avg = myhalf * (rho_array(i,j,k-1) + rho_array(i,j,k));
                     qci_avg = myhalf * (qci_array(i,j,k-1) + qci_array(i,j,k));
                 }
@@ -1023,6 +1165,9 @@ private:
                 amrex::ParallelFor(tbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
                 {
                     const amrex::Real dJinv = (dJ_array) ? one / dJ_array(i,j,k) : one;
+                    if (dJ_array) {
+                        sam_bfb_record_hit(branch_hits, k_icefall_detj_present);
+                    }
                     amrex::Real dqi = dJinv * (one / rho_array(i,j,k)) * (fz_array(i,j,k+1) - fz_array(i,j,k)) * coef;
                     dqi = std::max(-qci_array(i,j,k), dqi);
                     qci_array(i,j,k) += dqi;
@@ -1035,7 +1180,10 @@ private:
 
     void Precip (const SolverChoice& sc)
     {
-        if (sc.moisture_type == MoistureType::SAM_NoPrecip_NoIce) { return; }
+        if (sc.moisture_type == MoistureType::SAM_NoPrecip_NoIce) {
+            sam_bfb_accumulate_hit(m_branch_hits_host, k_precip_noop, 1);
+            return;
+        }
 
         const amrex::Real powr1 = (three + b_rain) / amrex::Real(4.0);
         const amrex::Real powr2 = (amrex::Real(5.0) + b_rain) / amrex::Real(8.0);
@@ -1063,6 +1211,7 @@ private:
         const amrex::Real rdOcp = m_rdOcp;
         const amrex::Real eps = std::numeric_limits<amrex::Real>::epsilon();
         const amrex::Real dtn = dt;
+        amrex::Long* branch_hits = m_branch_hits_device.data();
 
         int SAM_moisture_type = 1;
         if (sc.moisture_type == MoistureType::SAM_NoIce) {
@@ -1110,6 +1259,16 @@ private:
                 amrex::Real accrcr, accrcs, accris, accrcg, accrig;
 
                 if (qn_array(i,j,k) + qp_array(i,j,k) > zero) {
+                    const bool has_cloud = qn_array(i,j,k) > zero;
+                    const bool has_precip = qp_array(i,j,k) > zero;
+                    if (has_cloud && !has_precip) {
+                        sam_bfb_record_hit(branch_hits, k_precip_cloud_only);
+                    } else if (!has_cloud && has_precip) {
+                        sam_bfb_record_hit(branch_hits, k_precip_only);
+                    } else if (has_cloud && has_precip) {
+                        sam_bfb_record_hit(branch_hits, k_precip_cloud_and_precip);
+                    }
+
                     if (SAM_moisture_type == 2) {
                         omn = amrex::Real(1.0);
                         omp = amrex::Real(1.0);
@@ -1135,16 +1294,37 @@ private:
 
                         auto_r = (qcc > qcw0) ? alphaelq : zero;
                         autos = (qii > qci0) ? betaelq * coefice_t(k) : zero;
+                        if (auto_r > zero) {
+                            sam_bfb_record_hit(branch_hits, k_precip_water_autoconversion_on);
+                        } else {
+                            sam_bfb_record_hit(branch_hits, k_precip_water_autoconversion_off);
+                        }
+                        if (SAM_moisture_type == 1) {
+                            if (autos > zero) {
+                                sam_bfb_record_hit(branch_hits, k_precip_ice_autoconversion_on);
+                            } else {
+                                sam_bfb_record_hit(branch_hits, k_precip_ice_autoconversion_off);
+                            }
+                        }
                         if (omp > amrex::Real(0.001)) {
                             accrcr = accrrc_t(k);
+                            sam_bfb_record_hit(branch_hits, k_precip_rain_accretion_on);
+                        } else {
+                            sam_bfb_record_hit(branch_hits, k_precip_rain_accretion_off);
                         }
                         if (omp < amrex::Real(0.999) && omg < amrex::Real(0.999)) {
                             accrcs = accrsc_t(k);
                             accris = accrsi_t(k);
+                            sam_bfb_record_hit(branch_hits, k_precip_snow_accretion_on);
+                        } else {
+                            sam_bfb_record_hit(branch_hits, k_precip_snow_accretion_off);
                         }
                         if (omp < amrex::Real(0.999) && omg > amrex::Real(0.001)) {
                             accrcg = accrgc_t(k);
                             accrig = accrgi_t(k);
+                            sam_bfb_record_hit(branch_hits, k_precip_graupel_accretion_on);
+                        } else {
+                            sam_bfb_record_hit(branch_hits, k_precip_graupel_accretion_off);
                         }
 
                         dqca = dtn * auto_r * (qcc - qcw0);
@@ -1159,6 +1339,12 @@ private:
                         dqi = dqia + dpsi + dpgi;
                         const amrex::Real scalec = std::min(qcl_array(i,j,k), dqc) / (dqc + eps);
                         const amrex::Real scalei = std::min(qci_array(i,j,k), dqi) / (dqi + eps);
+                        if (scalec < one) {
+                            sam_bfb_record_hit(branch_hits, k_precip_sink_limited_cloud_water);
+                        }
+                        if (scalei < one) {
+                            sam_bfb_record_hit(branch_hits, k_precip_sink_limited_cloud_ice);
+                        }
                         dqca *= scalec;
                         dprc *= scalec;
                         dpsc *= scalec;
@@ -1191,6 +1377,7 @@ private:
                     erf_qsati(tabs_array(i,j,k), pres_array(i,j,k), qsati);
                     qsat = qsatw * omn + qsati * (one - omn);
                     if ((qp_array(i,j,k) > zero) && (qv_array(i,j,k) < qsat)) {
+                        sam_bfb_record_hit(branch_hits, k_precip_evaporation_on);
                         dqpr = evapr1_t(k) * std::sqrt(qpr) + evapr2_t(k) * std::pow(qpr, powr2);
                         dqps = evaps1_t(k) * std::sqrt(qps) + evaps2_t(k) * std::pow(qps, pows2);
                         dqpg = evapg1_t(k) * std::sqrt(qpg) + evapg2_t(k) * std::pow(qpg, powg2);
@@ -1198,6 +1385,9 @@ private:
                         dqpr *= dtn * (one - qv_array(i,j,k) / qsat);
                         dqps *= dtn * (one - qv_array(i,j,k) / qsat);
                         dqpg *= dtn * (one - qv_array(i,j,k) / qsat);
+                        if (dqpr > qpr_array(i,j,k) || dqps > qps_array(i,j,k) || dqpg > qpg_array(i,j,k)) {
+                            sam_bfb_record_hit(branch_hits, k_precip_evaporation_species_limited);
+                        }
 
                         dqpr = std::min(qpr_array(i,j,k), dqpr);
                         dqps = std::min(qps_array(i,j,k), dqps);
@@ -1214,6 +1404,8 @@ private:
 
                         tabs_array(i,j,k) -= fac_cond * dqpr + fac_sub * (dqps + dqpg);
                         theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), amrex::Real(100.0) * pres_array(i,j,k), rdOcp);
+                    } else if (qp_array(i,j,k) > zero) {
+                        sam_bfb_record_hit(branch_hits, k_precip_evaporation_off);
                     }
                 }
             });
@@ -1222,7 +1414,10 @@ private:
 
     void PrecipFall (const SolverChoice& sc)
     {
-        if (sc.moisture_type == MoistureType::SAM_NoPrecip_NoIce) { return; }
+        if (sc.moisture_type == MoistureType::SAM_NoPrecip_NoIce) {
+            sam_bfb_accumulate_hit(m_branch_hits_host, k_precipfall_noop, 1);
+            return;
+        }
 
         const amrex::Real rho_0 = amrex::Real(1.29);
         const amrex::Real gamr3 = erf_gammafff(amrex::Real(4.0) + b_rain);
@@ -1249,6 +1444,7 @@ private:
         auto rain_accum = mic_fab_vars[MicVar::rain_accum];
         auto snow_accum = mic_fab_vars[MicVar::snow_accum];
         auto graup_accum = mic_fab_vars[MicVar::graup_accum];
+        amrex::Long* branch_hits = m_branch_hits_device.data();
 
         amrex::MultiFab fz;
         fz.define(convert(tabs->boxArray(), amrex::IntVect(0,0,1)), tabs->DistributionMap(), 1, tabs->nGrowVect());
@@ -1271,14 +1467,17 @@ private:
                 amrex::Real tab_avg;
                 amrex::Real qp_avg;
                 if (k == k_lo) {
+                    sam_bfb_record_hit(branch_hits, k_precipfall_bottom_face);
                     rho_avg = rho_array(i,j,k);
                     tab_avg = tabs_array(i,j,k);
                     qp_avg = qp_array(i,j,k);
                 } else if (k == k_hi + 1) {
+                    sam_bfb_record_hit(branch_hits, k_precipfall_top_face);
                     rho_avg = rho_array(i,j,k-1);
                     tab_avg = tabs_array(i,j,k-1);
                     qp_avg = qp_array(i,j,k-1);
                 } else {
+                    sam_bfb_record_hit(branch_hits, k_precipfall_interior_face);
                     rho_avg = myhalf * (rho_array(i,j,k-1) + rho_array(i,j,k));
                     tab_avg = myhalf * (tabs_array(i,j,k-1) + tabs_array(i,j,k));
                     qp_avg = myhalf * (qp_array(i,j,k-1) + qp_array(i,j,k));
@@ -1298,9 +1497,23 @@ private:
                     const amrex::Real qrr = omp * qp_avg;
                     const amrex::Real qss = (one - omp) * (one - omg) * qp_avg;
                     const amrex::Real qgg = (one - omp) * omg * qp_avg;
+                    const amrex::Real rain_flux = omp * vrain * std::pow(rho_avg * qrr, one + crain);
+                    const amrex::Real snow_flux = (one - omp) * (one - omg) * vsnow * std::pow(rho_avg * qss, one + csnow);
+                    const amrex::Real graupel_flux = (one - omp) * omg * vgrau * std::pow(rho_avg * qgg, one + cgrau);
+                    if (rain_flux > zero) {
+                        sam_bfb_record_hit(branch_hits, k_precipfall_nonzero_rain_flux);
+                    }
+                    if (snow_flux > zero) {
+                        sam_bfb_record_hit(branch_hits, k_precipfall_nonzero_snow_flux);
+                    }
+                    if (graupel_flux > zero) {
+                        sam_bfb_record_hit(branch_hits, k_precipfall_nonzero_graupel_flux);
+                    }
                     Pprecip = omp * vrain * std::pow(rho_avg * qrr, one + crain)
                             + (one - omp) * ((one - omg) * vsnow * std::pow(rho_avg * qss, one + csnow)
                                            + omg * vgrau * std::pow(rho_avg * qgg, one + cgrau));
+                } else {
+                    sam_bfb_record_hit(branch_hits, k_precipfall_zero_flux_below_threshold);
                 }
                 fz_array(i,j,k) = Pprecip * std::sqrt(rho_0 / rho_avg);
             });
@@ -1378,6 +1591,15 @@ private:
                     fz_array(i,j,k) = Pprecip * std::sqrt(rho_0 / rho_avg);
 
                     if (k == k_lo) {
+                        if (rho_avg * (omp * qp_avg) * vrain * dtn / rhor > zero) {
+                            sam_bfb_record_hit(branch_hits, k_precipfall_surface_rain_accum);
+                        }
+                        if (rho_avg * (one - omp) * (one - omg) * qp_avg * vsnow * dtn / rhos > zero) {
+                            sam_bfb_record_hit(branch_hits, k_precipfall_surface_snow_accum);
+                        }
+                        if (rho_avg * (one - omp) * omg * qp_avg * vgrau * dtn / rhog > zero) {
+                            sam_bfb_record_hit(branch_hits, k_precipfall_surface_graupel_accum);
+                        }
                         rain_accum_array(i,j,k) = rain_accum_array(i,j,k) + rho_avg * (omp * qp_avg) * vrain * dtn / rhor * amrex::Real(1000.0);
                         snow_accum_array(i,j,k) = snow_accum_array(i,j,k) + rho_avg * (one - omp) * (one - omg) * qp_avg * vsnow * dtn / rhos * amrex::Real(1000.0);
                         graup_accum_array(i,j,k) = graup_accum_array(i,j,k) + rho_avg * (one - omp) * omg * qp_avg * vgrau * dtn / rhog * amrex::Real(1000.0);
@@ -1387,6 +1609,9 @@ private:
                 amrex::ParallelFor(tbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
                 {
                     const amrex::Real dJinv = (dJ_array) ? one / dJ_array(i,j,k) : one;
+                    if (dJ_array) {
+                        sam_bfb_record_hit(branch_hits, k_precipfall_detj_present);
+                    }
                     const amrex::Real dqp = dJinv * (one / rho_array(i,j,k)) * (fz_array(i,j,k+1) - fz_array(i,j,k)) * coef;
                     amrex::Real omp;
                     amrex::Real omg;
@@ -1396,6 +1621,12 @@ private:
                     } else {
                         omp = std::max(amrex::Real(0.0), std::min(amrex::Real(1.0), (tabs_array(i,j,k) - tprmin) * a_pr));
                         omg = std::max(amrex::Real(0.0), std::min(amrex::Real(1.0), (tabs_array(i,j,k) - tgrmin) * a_gr));
+                    }
+
+                    if (qpr_array(i,j,k) + dqp * omp < zero ||
+                        qps_array(i,j,k) + dqp * (one - omp) * (one - omg) < zero ||
+                        qpg_array(i,j,k) + dqp * (one - omp) * omg < zero) {
+                        sam_bfb_record_hit(branch_hits, k_precipfall_nonnegative_clipping);
                     }
 
                     qpr_array(i,j,k) = std::max(amrex::Real(0.0), qpr_array(i,j,k) + dqp * omp);
@@ -1442,6 +1673,8 @@ private:
     amrex::TableData<amrex::Real, 1> rho1d;
     amrex::TableData<amrex::Real, 1> pres1d;
     amrex::TableData<amrex::Real, 1> tabs1d;
+    SAMBFBBranchHits m_branch_hits_host;
+    amrex::Gpu::DeviceVector<amrex::Long> m_branch_hits_device;
 };
 
 template <typename SamType>

@@ -1,21 +1,21 @@
 # SAM BFB Coverage Ledger
 
-This ledger documents the exact-comparison GTest cases that drive the frozen
-current-behavior SAM reference path and the production SAM path through the
-same public flow:
+The SAM BFB tests drive the frozen current-behavior reference path and the
+production SAM path through the same public flow:
 
 - `Init`
 - `Copy_State_to_Micro`
 - `Advance`
 - `Copy_Micro_to_State`
 
-Each listed case checks exact equality for:
+Every case still checks exact equality for:
 
-- conserved `rho theta`
-- conserved `qv`, `qc`, `qi`, `qr`, `qs`, `qg`
-- `rain_accum`
-- `snow_accum`
-- `graup_accum`
+- conserved `rho theta`, `qv`, `qc`, `qi`, `qr`, `qs`, `qg`
+- `rain_accum`, `snow_accum`, `graup_accum`
+
+The conserved-state comparison now includes the grown region for `rho theta`
+and `qv` through `qg`. The `qmoist` accumulators remain valid-cell-only because
+this harness does not initialize or fill their ghost cells.
 
 ## Cases
 
@@ -25,57 +25,56 @@ Each listed case checks exact equality for:
 - `FullSAMPrecipMatrixPublicFlowExact`
 - `FullSAMSedimentationDetJColumnPublicFlowExact`
 
-## Branch And Option Checklist
+## Executable Branch Hits
 
-- `SAM_NoPrecip_NoIce`: `ShocNoPrecipNoIcePublicFlowExact`
-- `SAM_NoIce`: `NoIceRainMatrixPublicFlowExact`
-- `SAM`: `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `cloud_noop`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `cloud_t_bgmin_or_less`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_t_between_bgmin_bgmax`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_t_bgmax_or_greater`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_qt_gt_qsat`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_qt_le_qsat`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_evap_all_then_recheck`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_newton`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_condensate_limiter`: `FullSAMCloudMatrixPublicFlowExact`
+- `icefall_noop`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`
+- `icefall_bottom_face`, `icefall_interior_face`, `icefall_top_face`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `icefall_detj_present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precip_noop`: `ShocNoPrecipNoIcePublicFlowExact`
+- `precip_cloud_only`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_only`, `precip_cloud_and_precip`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_water_autoconversion_off`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_water_autoconversion_on`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_ice_autoconversion_off`, `precip_ice_autoconversion_on`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_rain_accretion_off`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_rain_accretion_on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_snow_accretion_off`, `precip_snow_accretion_on`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_graupel_accretion_off`, `precip_graupel_accretion_on`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_sink_limited_cloud_water`, `precip_sink_limited_cloud_ice`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_evaporation_off`, `precip_evaporation_on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `precipfall_noop`: `ShocNoPrecipNoIcePublicFlowExact`
+- `precipfall_bottom_face`, `precipfall_interior_face`, `precipfall_top_face`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precipfall_detj_present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precipfall_zero_flux_below_threshold`: `NoIceRainMatrixPublicFlowExact`
+- `precipfall_nonzero_rain_flux`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precipfall_nonzero_snow_flux`, `precipfall_nonzero_graupel_flux`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precipfall_surface_rain_accum`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precipfall_surface_snow_accum`, `precipfall_surface_graupel_accum`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `precipfall_nonnegative_clipping`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+
+## Documented But Not Yet Asserted
+
+- `precip_evaporation_species_limited`: the current frozen matrices do not reliably drive the final `std::min` species clamp after Cloud and Precip coupling, so this remains documented but not asserted as a nonzero hit.
+
+## Configuration-Only Coverage
+
+These items are controlled directly by the test inputs rather than by runtime
+branch-hit counters:
+
+- `moisture_type = SAM_NoPrecip_NoIce`: `ShocNoPrecipNoIcePublicFlowExact`
+- `moisture_type = SAM_NoIce`: `NoIceRainMatrixPublicFlowExact`
+- `moisture_type = SAM`: `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `use_shoc = true`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `use_shoc = false`: `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `Cloud no-op`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `Cloud active`: `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `T <= tbgmin`: `FullSAMCloudMatrixPublicFlowExact`
-- `tbgmin < T < tbgmax`: `FullSAMCloudMatrixPublicFlowExact`
-- `T >= tbgmax`: `FullSAMCloudMatrixPublicFlowExact`
-- `qt > qsat`: `FullSAMCloudMatrixPublicFlowExact`
-- `qt <= qsat`: `FullSAMCloudMatrixPublicFlowExact`
-- `evaporate-all-then-recheck path`: `FullSAMCloudMatrixPublicFlowExact`
-- `Newton path`: `FullSAMCloudMatrixPublicFlowExact`
-- `condensate limiter path`: `FullSAMCloudMatrixPublicFlowExact`
-- `qn + qp == 0 no-op`: `ShocNoPrecipNoIcePublicFlowExact`
-- `cloud only`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `precip only`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `cloud + precip`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `water autoconversion off`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `water autoconversion on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `ice autoconversion off`: `FullSAMPrecipMatrixPublicFlowExact`
-- `ice autoconversion on`: `FullSAMPrecipMatrixPublicFlowExact`
-- `rain accretion off`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `rain accretion on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `snow accretion off`: `FullSAMPrecipMatrixPublicFlowExact`
-- `snow accretion on`: `FullSAMPrecipMatrixPublicFlowExact`
-- `graupel accretion off`: `FullSAMPrecipMatrixPublicFlowExact`
-- `graupel accretion on`: `FullSAMPrecipMatrixPublicFlowExact`
-- `sink-limited cloud water`: `FullSAMPrecipMatrixPublicFlowExact`
-- `sink-limited cloud ice`: `FullSAMPrecipMatrixPublicFlowExact`
-- `evaporation off`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `evaporation on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `evaporation species-limited`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `IceFall no-op`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`
-- `IceFall active`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `PrecipFall no-op`: `ShocNoPrecipNoIcePublicFlowExact`
-- `PrecipFall active`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `bottom face`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `interior face`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `top face`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `zero flux below threshold`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `nonzero rain flux`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `nonzero snow flux`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `nonzero graupel flux`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `surface rain accumulation`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `surface snow accumulation`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `surface graupel accumulation`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `nonnegative clipping`: `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `detJ absent`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
 - `detJ present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `real_width = 0`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`

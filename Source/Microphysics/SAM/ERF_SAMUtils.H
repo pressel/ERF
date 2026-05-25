@@ -52,15 +52,6 @@ struct SAMFaceState {
     amrex::Real qp_avg{zero};
 };
 
-struct SAMSedimentationFluxes {
-    amrex::Real omp{one};
-    amrex::Real omg{zero};
-    amrex::Real rain_flux{zero};
-    amrex::Real snow_flux{zero};
-    amrex::Real graupel_flux{zero};
-    amrex::Real total_flux{zero};
-};
-
 struct SAMSurfaceAccumulation {
     amrex::Real rain{zero};
     amrex::Real snow{zero};
@@ -413,8 +404,8 @@ int sam_substep_count_from_flux_current_behavior (const amrex::Real reduced_flux
                                                   const amrex::Real dt,
                                                   const amrex::Real dz) noexcept
 {
-    return static_cast<int>(std::ceil((reduced_flux + std::numeric_limits<amrex::Real>::epsilon())
-                                      * (dt / dz) / myhalf));
+    // MUST MATCH: SAM::CFL_MAX.
+    return static_cast<int>(std::ceil(reduced_flux * (dt / dz) / myhalf));
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -425,36 +416,6 @@ amrex::Real sam_sedimentation_tendency_current_behavior (const amrex::Real fz_hi
                                                          const amrex::Real coef) noexcept
 {
     return dJinv * (one / rho) * (fz_hi - fz_lo) * coef;
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-SAMSedimentationFluxes sam_precip_mass_flux_current_behavior (const amrex::Real rho_avg,
-                                                              const amrex::Real qp_avg,
-                                                              const amrex::Real tabs_avg,
-                                                              const int SAM_moisture_type,
-                                                              const amrex::Real vrain,
-                                                              const amrex::Real vsnow,
-                                                              const amrex::Real vgrau) noexcept
-{
-    SAMSedimentationFluxes result{};
-    result.omp = sam_precip_rain_fraction_current_behavior(SAM_moisture_type, tabs_avg);
-    result.omg = sam_graupel_fraction_current_behavior(SAM_moisture_type, tabs_avg);
-
-    if (qp_avg <= qp_threshold) {
-        return result;
-    }
-
-    const amrex::Real qrr = result.omp * qp_avg;
-    const amrex::Real qss = (one - result.omp) * (one - result.omg) * qp_avg;
-    const amrex::Real qgg = (one - result.omp) * result.omg * qp_avg;
-    const amrex::Real snow_inner = (one - result.omg) * vsnow * std::pow(rho_avg * qss, one + csnow);
-    const amrex::Real graupel_inner = result.omg * vgrau * std::pow(rho_avg * qgg, one + cgrau);
-
-    result.rain_flux = result.omp * vrain * std::pow(rho_avg * qrr, one + crain);
-    result.snow_flux = (one - result.omp) * snow_inner;
-    result.graupel_flux = (one - result.omp) * graupel_inner;
-    result.total_flux = result.rain_flux + (one - result.omp) * (snow_inner + graupel_inner);
-    return result;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
