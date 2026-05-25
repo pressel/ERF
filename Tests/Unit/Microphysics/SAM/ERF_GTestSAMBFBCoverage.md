@@ -23,7 +23,12 @@ this harness does not initialize or fill their ghost cells.
 - `NoIceRainMatrixPublicFlowExact`
 - `FullSAMCloudMatrixPublicFlowExact`
 - `FullSAMPrecipMatrixPublicFlowExact`
+- `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
 - `FullSAMSedimentationDetJColumnPublicFlowExact`
+
+## Predicate Checks
+
+- `PrecipSinkLimitedActualCapPredicates`: executable checks for the exact `dqc > qcl` and `dqi > qci` sink-limit predicates now used by the frozen reference branch-hit recorder
 
 ## Executable Branch Hits
 
@@ -35,11 +40,13 @@ this harness does not initialize or fill their ghost cells.
 - `cloud_qt_le_qsat`: `FullSAMCloudMatrixPublicFlowExact`
 - `cloud_evap_all_then_recheck`: `FullSAMCloudMatrixPublicFlowExact`
 - `cloud_newton`: `FullSAMCloudMatrixPublicFlowExact`
-- `cloud_condensate_limiter`: `FullSAMCloudMatrixPublicFlowExact`
+- `cloud_condensate_limiter`: `FullSAMCloudMatrixPublicFlowExact` exercises the actual condensate clamp, not merely Newton entry
 - `icefall_noop`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`
 - `icefall_bottom_face`, `icefall_interior_face`, `icefall_top_face`: `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `icefall_detj_present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `icefall_nonnegative_clipping`: `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `precip_noop`: `ShocNoPrecipNoIcePublicFlowExact`
+- `precip_work_noop`: `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
 - `precip_cloud_only`: `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_only`, `precip_cloud_and_precip`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_water_autoconversion_off`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
@@ -49,8 +56,9 @@ this harness does not initialize or fill their ghost cells.
 - `precip_rain_accretion_on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_snow_accretion_off`, `precip_snow_accretion_on`: `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_graupel_accretion_off`, `precip_graupel_accretion_on`: `FullSAMPrecipMatrixPublicFlowExact`
-- `precip_sink_limited_cloud_water`, `precip_sink_limited_cloud_ice`: `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_sink_limited_cloud_water`, `precip_sink_limited_cloud_ice`: `PrecipSinkLimitedActualCapPredicates` exercise the exact pre-scale cap predicates used by the frozen reference branch-hit logic
 - `precip_evaporation_off`, `precip_evaporation_on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `precip_evaporation_species_limited`: `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
 - `precipfall_noop`: `ShocNoPrecipNoIcePublicFlowExact`
 - `precipfall_bottom_face`, `precipfall_interior_face`, `precipfall_top_face`: `NoIceRainMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `precipfall_detj_present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
@@ -61,10 +69,6 @@ this harness does not initialize or fill their ghost cells.
 - `precipfall_surface_snow_accum`, `precipfall_surface_graupel_accum`: `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `precipfall_nonnegative_clipping`: `FullSAMSedimentationDetJColumnPublicFlowExact`
 
-## Documented But Not Yet Asserted
-
-- `precip_evaporation_species_limited`: the current frozen matrices do not reliably drive the final `std::min` species clamp after Cloud and Precip coupling, so this remains documented but not asserted as a nonzero hit.
-
 ## Configuration-Only Coverage
 
 These items are controlled directly by the test inputs rather than by runtime
@@ -72,12 +76,12 @@ branch-hit counters:
 
 - `moisture_type = SAM_NoPrecip_NoIce`: `ShocNoPrecipNoIcePublicFlowExact`
 - `moisture_type = SAM_NoIce`: `NoIceRainMatrixPublicFlowExact`
-- `moisture_type = SAM`: `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `moisture_type = SAM`: `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `use_shoc = true`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `use_shoc = false`: `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
-- `detJ absent`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `use_shoc = false`: `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
+- `detJ absent`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
 - `detJ present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `real_width = 0`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `real_width = 0`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `real_width > 0`: `NoIceRainMatrixPublicFlowExact`
 - `one-column vertical case`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `multi-cell horizontal case`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
+- `multi-cell horizontal case`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`

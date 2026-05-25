@@ -274,9 +274,9 @@ inline void fill_full_sam_cloud_matrix_state_portable (amrex::MultiFab& cons)
                                                  amrex::Real(5.0e-4), amrex::Real(0.0),
                                                  amrex::Real(0.0), amrex::Real(0.0));
                 } else if (selector == 2) {
-                    state = make_primitive_state(tbgmax + amrex::Real(8.0), amrex::Real(840.0),
-                                                 amrex::Real(8.0e-3), amrex::Real(6.0e-4),
-                                                 amrex::Real(4.0e-4), amrex::Real(0.0),
+                    state = make_primitive_state(tbgmax + amrex::Real(0.01), amrex::Real(840.0),
+                                                 amrex::Real(5.0e-4), amrex::Real(0.0),
+                                                 amrex::Real(8.0e-3), amrex::Real(0.0),
                                                  amrex::Real(0.0), amrex::Real(0.0));
                 } else if (selector == 3) {
                     state = make_primitive_state((tbgmin + tbgmax) * amrex::Real(0.5), amrex::Real(780.0),
@@ -284,8 +284,8 @@ inline void fill_full_sam_cloud_matrix_state_portable (amrex::MultiFab& cons)
                                                  amrex::Real(2.5e-4), amrex::Real(0.0),
                                                  amrex::Real(0.0), amrex::Real(0.0));
                 } else if (selector == 4) {
-                    state = make_primitive_state(tbgmax + amrex::Real(4.0), amrex::Real(860.0),
-                                                 amrex::Real(7.2e-3), amrex::Real(2.0e-4),
+                    state = make_primitive_state(tbgmax + amrex::Real(6.0), amrex::Real(860.0),
+                                                 amrex::Real(1.0e-8), amrex::Real(1.0e-8),
                                                  amrex::Real(0.0), amrex::Real(0.0),
                                                  amrex::Real(0.0), amrex::Real(0.0));
                 } else if (selector == 5) {
@@ -299,9 +299,9 @@ inline void fill_full_sam_cloud_matrix_state_portable (amrex::MultiFab& cons)
                                                  amrex::Real(1.2e-3), amrex::Real(0.0),
                                                  amrex::Real(0.0), amrex::Real(0.0));
                 } else {
-                    state = make_primitive_state(tbgmax - amrex::Real(1.0), amrex::Real(815.0),
-                                                 amrex::Real(3.2e-3), amrex::Real(2.0e-5),
-                                                 amrex::Real(1.0e-5), amrex::Real(0.0),
+                    state = make_primitive_state(tbgmin - amrex::Real(0.01), amrex::Real(815.0),
+                                                 amrex::Real(6.0e-4), amrex::Real(8.0e-3),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
                                                  amrex::Real(0.0), amrex::Real(0.0));
                 }
                 set_conserved_cell(arr, i, j, k, state);
@@ -350,15 +350,61 @@ inline void fill_full_sam_precip_matrix_state_portable (amrex::MultiFab& cons)
                                                  amrex::Real(0.0), amrex::Real(2.5e-4),
                                                  amrex::Real(2.0e-3), amrex::Real(5.0e-4));
                 } else if (selector == 6) {
-                    state = make_primitive_state(tgrmin + amrex::Real(6.0), amrex::Real(790.0),
-                                                 amrex::Real(8.0e-4), amrex::Real(1.0e-4),
-                                                 amrex::Real(2.0e-4), amrex::Real(1.0e-4),
-                                                 amrex::Real(4.0e-4), amrex::Real(2.5e-3));
+                    state = make_primitive_state(amrex::Real(300.0), amrex::Real(900.0),
+                                                 amrex::Real(1.0e-5), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0));
                 } else {
                     state = make_primitive_state(tbgmax - amrex::Real(4.0), amrex::Real(830.0),
                                                  amrex::Real(1.0e-3), qcw0 + amrex::Real(8.0e-4),
                                                  qci0 + amrex::Real(9.0e-4), amrex::Real(9.0e-4),
                                                  amrex::Real(8.0e-4), amrex::Real(7.0e-4));
+                }
+                set_conserved_cell(arr, i, j, k, state);
+            });
+        });
+    }
+}
+
+inline void fill_full_sam_precip_evap_limited_state_portable (amrex::MultiFab& cons)
+{
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                PrimitiveState state;
+                const int selector = (i + 2 * j + 3 * k) % 6;
+                if (selector == 0) {
+                    state = make_primitive_state(amrex::Real(289.0), amrex::Real(900.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(1.0e-14),
+                                                 amrex::Real(0.0), amrex::Real(0.0));
+                } else if (selector == 1) {
+                    state = make_primitive_state(tprmin - amrex::Real(6.0), amrex::Real(830.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(1.0e-14), amrex::Real(0.0));
+                } else if (selector == 2) {
+                    state = make_primitive_state(tgrmin + amrex::Real(2.0), amrex::Real(810.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(1.0e-14));
+                } else if (selector == 3) {
+                    state = make_primitive_state(amrex::Real(287.0), amrex::Real(870.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(4.0e-14),
+                                                 amrex::Real(0.0), amrex::Real(0.0));
+                } else if (selector == 4) {
+                    state = make_primitive_state(tgrmin - amrex::Real(3.0), amrex::Real(790.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(3.0e-14), amrex::Real(2.0e-14));
+                } else {
+                    state = make_primitive_state(amrex::Real(286.0), amrex::Real(880.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0),
+                                                 amrex::Real(0.0), amrex::Real(0.0));
                 }
                 set_conserved_cell(arr, i, j, k, state);
             });
@@ -377,12 +423,12 @@ inline void fill_full_sam_sedimentation_column_state_portable (amrex::MultiFab& 
                 if (k == 0) {
                     state = make_primitive_state(tprmin + amrex::Real(6.0), amrex::Real(900.0),
                                                  amrex::Real(9.0e-3), amrex::Real(0.0),
-                                                 amrex::Real(4.0e-4), amrex::Real(2.0e-3),
+                                                 amrex::Real(4.0e-3), amrex::Real(2.0e-3),
                                                  amrex::Real(8.0e-4), amrex::Real(0.0));
                 } else if (k == 1) {
                     state = make_primitive_state(tprmin - amrex::Real(3.0), amrex::Real(860.0),
                                                  amrex::Real(5.0e-3), amrex::Real(1.0e-4),
-                                                 amrex::Real(7.0e-4), amrex::Real(7.0e-4),
+                                                 amrex::Real(1.0e-6), amrex::Real(7.0e-4),
                                                  amrex::Real(1.6e-3), amrex::Real(3.0e-4));
                 } else if (k == 2) {
                     state = make_primitive_state(tgrmin + amrex::Real(2.0), amrex::Real(820.0),
@@ -421,7 +467,9 @@ inline void fill_full_sam_sedimentation_column_state_portable (amrex::MultiFab& 
     X(icefall_interior_face) \
     X(icefall_top_face) \
     X(icefall_detj_present) \
+    X(icefall_nonnegative_clipping) \
     X(precip_noop) \
+    X(precip_work_noop) \
     X(precip_cloud_only) \
     X(precip_only) \
     X(precip_cloud_and_precip) \
@@ -490,6 +538,20 @@ inline void sam_bfb_accumulate_hit (SAMBFBBranchHits& hits,
 }
 
 #undef SAM_BFB_BRANCH_HIT_FIELDS
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool sam_precip_cloud_water_sink_limit_binds (const amrex::Real available_cloud_water,
+                                              const amrex::Real requested_cloud_water_sink) noexcept
+{
+    return requested_cloud_water_sink > available_cloud_water;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool sam_precip_cloud_ice_sink_limit_binds (const amrex::Real available_cloud_ice,
+                                            const amrex::Real requested_cloud_ice_sink) noexcept
+{
+    return requested_cloud_ice_sink > available_cloud_ice;
+}
 
 inline amrex::Long component_mismatch_count (const amrex::MultiFab& lhs,
                                              const amrex::MultiFab& rhs,
@@ -778,12 +840,14 @@ private:
 
         qsat += dqsat * dtabs;
 
-        sam_bfb_record_hit(branch_hits, k_cloud_condensate_limiter);
         delta_qv = qv_array(i,j,k) - qsat;
         const amrex::Real unclamped_delta_qc = delta_qv * omn;
         const amrex::Real unclamped_delta_qi = delta_qv * (one - omn);
         delta_qc = std::max(-qc_array(i,j,k), unclamped_delta_qc);
         delta_qi = std::max(-qi_array(i,j,k), unclamped_delta_qi);
+        if (delta_qc != unclamped_delta_qc || delta_qi != unclamped_delta_qi) {
+            sam_bfb_record_hit(branch_hits, k_cloud_condensate_limiter);
+        }
 
         qv_array(i,j,k) = qsat;
         qc_array(i,j,k) += delta_qc;
@@ -918,7 +982,9 @@ public:
         });
     }
 
-private:
+    // CUDA extended device lambdas cannot be enclosed by private/protected
+    // member functions. These current-behavior process routines are public only
+    // to satisfy CUDA's extended-lambda access rule in this test-only reference.
     void Cloud (const SolverChoice& sc)
     {
         if (!m_do_cond) {
@@ -1168,8 +1234,12 @@ private:
                     if (dJ_array) {
                         sam_bfb_record_hit(branch_hits, k_icefall_detj_present);
                     }
-                    amrex::Real dqi = dJinv * (one / rho_array(i,j,k)) * (fz_array(i,j,k+1) - fz_array(i,j,k)) * coef;
-                    dqi = std::max(-qci_array(i,j,k), dqi);
+                    const amrex::Real raw_dqi = dJinv * (one / rho_array(i,j,k))
+                        * (fz_array(i,j,k+1) - fz_array(i,j,k)) * coef;
+                    if (raw_dqi < -qci_array(i,j,k)) {
+                        sam_bfb_record_hit(branch_hits, k_icefall_nonnegative_clipping);
+                    }
+                    amrex::Real dqi = std::max(-qci_array(i,j,k), raw_dqi);
                     qci_array(i,j,k) += dqi;
                     qn_array(i,j,k) += dqi;
                     qt_array(i,j,k) += dqi;
@@ -1337,14 +1407,14 @@ private:
 
                         dqc = dqca + dprc + dpsc + dpgc;
                         dqi = dqia + dpsi + dpgi;
-                        const amrex::Real scalec = std::min(qcl_array(i,j,k), dqc) / (dqc + eps);
-                        const amrex::Real scalei = std::min(qci_array(i,j,k), dqi) / (dqi + eps);
-                        if (scalec < one) {
+                        if (sam_precip_cloud_water_sink_limit_binds(qcl_array(i,j,k), dqc)) {
                             sam_bfb_record_hit(branch_hits, k_precip_sink_limited_cloud_water);
                         }
-                        if (scalei < one) {
+                        if (sam_precip_cloud_ice_sink_limit_binds(qci_array(i,j,k), dqi)) {
                             sam_bfb_record_hit(branch_hits, k_precip_sink_limited_cloud_ice);
                         }
+                        const amrex::Real scalec = std::min(qcl_array(i,j,k), dqc) / (dqc + eps);
+                        const amrex::Real scalei = std::min(qci_array(i,j,k), dqi) / (dqi + eps);
                         dqca *= scalec;
                         dprc *= scalec;
                         dpsc *= scalec;
@@ -1407,6 +1477,8 @@ private:
                     } else if (qp_array(i,j,k) > zero) {
                         sam_bfb_record_hit(branch_hits, k_precip_evaporation_off);
                     }
+                } else {
+                    sam_bfb_record_hit(branch_hits, k_precip_work_noop);
                 }
             });
         }
@@ -1637,6 +1709,8 @@ private:
             }
         }
     }
+
+private:
 
     int m_qmoist_size = 3;
     static constexpr amrex::Real CFL_MAX = myhalf;

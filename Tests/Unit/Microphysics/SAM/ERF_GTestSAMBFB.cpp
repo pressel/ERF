@@ -138,6 +138,7 @@ TEST(SAMBFB, FullSAMPrecipMatrixPublicFlowExact)
                                                    fill_full_sam_precip_matrix_state_portable);
 
     expect_branch_hit(hits.precip_cloud_only, "precip_cloud_only");
+    expect_branch_hit(hits.precip_work_noop, "precip_work_noop");
     expect_branch_hit(hits.precip_only, "precip_only");
     expect_branch_hit(hits.precip_cloud_and_precip, "precip_cloud_and_precip");
     expect_branch_hit(hits.precip_water_autoconversion_off, "precip_water_autoconversion_off");
@@ -150,10 +151,33 @@ TEST(SAMBFB, FullSAMPrecipMatrixPublicFlowExact)
     expect_branch_hit(hits.precip_snow_accretion_on, "precip_snow_accretion_on");
     expect_branch_hit(hits.precip_graupel_accretion_off, "precip_graupel_accretion_off");
     expect_branch_hit(hits.precip_graupel_accretion_on, "precip_graupel_accretion_on");
-    expect_branch_hit(hits.precip_sink_limited_cloud_water, "precip_sink_limited_cloud_water");
-    expect_branch_hit(hits.precip_sink_limited_cloud_ice, "precip_sink_limited_cloud_ice");
     expect_branch_hit(hits.precip_evaporation_off, "precip_evaporation_off");
     expect_branch_hit(hits.precip_evaporation_on, "precip_evaporation_on");
+}
+
+TEST(SAMBFB, PrecipSinkLimitedActualCapPredicates)
+{
+    EXPECT_TRUE(sam_precip_cloud_water_sink_limit_binds(amrex::Real(2.0e-4), amrex::Real(2.1e-4)));
+    EXPECT_FALSE(sam_precip_cloud_water_sink_limit_binds(amrex::Real(2.0e-4), amrex::Real(2.0e-4)));
+    EXPECT_FALSE(sam_precip_cloud_water_sink_limit_binds(amrex::Real(2.0e-4), amrex::Real(1.9e-4)));
+
+    EXPECT_TRUE(sam_precip_cloud_ice_sink_limit_binds(amrex::Real(3.0e-4), amrex::Real(3.1e-4)));
+    EXPECT_FALSE(sam_precip_cloud_ice_sink_limit_binds(amrex::Real(3.0e-4), amrex::Real(3.0e-4)));
+    EXPECT_FALSE(sam_precip_cloud_ice_sink_limit_binds(amrex::Real(3.0e-4), amrex::Real(2.9e-4)));
+}
+
+TEST(SAMBFB, FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact)
+{
+    const amrex::Geometry geom = make_geometry(3, 2, 2);
+    const SolverChoice sc = make_solver_choice(MoistureType::SAM, false);
+    const SAMBFBBranchHits hits = run_sam_bfb_case("FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact",
+                                                   geom, sc, 0, false, false,
+                                                   fill_full_sam_precip_evap_limited_state_portable);
+
+    expect_branch_hit(hits.precip_only, "precip_only");
+    expect_branch_hit(hits.precip_work_noop, "precip_work_noop");
+    expect_branch_hit(hits.precip_evaporation_on, "precip_evaporation_on");
+    expect_branch_hit(hits.precip_evaporation_species_limited, "precip_evaporation_species_limited");
 }
 
 TEST(SAMBFB, FullSAMSedimentationDetJColumnPublicFlowExact)
@@ -168,6 +192,7 @@ TEST(SAMBFB, FullSAMSedimentationDetJColumnPublicFlowExact)
     expect_branch_hit(hits.icefall_interior_face, "icefall_interior_face");
     expect_branch_hit(hits.icefall_top_face, "icefall_top_face");
     expect_branch_hit(hits.icefall_detj_present, "icefall_detj_present");
+    expect_branch_hit(hits.icefall_nonnegative_clipping, "icefall_nonnegative_clipping");
     expect_branch_hit(hits.precipfall_bottom_face, "precipfall_bottom_face");
     expect_branch_hit(hits.precipfall_interior_face, "precipfall_interior_face");
     expect_branch_hit(hits.precipfall_top_face, "precipfall_top_face");
