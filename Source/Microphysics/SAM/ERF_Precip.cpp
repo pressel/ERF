@@ -84,14 +84,8 @@ SAM::Precip (const SolverChoice& sc)
             Real qsat, qsatw, qsati;
 
             Real qcc, qii, qpr, qps, qpg;
-            Real dprc, dpsc, dpgc;
-            Real dpsi, dpgi;
-
             Real dqc, dqca, dqi, dqia, dqp;
             Real dqpr, dqps, dqpg;
-
-            Real auto_r, autos;
-            Real accrcr, accrcs, accris, accrcg, accrig;
 
             // Work to be done for autoc/accr or evap
             if (qn_array(i,j,k)+qp_array(i,j,k) > zero) {
@@ -144,12 +138,7 @@ SAM::Precip (const SolverChoice& sc)
                     // Partition formed precip componentss
                     source_terms = sam_partition_autoconverted_precip_current_behavior(source_terms, omp, omg);
                     dqca = source_terms.dqca;
-                    dprc = source_terms.dprc;
-                    dpsc = source_terms.dpsc;
-                    dpgc = source_terms.dpgc;
                     dqia = source_terms.dqia;
-                    dpsi = source_terms.dpsi;
-                    dpgi = source_terms.dpgi;
                     dqc = source_terms.dqc;
                     dqi = source_terms.dqi;
                     dqpr = source_terms.dqpr;

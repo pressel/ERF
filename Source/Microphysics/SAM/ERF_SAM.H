@@ -188,7 +188,7 @@ public:
         amrex::Real fff, dfff, dtabs;
         amrex::Real lstar, dlstar;
         amrex::Real lstarw, lstari;
-        amrex::Real delta_qv, delta_qc, delta_qi;
+        amrex::Real delta_qc, delta_qi;
 
         // Initial guess for temperature & pressure
         amrex::Real tabs = tabs_array(i,j,k);
@@ -257,7 +257,6 @@ public:
         const SAMCloudPhaseChange phase_change =
             sam_apply_condensate_limiter_current_behavior(qv_array(i,j,k), qsat,
                                                           qc_array(i,j,k), qi_array(i,j,k), omn);
-        delta_qv = phase_change.delta_qv;
         delta_qc = phase_change.delta_qc;
         delta_qi = phase_change.delta_qi;
 
