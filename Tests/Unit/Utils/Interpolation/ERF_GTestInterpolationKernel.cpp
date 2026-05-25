@@ -534,7 +534,7 @@ TEST(InterpolationKernel, LowerOrderSchemesIgnoreFarStencilSentinels)
     amrex::FArrayBox base_qty(stencil_box(), 1);
     amrex::FArrayBox modified_qty(stencil_box(), 1);
     fill_directional_qty(base_qty);
-    modified_qty.copy(base_qty);
+    fill_directional_qty(modified_qty);
     apply_far_sentinels(modified_qty);
 
     amrex::Gpu::DeviceVector<SentinelCase> device_cases(cases.size());
@@ -582,7 +582,7 @@ TEST(InterpolationKernel, FifthAndSixthOrderSchemesUseFarStencil)
     amrex::FArrayBox base_qty(stencil_box(), 1);
     amrex::FArrayBox modified_qty(stencil_box(), 1);
     fill_directional_qty(base_qty);
-    modified_qty.copy(base_qty);
+    fill_directional_qty(modified_qty);
     apply_far_sentinels(modified_qty);
 
     amrex::Gpu::DeviceVector<SentinelCase> device_cases(cases.size());
