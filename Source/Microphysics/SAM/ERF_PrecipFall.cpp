@@ -1,5 +1,6 @@
 #include "ERF_Constants.H"
 #include "ERF_SAM.H"
+#include "ERF_SAMUtils.H"
 #include "ERF_TileNoZ.H"
 #include <cmath>
 
@@ -15,7 +16,7 @@ using namespace amrex;
 void
 SAM::PrecipFall (const SolverChoice& sc)
 {
-    if(sc.moisture_type == MoistureType::SAM_NoPrecip_NoIce) return;
+    if (sam_is_no_precip(sc.moisture_type)) return;
 
     Real rho_0 = Real(1.29);
 
@@ -85,17 +86,11 @@ SAM::PrecipFall (const SolverChoice& sc)
 
             Real Pprecip = zero;
             if(qp_avg > qp_threshold) {
-                Real omp, omg;
-                if (SAM_moisture_type == 2) {
-                    omp = one;
-                    omg = zero;
-                } else {
-                    omp = std::max(Real(0),std::min(Real(1),(tab_avg-tprmin)*a_pr));
-                    omg = std::max(Real(0),std::min(Real(1),(tab_avg-tgrmin)*a_gr));
-                }
-                Real qrr = omp*qp_avg;
-                Real qss = (one-omp)*(one-omg)*qp_avg;
-                Real qgg = (one-omp)*(omg)*qp_avg;
+                const Real omp = sam_precip_rain_fraction_current_behavior(SAM_moisture_type, tab_avg);
+                const Real omg = sam_graupel_fraction_current_behavior(SAM_moisture_type, tab_avg);
+                const Real qrr = omp*qp_avg;
+                const Real qss = (one-omp)*(one-omg)*qp_avg;
+                const Real qgg = (one-omp)*(omg)*qp_avg;
                 Pprecip = omp*vrain*std::pow(rho_avg*qrr,one+crain)
                         + (one-omp)*( (one-omg)*vsnow*std::pow(rho_avg*qss,one+csnow)
                                     +      omg *vgrau*std::pow(rho_avg*qgg,one+cgrau) );
@@ -124,7 +119,7 @@ SAM::PrecipFall (const SolverChoice& sc)
                              return { ma_fz_arr[box_no](i,j,k) };
                          });
     wt_max = get<0>(max) + std::numeric_limits<Real>::epsilon();
-    n_substep = int( std::ceil(wt_max * coef / CFL_MAX) );
+    n_substep = sam_substep_count_from_flux_current_behavior(wt_max, dtn, m_dzmin);
     AMREX_ALWAYS_ASSERT(n_substep >= 1);
     coef /= Real(n_substep);
     dtn  /= Real(n_substep);
@@ -167,19 +162,13 @@ SAM::PrecipFall (const SolverChoice& sc)
                      qp_avg = myhalf*(  qp_array(i,j,k-1) +   qp_array(i,j,k));
                 }
 
+                const Real omp = sam_precip_rain_fraction_current_behavior(SAM_moisture_type, tab_avg);
+                const Real omg = sam_graupel_fraction_current_behavior(SAM_moisture_type, tab_avg);
                 Real Pprecip = zero;
                 if(qp_avg > qp_threshold) {
-                    Real omp, omg;
-                    if (SAM_moisture_type == 2) {
-                        omp = one;
-                        omg = zero;
-                    } else {
-                        omp = std::max(Real(0),std::min(Real(1),(tab_avg-tprmin)*a_pr));
-                        omg = std::max(Real(0),std::min(Real(1),(tab_avg-tgrmin)*a_gr));
-                    }
-                    Real qrr = omp*qp_avg;
-                    Real qss = (one-omp)*(one-omg)*qp_avg;
-                    Real qgg = (one-omp)*(omg)*qp_avg;
+                    const Real qrr = omp*qp_avg;
+                    const Real qss = (one-omp)*(one-omg)*qp_avg;
+                    const Real qgg = (one-omp)*(omg)*qp_avg;
                     Pprecip = omp*vrain*std::pow(rho_avg*qrr,one+crain)
                             + (one-omp)*( (one-omg)*vsnow*std::pow(rho_avg*qss,one+csnow)
                                         +      omg *vgrau*std::pow(rho_avg*qgg,one+cgrau) );
@@ -194,17 +183,13 @@ SAM::PrecipFall (const SolverChoice& sc)
                 fz_array(i,j,k) = Pprecip * std::sqrt(rho_0/rho_avg);
 
                 if(k==k_lo){
-                    Real omp, omg;
-                    if (SAM_moisture_type == 2) {
-                        omp = one;
-                        omg = zero;
-                    } else {
-                        omp = std::max(Real(0),std::min(Real(1),(tab_avg-tprmin)*a_pr));
-                        omg = std::max(Real(0),std::min(Real(1),(tab_avg-tgrmin)*a_gr));
-                    }
-                    rain_accum_array(i,j,k)  = rain_accum_array(i,j,k)  + rho_avg*(omp*qp_avg)*vrain*dtn/rhor*Real(1000.0); // Divide by rho_water and convert to mm
-                    snow_accum_array(i,j,k)  = snow_accum_array(i,j,k)  + rho_avg*(one-omp)*(one-omg)*qp_avg*vsnow*dtn/rhos*Real(1000.0); // Divide by rho_snow and convert to mm
-                    graup_accum_array(i,j,k) = graup_accum_array(i,j,k) + rho_avg*(one-omp)*(omg)*qp_avg*vgrau*dtn/rhog*Real(1000.0); // Divide by rho_graupel and convert to mm
+                    const SAMSurfaceAccumulation surface_accum =
+                        sam_surface_accumulation_current_behavior(rho_avg, qp_avg,
+                                                                  omp, omg,
+                                                                  vrain, vsnow, vgrau, dtn);
+                    rain_accum_array(i,j,k)  = rain_accum_array(i,j,k)  + surface_accum.rain;
+                    snow_accum_array(i,j,k)  = snow_accum_array(i,j,k)  + surface_accum.snow;
+                    graup_accum_array(i,j,k) = graup_accum_array(i,j,k) + surface_accum.graupel;
                 }
             });
 
@@ -217,15 +202,12 @@ SAM::PrecipFall (const SolverChoice& sc)
                 //==================================================
                 // Precipitating sedimentation (A19)
                 //==================================================
-                Real dqp = dJinv * (one/rho_array(i,j,k)) * ( fz_array(i,j,k+1) - fz_array(i,j,k) ) * coef;
-                Real omp, omg;
-                if (SAM_moisture_type == 2) {
-                    omp = one;
-                    omg = zero;
-                } else {
-                    omp = std::max(Real(0),std::min(Real(1),(tabs_array(i,j,k)-tprmin)*a_pr));
-                    omg = std::max(Real(0),std::min(Real(1),(tabs_array(i,j,k)-tgrmin)*a_gr));
-                }
+                Real dqp = sam_sedimentation_tendency_current_behavior(fz_array(i,j,k+1), fz_array(i,j,k),
+                                                                       rho_array(i,j,k), dJinv, coef);
+                const Real omp = sam_precip_rain_fraction_current_behavior(SAM_moisture_type,
+                                                                           tabs_array(i,j,k));
+                const Real omg = sam_graupel_fraction_current_behavior(SAM_moisture_type,
+                                                                       tabs_array(i,j,k));
 
                 qpr_array(i,j,k) = std::max(Real(0), qpr_array(i,j,k) + dqp*omp);
                 qps_array(i,j,k) = std::max(Real(0), qps_array(i,j,k) + dqp*(one-omp)*(one-omg));
