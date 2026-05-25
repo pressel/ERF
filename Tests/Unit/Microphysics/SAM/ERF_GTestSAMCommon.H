@@ -366,6 +366,37 @@ inline void fill_full_sam_precip_matrix_state_portable (amrex::MultiFab& cons)
     }
 }
 
+inline void fill_full_sam_precip_sink_limit_state_portable (amrex::MultiFab& cons)
+{
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.tilebox();
+        auto arr = cons.array(mfi);
+        run_and_sync([=] {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                PrimitiveState state;
+                const int selector = (i + 2 * j + 4 * k) % 3;
+                if (selector == 0) {
+                    state = make_primitive_state(tprmin + amrex::Real(4.0), amrex::Real(860.0),
+                                                 amrex::Real(7.0e-3), amrex::Real(2.0e-4),
+                                                 amrex::Real(0.0), amrex::Real(4.0e-1),
+                                                 amrex::Real(0.0), amrex::Real(0.0));
+                } else if (selector == 1) {
+                    state = make_primitive_state(tgrmin - amrex::Real(4.0), amrex::Real(800.0),
+                                                 amrex::Real(1.3e-3), amrex::Real(0.0),
+                                                 qci0 + amrex::Real(2.0e-5), amrex::Real(0.0),
+                                                 amrex::Real(5.0), amrex::Real(5.0));
+                } else {
+                    state = make_primitive_state(tbgmax - amrex::Real(2.0), amrex::Real(830.0),
+                                                 amrex::Real(1.0e-3), amrex::Real(2.0e-4),
+                                                 qci0 + amrex::Real(5.0e-5), amrex::Real(2.0e-1),
+                                                 amrex::Real(4.0), amrex::Real(4.0));
+                }
+                set_conserved_cell(arr, i, j, k, state);
+            });
+        });
+    }
+}
+
 inline void fill_full_sam_precip_evap_limited_state_portable (amrex::MultiFab& cons)
 {
     for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
@@ -587,7 +618,8 @@ inline amrex::Long scalar_mismatch_count (const amrex::MultiFab& lhs,
 }
 
 // Frozen reference copied from development @ b9247103a856e0552cf47f050e9a7c8b7846a96a
-// for the Phase 1 SAM BFB guard. Rebase this copy deliberately, not incidentally.
+// for the Phase 1 SAM BFB guard. BFB reference only. Do not use as a physics oracle.
+// Rebase this copy deliberately, not incidentally.
 class SAMCurrentBehaviorReference {
 public:
     using FabPtr = std::shared_ptr<amrex::MultiFab>;
@@ -1769,6 +1801,28 @@ inline void run_public_flow (SamType& sam,
         sam.Copy_State_to_Micro(cons);
         sam.Compute_Coefficients();
         sam.Advance(dt, sc);
+        sam.Copy_Micro_to_State(cons);
+    });
+}
+
+template <typename SamType>
+inline void run_public_precip_only_flow (SamType& sam,
+                                         SolverChoice& sc,
+                                         const amrex::Geometry& geom,
+                                         amrex::MultiFab& cons,
+                                         std::unique_ptr<amrex::MultiFab>& z_phys_nd,
+                                         std::unique_ptr<amrex::MultiFab>& detJ_cc,
+                                         const int real_width,
+                                         const amrex::Real dt = kDefaultDt)
+{
+    run_and_sync([&] {
+        sam.Define(sc);
+        sam.Set_RealWidth(real_width);
+        sam.Set_dzmin(geom.CellSize(2));
+        sam.Init(cons, cons.boxArray(), geom, dt, z_phys_nd, detJ_cc);
+        sam.Copy_State_to_Micro(cons);
+        sam.Compute_Coefficients();
+        sam.Precip(sc);
         sam.Copy_Micro_to_State(cons);
     });
 }

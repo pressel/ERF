@@ -56,7 +56,7 @@ this harness does not initialize or fill their ghost cells.
 - `precip_rain_accretion_on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_snow_accretion_off`, `precip_snow_accretion_on`: `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_graupel_accretion_off`, `precip_graupel_accretion_on`: `FullSAMPrecipMatrixPublicFlowExact`
-- `precip_sink_limited_cloud_water`, `precip_sink_limited_cloud_ice`: `PrecipSinkLimitedActualCapPredicates` exercise the exact pre-scale cap predicates used by the frozen reference branch-hit logic
+- `precip_sink_limited_cloud_water`, `precip_sink_limited_cloud_ice`: `FullSAMPrecipSinkLimitedPublicFlowExact`
 - `precip_evaporation_off`, `precip_evaporation_on`: `NoIceRainMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`
 - `precip_evaporation_species_limited`: `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
 - `precipfall_noop`: `ShocNoPrecipNoIcePublicFlowExact`
@@ -71,17 +71,20 @@ this harness does not initialize or fill their ghost cells.
 
 ## Configuration-Only Coverage
 
+The predicate check remains useful as a scalar guard for the exact pre-scale
+cap conditions used by the frozen reference branch-hit recorder.
+
 These items are controlled directly by the test inputs rather than by runtime
 branch-hit counters:
 
 - `moisture_type = SAM_NoPrecip_NoIce`: `ShocNoPrecipNoIcePublicFlowExact`
 - `moisture_type = SAM_NoIce`: `NoIceRainMatrixPublicFlowExact`
-- `moisture_type = SAM`: `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `moisture_type = SAM`: `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipSinkLimitedPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `use_shoc = true`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `use_shoc = false`: `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
-- `detJ absent`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
+- `use_shoc = false`: `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipSinkLimitedPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
+- `detJ absent`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipSinkLimitedPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
 - `detJ present`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `real_width = 0`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
+- `real_width = 0`: `ShocNoPrecipNoIcePublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipSinkLimitedPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`, `FullSAMSedimentationDetJColumnPublicFlowExact`
 - `real_width > 0`: `NoIceRainMatrixPublicFlowExact`
 - `one-column vertical case`: `FullSAMSedimentationDetJColumnPublicFlowExact`
-- `multi-cell horizontal case`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`
+- `multi-cell horizontal case`: `ShocNoPrecipNoIcePublicFlowExact`, `NoIceRainMatrixPublicFlowExact`, `FullSAMCloudMatrixPublicFlowExact`, `FullSAMPrecipMatrixPublicFlowExact`, `FullSAMPrecipSinkLimitedPublicFlowExact`, `FullSAMPrecipEvaporationSpeciesLimitedPublicFlowExact`

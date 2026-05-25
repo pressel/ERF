@@ -161,7 +161,8 @@ SAM::Precip (const SolverChoice& sc)
                     tabs_array(i,j,k) += fac_fus * ( dqca * (one - omp) - dqia * omp );
 
                     // Update theta
-                    theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), sam_mbar_to_pa(pres_array(i,j,k)), rdOcp);
+                    theta_array(i,j,k) = sam_theta_from_stored_mbar_converted_to_pa_current_behavior(tabs_array(i,j,k),
+                                                                                                      pres_array(i,j,k), rdOcp);
                 }
 
                 //==================================================
@@ -211,7 +212,8 @@ SAM::Precip (const SolverChoice& sc)
                     tabs_array(i,j,k) -= fac_cond * dqpr + fac_sub * (dqps + dqpg);
 
                     // Update theta
-                    theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), sam_mbar_to_pa(pres_array(i,j,k)), rdOcp);
+                    theta_array(i,j,k) = sam_theta_from_stored_mbar_converted_to_pa_current_behavior(tabs_array(i,j,k),
+                                                                                                      pres_array(i,j,k), rdOcp);
                 }
             }
         });

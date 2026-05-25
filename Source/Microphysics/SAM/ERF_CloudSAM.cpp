@@ -80,7 +80,8 @@ SAM::Cloud (const SolverChoice& sc)
             qcl_array(i,j,k) = phase_change.qcl;
             qci_array(i,j,k) = phase_change.qci;
             tabs_array(i,j,k) = phase_change.tabs;
-            theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), pres_array(i,j,k), rdOcp);
+            theta_array(i,j,k) = sam_theta_from_stored_pressure_as_pa_current_behavior(tabs_array(i,j,k),
+                                                                                       pres_array(i,j,k), rdOcp);
 
             // Saturation moisture fractions
             erf_qsatw(tabs_array(i,j,k), pres_array(i,j,k), qsatw);
@@ -99,7 +100,8 @@ SAM::Cloud (const SolverChoice& sc)
                                                   qn_array  , qt_array);
 
                 // Update theta
-                theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), sam_mbar_to_pa(pres_array(i,j,k)), rdOcp);
+                theta_array(i,j,k) = sam_theta_from_stored_mbar_converted_to_pa_current_behavior(tabs_array(i,j,k),
+                                                                                                  pres_array(i,j,k), rdOcp);
 
             //
             // We cannot blindly relax to qsat, but we can convert qc/qi -> qv.
@@ -125,7 +127,8 @@ SAM::Cloud (const SolverChoice& sc)
                 tabs_array(i,j,k) -= fac_cond * delta_qc + fac_sub * delta_qi;
 
                 // Update theta
-                theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), sam_mbar_to_pa(pres_array(i,j,k)), rdOcp);
+                theta_array(i,j,k) = sam_theta_from_stored_mbar_converted_to_pa_current_behavior(tabs_array(i,j,k),
+                                                                                                  pres_array(i,j,k), rdOcp);
 
                 // Verify assumption that qv > qsat does not occur
                 erf_qsatw(tabs_array(i,j,k), pres_array(i,j,k), qsatw);
@@ -142,7 +145,8 @@ SAM::Cloud (const SolverChoice& sc)
                                                       qn_array  , qt_array);
 
                     // Update theta
-                    theta_array(i,j,k) = getThgivenTandP(tabs_array(i,j,k), sam_mbar_to_pa(pres_array(i,j,k)), rdOcp);
+                    theta_array(i,j,k) = sam_theta_from_stored_mbar_converted_to_pa_current_behavior(tabs_array(i,j,k),
+                                                                                                      pres_array(i,j,k), rdOcp);
 
                 }
             }

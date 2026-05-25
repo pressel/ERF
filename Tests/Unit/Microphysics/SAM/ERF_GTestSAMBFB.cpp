@@ -76,6 +76,36 @@ SAMBFBBranchHits run_sam_bfb_case (const std::string& case_name,
     return reference.BranchHits();
 }
 
+template <typename FillStateFn>
+SAMBFBBranchHits run_sam_bfb_precip_only_case (const std::string& case_name,
+                                               const amrex::Geometry& geom,
+                                               SolverChoice sc,
+                                               const int real_width,
+                                               const bool use_detj,
+                                               const bool compressed_detj,
+                                               const FillStateFn& fill_state)
+{
+    amrex::MultiFab cons_reference;
+    amrex::MultiFab cons_production;
+    initialize_case(geom, fill_state, 1, cons_reference, cons_production);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_ref;
+    std::unique_ptr<amrex::MultiFab> z_phys_prod;
+    std::unique_ptr<amrex::MultiFab> detj_ref;
+    std::unique_ptr<amrex::MultiFab> detj_prod;
+    initialize_optional_detj(cons_reference, use_detj, compressed_detj, detj_ref);
+    initialize_optional_detj(cons_reference, use_detj, compressed_detj, detj_prod);
+
+    SAMCurrentBehaviorReference reference;
+    SAM production;
+
+    run_public_precip_only_flow(reference, sc, geom, cons_reference, z_phys_ref, detj_ref, real_width);
+    run_public_precip_only_flow(production, sc, geom, cons_production, z_phys_prod, detj_prod, real_width);
+
+    expect_exact_state_match(cons_reference, cons_production, case_name);
+    return reference.BranchHits();
+}
+
 } // namespace
 
 TEST(SAMBFB, ShocNoPrecipNoIcePublicFlowExact)
@@ -153,6 +183,18 @@ TEST(SAMBFB, FullSAMPrecipMatrixPublicFlowExact)
     expect_branch_hit(hits.precip_graupel_accretion_on, "precip_graupel_accretion_on");
     expect_branch_hit(hits.precip_evaporation_off, "precip_evaporation_off");
     expect_branch_hit(hits.precip_evaporation_on, "precip_evaporation_on");
+}
+
+TEST(SAMBFB, FullSAMPrecipSinkLimitedPublicFlowExact)
+{
+    const amrex::Geometry geom = make_geometry(3, 2, 2);
+    const SolverChoice sc = make_solver_choice(MoistureType::SAM, false);
+    const SAMBFBBranchHits hits = run_sam_bfb_precip_only_case("FullSAMPrecipSinkLimitedPublicFlowExact",
+                                                               geom, sc, 0, false, false,
+                                                               fill_full_sam_precip_sink_limit_state_portable);
+
+    expect_branch_hit(hits.precip_sink_limited_cloud_water, "precip_sink_limited_cloud_water");
+    expect_branch_hit(hits.precip_sink_limited_cloud_ice, "precip_sink_limited_cloud_ice");
 }
 
 TEST(SAMBFB, PrecipSinkLimitedActualCapPredicates)

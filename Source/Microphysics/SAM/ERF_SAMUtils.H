@@ -4,10 +4,13 @@
 #include <cmath>
 #include <limits>
 
+#include <AMReX_Array4.H>
 #include <AMReX_GpuQualifiers.H>
 
 #include "ERF_Constants.H"
 #include "ERF_DataStruct.H"
+#include "ERF_EOS.H"
+#include "ERF_IndexDefines.H"
 #include "ERF_MicrophysicsUtils.H"
 
 struct SAMPhaseFractions {
@@ -45,6 +48,48 @@ struct SAMPrecipSources {
     amrex::Real dqp{zero};
 };
 
+struct SAMPrimitiveCellCurrentBehavior {
+    amrex::Real rho{zero};
+    amrex::Real theta{zero};
+    amrex::Real tabs{zero};
+    amrex::Real pres_mbar{zero};
+    amrex::Real qv{zero};
+    amrex::Real qcl{zero};
+    amrex::Real qci{zero};
+    amrex::Real qn{zero};
+    amrex::Real qt{zero};
+    amrex::Real qpr{zero};
+    amrex::Real qps{zero};
+    amrex::Real qpg{zero};
+    amrex::Real qp{zero};
+};
+
+struct SAMCoefficientRowCurrentBehavior {
+    amrex::Real accrrc{zero};
+    amrex::Real accrsi{zero};
+    amrex::Real accrsc{zero};
+    amrex::Real coefice{zero};
+    amrex::Real evaps1{zero};
+    amrex::Real evaps2{zero};
+    amrex::Real accrgi{zero};
+    amrex::Real accrgc{zero};
+    amrex::Real evapg1{zero};
+    amrex::Real evapg2{zero};
+    amrex::Real evapr1{zero};
+    amrex::Real evapr2{zero};
+};
+
+struct SAMPrecipFaceStateCurrentBehavior {
+    amrex::Real rho_avg{zero};
+    amrex::Real tabs_avg{zero};
+    amrex::Real qp_avg{zero};
+    amrex::Real omp{one};
+    amrex::Real omg{zero};
+    amrex::Real qrr{zero};
+    amrex::Real qss{zero};
+    amrex::Real qgg{zero};
+};
+
 struct SAMFaceState {
     amrex::Real rho_avg{zero};
     amrex::Real tabs_avg{zero};
@@ -61,6 +106,7 @@ struct SAMSurfaceAccumulation {
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_mbar_to_pa (const amrex::Real pres_mbar) noexcept
 {
+    // SAM stores pressure in mbar. EOS and theta helpers expect Pa.
     return amrex::Real(100.0) * pres_mbar;
 }
 
@@ -68,6 +114,69 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_pa_to_mbar (const amrex::Real pres_pa) noexcept
 {
     return amrex::Real(0.01) * pres_pa;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_theta_from_stored_mbar_converted_to_pa_current_behavior (const amrex::Real tabs,
+                                                                         const amrex::Real pres_mbar,
+                                                                         const amrex::Real rdOcp) noexcept
+{
+    // Current behavior only. Stored SAM pressure is mbar on this path, so convert to Pa.
+    return getThgivenTandP(tabs, sam_mbar_to_pa(pres_mbar), rdOcp);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_theta_from_stored_pressure_as_pa_current_behavior (const amrex::Real tabs,
+                                                                   const amrex::Real stored_pres,
+                                                                   const amrex::Real rdOcp) noexcept
+{
+    // Current behavior only. This legacy path passes stored SAM pressure as if it were already Pa.
+    return getThgivenTandP(tabs, stored_pres, rdOcp);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrimitiveCellCurrentBehavior sam_cons_to_primitive_current_behavior (const amrex::Real rho,
+                                                                        const amrex::Real rho_theta,
+                                                                        const amrex::Real rho_qv,
+                                                                        const amrex::Real rho_qcl,
+                                                                        const amrex::Real rho_qci,
+                                                                        const amrex::Real rho_qpr,
+                                                                        const amrex::Real rho_qps,
+                                                                        const amrex::Real rho_qpg) noexcept
+{
+    // Current behavior only. Copy-in clips moisture and stores pressure in mbar.
+    SAMPrimitiveCellCurrentBehavior result{};
+    result.rho = rho;
+    result.theta = rho_theta / rho;
+    result.qv = amrex::max(amrex::Real(0.0), rho_qv / rho);
+    result.qcl = amrex::max(amrex::Real(0.0), rho_qcl / rho);
+    result.qci = amrex::max(amrex::Real(0.0), rho_qci / rho);
+    result.qn = result.qcl + result.qci;
+    result.qt = result.qv + result.qn;
+    result.qpr = amrex::max(amrex::Real(0.0), rho_qpr / rho);
+    result.qps = amrex::max(amrex::Real(0.0), rho_qps / rho);
+    result.qpg = amrex::max(amrex::Real(0.0), rho_qpg / rho);
+    result.qp = result.qpr + result.qps + result.qpg;
+    result.tabs = getTgivenRandRTh(rho, rho_theta, result.qv);
+    result.pres_mbar = sam_pa_to_mbar(getPgivenRTh(rho_theta, result.qv));
+    return result;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void sam_primitive_to_cons_current_behavior (const SAMPrimitiveCellCurrentBehavior& primitive,
+                                             const amrex::Array4<amrex::Real>& states_arr,
+                                             const int i,
+                                             const int j,
+                                             const int k) noexcept
+{
+    // Current behavior only. Copy-out clips moisture before writing conserved state.
+    states_arr(i,j,k,RhoTheta_comp) = primitive.rho * primitive.theta;
+    states_arr(i,j,k,RhoQ1_comp) = primitive.rho * amrex::max(amrex::Real(0.0), primitive.qv);
+    states_arr(i,j,k,RhoQ2_comp) = primitive.rho * amrex::max(amrex::Real(0.0), primitive.qcl);
+    states_arr(i,j,k,RhoQ3_comp) = primitive.rho * amrex::max(amrex::Real(0.0), primitive.qci);
+    states_arr(i,j,k,RhoQ4_comp) = primitive.rho * amrex::max(amrex::Real(0.0), primitive.qpr);
+    states_arr(i,j,k,RhoQ5_comp) = primitive.rho * amrex::max(amrex::Real(0.0), primitive.qps);
+    states_arr(i,j,k,RhoQ6_comp) = primitive.rho * amrex::max(amrex::Real(0.0), primitive.qpg);
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -235,6 +344,7 @@ SAMPrecipSources sam_autoconversion_rates_current_behavior (const amrex::Real dt
                                                             const amrex::Real coefice_k) noexcept
 {
     SAMPrecipSources result{};
+    // MUST MATCH: SAM rain autoconversion threshold.
     const amrex::Real auto_r = (qcc > qcw0) ? alphaelq : zero;
     const amrex::Real autos = (qii > qci0) ? betaelq * coefice_k : zero;
     result.dqca = dtn * auto_r * (qcc - qcw0);
@@ -359,6 +469,63 @@ SAMPrecipSources sam_apply_precip_evaporation_limiter_current_behavior (const am
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMCoefficientRowCurrentBehavior sam_compute_coefficient_row_current_behavior (const amrex::Real rho,
+                                                                               const amrex::Real tabs,
+                                                                               const amrex::Real gamr1,
+                                                                               const amrex::Real gamr2,
+                                                                               const amrex::Real gams1,
+                                                                               const amrex::Real gams2,
+                                                                               const amrex::Real gamg1,
+                                                                               const amrex::Real gamg2) noexcept
+{
+    // Current behavior only. These closure rows preserve legacy formula ordering for BFB.
+    SAMCoefficientRowCurrentBehavior row{};
+    amrex::Real prefactor;
+    amrex::Real pratio = std::sqrt(amrex::Real(1.29) / rho);
+    amrex::Real estw = amrex::Real(100.0) * erf_esatw(tabs);
+    amrex::Real esti = amrex::Real(100.0) * erf_esati(tabs);
+
+    amrex::Real coef1 = fourth * PI * nzeros * a_snow * gams1 * pratio
+        / std::pow((PI * rhos * nzeros / rho), ((three + b_snow) / amrex::Real(4.0)));
+    amrex::Real coef2 = std::exp(amrex::Real(0.025) * (tabs - amrex::Real(273.15)));
+    row.accrsi = coef1 * coef2 * esicoef;
+    row.accrsc = coef1 * esccoef;
+    row.coefice = coef2;
+
+    coef1 = (lsub / (tabs * R_v) - one) * lsub / (therco * tabs);
+    coef2 = R_v * R_d / (diffelq * esti);
+    prefactor = two * PI * nzeros / (rho * (coef1 + coef2));
+    prefactor *= (two / PI);
+    row.evaps1 = prefactor * amrex::Real(0.65) * std::sqrt(rho / (PI * rhos * nzeros));
+    row.evaps2 = prefactor * amrex::Real(0.44) * std::sqrt(a_snow * rho / muelq) * gams2
+        * std::sqrt(pratio) * std::pow(rho / (PI * rhos * nzeros), ((amrex::Real(5.0) + b_snow) / amrex::Real(8.0)));
+
+    coef1 = fourth * PI * nzerog * a_grau * gamg1 * pratio
+        / std::pow((PI * rhog * nzerog / rho), ((three + b_grau) / amrex::Real(4.0)));
+    coef2 = std::exp(amrex::Real(0.025) * (tabs - amrex::Real(273.15)));
+    row.accrgi = coef1 * coef2 * egicoef;
+    row.accrgc = coef1 * egccoef;
+
+    coef1 = (lsub / (tabs * R_v) - one) * lsub / (therco * tabs);
+    coef2 = R_v * R_d / (diffelq * esti);
+    prefactor = two * PI * nzerog / (rho * (coef1 + coef2));
+    row.evapg1 = prefactor * amrex::Real(0.78) * std::sqrt(rho / (PI * rhog * nzerog));
+    row.evapg2 = prefactor * amrex::Real(0.31) * std::sqrt(a_grau * rho / muelq) * gamg2
+        * std::sqrt(pratio) * std::pow(rho / (PI * rhog * nzerog), ((amrex::Real(5.0) + b_grau) / amrex::Real(8.0)));
+
+    row.accrrc = fourth * PI * nzeror * a_rain * gamr1 * pratio
+        / std::pow((PI * rhor * nzeror / rho), ((three + b_rain) / amrex::Real(4.0))) * erccoef;
+
+    coef1 = (lcond / (tabs * R_v) - one) * lcond / (therco * tabs);
+    coef2 = R_v * R_d / (diffelq * estw);
+    prefactor = two * PI * nzeror / (rho * (coef1 + coef2));
+    row.evapr1 = prefactor * amrex::Real(0.78) * std::sqrt(rho / (PI * rhor * nzeror));
+    row.evapr2 = prefactor * amrex::Real(0.31) * std::sqrt(a_rain * rho / muelq) * gamr2
+        * std::sqrt(pratio) * std::pow(rho / (PI * rhor * nzeror), ((amrex::Real(5.0) + b_rain) / amrex::Real(8.0)));
+    return row;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_cloud_ice_terminal_velocity_current_behavior (const amrex::Real qci_avg) noexcept
 {
     // MUST MATCH: SAM cloud-ice terminal-velocity coefficient and exponent.
@@ -404,8 +571,67 @@ int sam_substep_count_from_flux_current_behavior (const amrex::Real reduced_flux
                                                   const amrex::Real dt,
                                                   const amrex::Real dz) noexcept
 {
+    // Current behavior: substeps use reduced flux, not terminal velocity.
     // MUST MATCH: SAM::CFL_MAX.
     return static_cast<int>(std::ceil(reduced_flux * (dt / dz) / myhalf));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrecipFaceStateCurrentBehavior sam_precip_face_state_current_behavior (
+    const int SAM_moisture_type,
+    const amrex::Array4<const amrex::Real>& rho_array,
+    const amrex::Array4<const amrex::Real>& tabs_array,
+    const amrex::Array4<const amrex::Real>& qp_array,
+    const int i,
+    const int j,
+    const int k,
+    const int k_lo,
+    const int k_hi) noexcept
+{
+    // MUST MATCH: SAM PrecipFall bottom/interior/top face rules.
+    SAMPrecipFaceStateCurrentBehavior result{};
+    if (k == k_lo) {
+        result.rho_avg = rho_array(i,j,k);
+        result.tabs_avg = tabs_array(i,j,k);
+        result.qp_avg = qp_array(i,j,k);
+    } else if (k == k_hi + 1) {
+        result.rho_avg = rho_array(i,j,k-1);
+        result.tabs_avg = tabs_array(i,j,k-1);
+        result.qp_avg = qp_array(i,j,k-1);
+    } else {
+        result.rho_avg = myhalf * (rho_array(i,j,k-1) + rho_array(i,j,k));
+        result.tabs_avg = myhalf * (tabs_array(i,j,k-1) + tabs_array(i,j,k));
+        result.qp_avg = myhalf * (qp_array(i,j,k-1) + qp_array(i,j,k));
+    }
+    result.omp = sam_precip_rain_fraction_current_behavior(SAM_moisture_type, result.tabs_avg);
+    result.omg = sam_graupel_fraction_current_behavior(SAM_moisture_type, result.tabs_avg);
+    result.qrr = result.omp * result.qp_avg;
+    result.qss = (one - result.omp) * (one - result.omg) * result.qp_avg;
+    result.qgg = (one - result.omp) * result.omg * result.qp_avg;
+    return result;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_precip_flux_from_face_state_current_behavior (const SAMPrecipFaceStateCurrentBehavior& face_state,
+                                                              const amrex::Real vrain,
+                                                              const amrex::Real vsnow,
+                                                              const amrex::Real vgrau) noexcept
+{
+    if (face_state.qp_avg <= qp_threshold) {
+        return zero;
+    }
+    return face_state.omp * vrain * std::pow(face_state.rho_avg * face_state.qrr, one + crain)
+        + (one - face_state.omp)
+            * ((one - face_state.omg) * vsnow * std::pow(face_state.rho_avg * face_state.qss, one + csnow)
+               + face_state.omg * vgrau * std::pow(face_state.rho_avg * face_state.qgg, one + cgrau));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_precip_flux_density_corrected_current_behavior (const amrex::Real precip_flux,
+                                                                const amrex::Real rho_0,
+                                                                const amrex::Real rho_avg) noexcept
+{
+    return precip_flux * std::sqrt(rho_0 / rho_avg);
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
