@@ -8,6 +8,8 @@
  */
 struct WENO_Z3
 {
+    AMREX_GPU_HOST_DEVICE
+    AMREX_FORCE_INLINE
     WENO_Z3 (const amrex::Array4<const amrex::Real>& phi,
              const amrex::Real /*upw_frac*/)
         : m_phi(phi) {}
@@ -136,6 +138,8 @@ private:
  */
 struct WENO_MZQ3
 {
+    AMREX_GPU_HOST_DEVICE
+    AMREX_FORCE_INLINE
     WENO_MZQ3 (const amrex::Array4<const amrex::Real>& phi,
                const amrex::Real /*upw_frac*/)
         : m_phi(phi) {}
@@ -269,6 +273,8 @@ private:
  */
 struct WENO_Z5
 {
+    AMREX_GPU_HOST_DEVICE
+    AMREX_FORCE_INLINE
     WENO_Z5 (const amrex::Array4<const amrex::Real>& phi,
              const amrex::Real /*upw_frac*/)
         : m_phi(phi) {}
@@ -413,6 +419,8 @@ private:
  */
 struct WENO_Z7
 {
+    AMREX_GPU_HOST_DEVICE
+    AMREX_FORCE_INLINE
     WENO_Z7 (const amrex::Array4<const amrex::Real>& phi,
              const amrex::Real /*upw_frac*/)
         : m_phi(phi) {}
