@@ -489,7 +489,7 @@ TEST(KesslerScalar, FaceState_BottomTopInteriorBranches)
     EXPECT_NEAR(bottom.qp, amrex::Real(0.3), formula_abs_tol(amrex::Real(0.3)));
     EXPECT_NEAR(top.rho, amrex::Real(1.0), formula_abs_tol(amrex::Real(1.0)));
     EXPECT_NEAR(top.qp, amrex::Real(0.2), formula_abs_tol(amrex::Real(0.2)));
-    EXPECT_NEAR(interior.rho, amrex::Real(1.1), formula_abs_tol(amrex::Real(1.1)));
+    EXPECT_NEAR(interior.rho, amrex::Real(1.05), formula_abs_tol(amrex::Real(1.05)));
     EXPECT_NEAR(interior.qp, amrex::Real(0.3), formula_abs_tol(amrex::Real(0.3)));
 }
 
@@ -520,6 +520,15 @@ TEST(KesslerScalar, FaceState_UsesUpperCellDonorThenClips)
         kessler_face_state(1, 2, amrex::Real(1.0), amrex::Real(1.0), -amrex::Real(0.2), amrex::Real(0.1));
 
     EXPECT_NEAR(actual.qp, amrex::Real(0.1), formula_abs_tol(amrex::Real(0.1)));
+}
+
+TEST(KesslerScalar, FaceState_UsesFaceCenteredDensityWithDonorRain)
+{
+    const KesslerFaceState actual =
+        kessler_face_state(1, 2, amrex::Real(1.0), amrex::Real(1.4), amrex::Real(0.0), amrex::Real(1.0e-3));
+
+    EXPECT_NEAR(actual.rho, amrex::Real(1.2), formula_abs_tol(amrex::Real(1.2)));
+    EXPECT_NEAR(actual.qp, amrex::Real(1.0e-3), formula_abs_tol(amrex::Real(1.0e-3)));
 }
 
 // Motivation: Equal face fluxes imply zero sedimentation tendency. This is the

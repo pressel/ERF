@@ -117,13 +117,17 @@ KesslerFaceState kessler_face_state (const int k,
 {
     KesslerFaceState face_state{amrex::Real(0), amrex::Real(0)};
 
-    // Downward sedimentation uses the upper-cell donor state at interior faces.
-    // The top boundary face uses the top cell below the boundary.
+    // Downward sedimentation upwinds rain mixing ratio from the donor cell.
+    // Air density remains face-centered for the z-face flux. The donor-cell
+    // density is used separately only for the availability limiter.
     if (k == k_hi + 1) {
         face_state.rho = rho_km1;
         face_state.qp = qp_km1;
-    } else {
+    } else if (k == 0) {
         face_state.rho = rho_k;
+        face_state.qp = qp_k;
+    } else {
+        face_state.rho = amrex::Real(0.5) * (rho_km1 + rho_k);
         face_state.qp = qp_k;
     }
 

@@ -88,9 +88,16 @@ inline KesslerFaceState reference_column_face_state (const std::array<PrimitiveS
                                                      const int face_k)
 {
     KesslerFaceState face_state{amrex::Real(0.0), amrex::Real(0.0)};
-    const int donor_k = kessler_face_donor_k(face_k, 1);
-    face_state.rho = states[donor_k].rho;
-    face_state.qp = states[donor_k].qp;
+    if (face_k == 2) {
+        face_state.rho = states[1].rho;
+        face_state.qp = states[1].qp;
+    } else if (face_k == 0) {
+        face_state.rho = states[0].rho;
+        face_state.qp = states[0].qp;
+    } else {
+        face_state.rho = amrex::Real(0.5) * (states[0].rho + states[1].rho);
+        face_state.qp = states[1].qp;
+    }
 
     face_state.qp = std::max(amrex::Real(0.0), face_state.qp);
     return face_state;
@@ -118,9 +125,12 @@ inline SedimentationColumnState advance_reference_sedimentation_column (
     for (int nsub = 0; nsub < n_substeps; ++nsub) {
         std::array<amrex::Real, 3> face_fluxes{};
         for (int face_k = 0; face_k < 3; ++face_k) {
+            const int donor_k = kessler_face_donor_k(face_k, 1);
             const KesslerFaceState face_state = reference_column_face_state(result.states, face_k);
             const amrex::Real terminal_velocity = reference_terminal_velocity(face_state.rho, face_state.qp);
-            const amrex::Real max_flux = face_state.rho * face_state.qp / coef;
+            const amrex::Real donor_rho = result.states[donor_k].rho;
+            const amrex::Real donor_qp = std::max(amrex::Real(0.0), result.states[donor_k].qp);
+            const amrex::Real max_flux = donor_rho * donor_qp / coef;
             face_fluxes[face_k] = amrex::min(
                 reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
         }

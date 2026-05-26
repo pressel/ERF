@@ -164,11 +164,13 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                         kessler_face_state(k, k_hi, rho_km1, rho_k, qp_km1, qp_k);
 
                     const Real terminal_velocity = kessler_terminal_velocity(face_state.rho, face_state.qp);
+                    const Real donor_rho = rho_array(i,j,donor_k);
+                    const Real donor_qp = std::max(Real(0), qp_array(i,j,donor_k));
                     const Real donor_detJ = (dJ_array) ? dJ_array(i,j,donor_k) : Real(1);
                     // Limit the outgoing donor-face flux by the donor cell's available
                     // detJ-weighted precipitating water. This prevents over-removal for detJ < 1
                     // before the nonnegative qp clip.
-                    const Real max_flux = face_state.rho * face_state.qp * donor_detJ / coef;
+                    const Real max_flux = donor_rho * donor_qp * donor_detJ / coef;
                     fz_array(i,j,k) = amrex::min(
                         kessler_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
 
