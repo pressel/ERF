@@ -573,11 +573,15 @@ struct WENO_Z7
         // Weight factor norm
         amrex::Real wsum = w1 + w2 + w3 + w4;
 
-        // Taylor expansions
-        amrex::Real v1 = (-amrex::Real(0.3125))*sm3 + ( amrex::Real(1.3125))*sm2 + (-amrex::Real(2.1875))*sm1 + ( amrex::Real(2.1875))*s;
-        amrex::Real v2 = ( amrex::Real(0.0625))*sm2 + (-amrex::Real(0.3125))*sm1 + ( amrex::Real(0.9375))*s   + ( amrex::Real(0.3125))*sp1;
-        amrex::Real v3 = (-amrex::Real(0.0625))*sm1 + ( amrex::Real(0.5625))*s   + ( amrex::Real(0.5625))*sp1 + (-amrex::Real(0.0625))*sp2;
-        amrex::Real v4 = ( amrex::Real(0.3125))*s   + ( amrex::Real(0.9375))*sp1 + (-amrex::Real(0.3125))*sp2 + ( amrex::Real(0.0625))*sp3;
+        // Finite-volume face-reconstruction coefficients for the left state at i-1/2.
+        amrex::Real v1 = (-amrex::Real(1.0)/amrex::Real(4.0))*sm3 + ( amrex::Real(13.0)/amrex::Real(12.0))*sm2 -
+                 ( amrex::Real(23.0)/amrex::Real(12.0))*sm1 + ( amrex::Real(25.0)/amrex::Real(12.0))*s;
+        amrex::Real v2 = ( amrex::Real(1.0)/amrex::Real(12.0))*sm2 - ( amrex::Real(5.0)/amrex::Real(12.0))*sm1 +
+                 ( amrex::Real(13.0)/amrex::Real(12.0))*s   + ( amrex::Real(1.0)/amrex::Real(4.0))*sp1;
+        amrex::Real v3 = (-amrex::Real(1.0)/amrex::Real(12.0))*sm1 + ( amrex::Real(7.0)/amrex::Real(12.0))*s +
+                 ( amrex::Real(7.0)/amrex::Real(12.0))*sp1 - ( amrex::Real(1.0)/amrex::Real(12.0))*sp2;
+        amrex::Real v4 = ( amrex::Real(1.0)/amrex::Real(4.0))*s + ( amrex::Real(13.0)/amrex::Real(12.0))*sp1 -
+                 ( amrex::Real(5.0)/amrex::Real(12.0))*sp2 + ( amrex::Real(1.0)/amrex::Real(12.0))*sp3;
 
         // Interpolated value
         return ( (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4) / (wsum) );
@@ -590,9 +594,9 @@ private:
 #else
     const amrex::Real eps=amrex::Real(1.0e-40);
 #endif
-    static constexpr amrex::Real g1=( amrex::Real(1)/amrex::Real(64.0));
-    static constexpr amrex::Real g2=(amrex::Real(21.0)/amrex::Real(64.0));
-    static constexpr amrex::Real g3=(amrex::Real(35.0)/amrex::Real(64.0));
-    static constexpr amrex::Real g4=( amrex::Real(7.0)/amrex::Real(64.0));
+    static constexpr amrex::Real g1=( amrex::Real(1.0)/amrex::Real(35.0));
+    static constexpr amrex::Real g2=(amrex::Real(12.0)/amrex::Real(35.0));
+    static constexpr amrex::Real g3=(amrex::Real(18.0)/amrex::Real(35.0));
+    static constexpr amrex::Real g4=( amrex::Real(4.0)/amrex::Real(35.0));
 };
 #endif

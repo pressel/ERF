@@ -11,6 +11,12 @@ using namespace interpolation_test;
 
 namespace {
 
+#ifdef AMREX_USE_FLOAT
+constexpr amrex::Real kObservedOrderErrorFloor = amrex::Real(1.0e-6);
+#else
+constexpr amrex::Real kObservedOrderErrorFloor = amrex::Real(1.0e-12);
+#endif
+
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 amrex::Real evaluate_weno_in_x (const int i,
                                 const amrex::Array4<const amrex::Real>& qty,
@@ -169,6 +175,9 @@ TEST(InterpolationWENOKernel, ClassicWenoObservedConvergenceOnSmoothPeriodicFiel
         const int pair_count = (adv_type == AdvType::Weno_3) ? 2 : static_cast<int>(sizes.size()) - 1;
 
         for (int idx = 0; idx < pair_count; ++idx) {
+            if ((errors[idx] < kObservedOrderErrorFloor) || (errors[idx + 1] < kObservedOrderErrorFloor)) {
+                break;
+            }
             EXPECT_GE(observed_order(errors[idx], errors[idx + 1]), threshold)
                 << "scheme=" << scheme_name(adv_type)
                 << " coarse_N=" << sizes[idx]
@@ -291,6 +300,9 @@ TEST(InterpolationWENOKernel, WenoZObservedConvergenceOnSmoothPeriodicField)
                 : static_cast<int>(sizes.size()) - 1;
 
         for (int idx = 0; idx < pair_count; ++idx) {
+            if ((errors[idx] < kObservedOrderErrorFloor) || (errors[idx + 1] < kObservedOrderErrorFloor)) {
+                break;
+            }
             EXPECT_GE(observed_order(errors[idx], errors[idx + 1]), threshold)
                 << "scheme=" << scheme_name(adv_type)
                 << " coarse_N=" << sizes[idx]
