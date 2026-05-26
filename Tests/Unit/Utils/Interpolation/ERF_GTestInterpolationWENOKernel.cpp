@@ -166,6 +166,8 @@ amrex::Real branch_dense_profile (const int index)
 
 } // namespace
 
+// Motivation: Smooth periodic convergence is the kernel-side end-to-end check
+// that the classic WENO wrappers recover their finite-volume design order.
 TEST(InterpolationWENOKernel, ClassicWenoObservedConvergenceOnSmoothPeriodicField)
 {
     const std::array<AdvType, 3> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7}};
@@ -196,6 +198,8 @@ TEST(InterpolationWENOKernel, ClassicWenoObservedConvergenceOnSmoothPeriodicFiel
     }
 }
 
+// Motivation: This regression locks the WENO7 Z low-face stencil indexing so a
+// repeated k+2 or k-3 load cannot silently return.
 TEST(InterpolationWENOKernel, Weno7DirectionalLowFaceIndexingInZ)
 {
     const amrex::Box qty_box(amrex::IntVect(0, 0, -4), amrex::IntVect(0, 0, 4));
@@ -222,6 +226,8 @@ TEST(InterpolationWENOKernel, Weno7DirectionalLowFaceIndexingInZ)
                 scaled_tol(out_const_arr(0, 0, 0, 1), amrex::Real(-0.5), kWenoDeviceRelTol));
 }
 
+// Motivation: WENO7 should be directionally identical when the data profile is
+// the same along x, y, and z.
 TEST(InterpolationWENOKernel, Weno7DirectionalWrappersAreEquivalentOnBranchDenseProfiles)
 {
     const amrex::Box qty_box = wrapper_branch_dense_box();
@@ -280,6 +286,8 @@ TEST(InterpolationWENOKernel, Weno7DirectionalWrappersAreEquivalentOnBranchDense
     }
 }
 
+// Motivation: The WENO-Z wrappers should share the same directional behavior on
+// branch-dense inputs, independent of the axis-specific wrapper path.
 TEST(InterpolationWENOKernel, WenoZDirectionalWrappersAreEquivalentOnBranchDenseProfiles)
 {
     const std::array<AdvType, 4> schemes = {{AdvType::Weno_3Z, AdvType::Weno_3MZQ,
@@ -344,6 +352,8 @@ TEST(InterpolationWENOKernel, WenoZDirectionalWrappersAreEquivalentOnBranchDense
     }
 }
 
+// Motivation: This is the kernel-side smooth-order check for the WENO-Z
+// families after the tau and beta contracts are applied in production code.
 TEST(InterpolationWENOKernel, WenoZObservedConvergenceOnSmoothPeriodicField)
 {
     const std::array<AdvType, 4> schemes = {{AdvType::Weno_3Z, AdvType::Weno_3MZQ,

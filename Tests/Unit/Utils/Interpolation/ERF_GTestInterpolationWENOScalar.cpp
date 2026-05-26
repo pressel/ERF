@@ -293,6 +293,8 @@ std::string weno_trace (const AdvType adv_type,
 
 } // namespace
 
+// Motivation: The nonlinear WENO path must preserve constants and stay finite
+// even when every beta collapses to zero.
 TEST(InterpolationWENOScalar, ClassicWenoPreservesConstantsAndReturnsFiniteValues)
 {
     const std::array<AdvType, 3> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7}};
@@ -308,6 +310,8 @@ TEST(InterpolationWENOScalar, ClassicWenoPreservesConstantsAndReturnsFiniteValue
     }
 }
 
+// Motivation: A linear finite-volume field is the minimum smooth contract for
+// every WENO family, regardless of the nonlinear weights.
 TEST(InterpolationWENOScalar, ClassicWenoIsExactForLinearFiniteVolumeData)
 {
     const std::array<AdvType, 3> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7}};
@@ -323,6 +327,8 @@ TEST(InterpolationWENOScalar, ClassicWenoIsExactForLinearFiniteVolumeData)
     }
 }
 
+// Motivation: The optimal linear combinations document the intended smooth
+// finite-volume design order for the classic WENO families.
 TEST(InterpolationWENOScalar, ClassicWenoOptimalFiniteVolumeReferencesMatchDesignDegree)
 {
     for (int degree = 0; degree <= 2; ++degree) {
@@ -347,6 +353,8 @@ TEST(InterpolationWENOScalar, ClassicWenoOptimalFiniteVolumeReferencesMatchDesig
     }
 }
 
+// Motivation: Each candidate polynomial should exactly reconstruct the face
+// value for the degree supported by its substencil.
 TEST(InterpolationWENOScalar, CandidateFiniteVolumeReferencesMatchSubstencilDegree)
 {
     for (int degree = 0; degree <= 1; ++degree) {
@@ -383,6 +391,9 @@ TEST(InterpolationWENOScalar, CandidateFiniteVolumeReferencesMatchSubstencilDegr
     }
 }
 
+// Motivation: This is the direct finite-volume conformance check: the source
+// implementation must match an independent nonlinear reference, not just the
+// smooth-limit optimal stencil.
 TEST(InterpolationWENOScalar, NonlinearSchemesMatchIndependentFiniteVolumeReferences)
 {
     const std::array<AdvType, 7> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7,
@@ -408,6 +419,8 @@ TEST(InterpolationWENOScalar, NonlinearSchemesMatchIndependentFiniteVolumeRefere
     }
 }
 
+// Motivation: Mirroring the stencil and flipping the upwind sign must produce
+// the same face state for each nonlinear WENO variant.
 TEST(InterpolationWENOScalar, NonlinearSchemesRespectMirrorSymmetry)
 {
     const std::array<AdvType, 7> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7,
@@ -430,6 +443,8 @@ TEST(InterpolationWENOScalar, NonlinearSchemesRespectMirrorSymmetry)
     }
 }
 
+// Motivation: The WENO-Z families should inherit the same constant and linear
+// finite-volume invariants as the classic WENO schemes.
 TEST(InterpolationWENOScalar, WenoZVariantsPreserveConstantsAndLinearFields)
 {
     const std::array<AdvType, 4> schemes = {{AdvType::Weno_3Z, AdvType::Weno_3MZQ,
@@ -454,6 +469,8 @@ TEST(InterpolationWENOScalar, WenoZVariantsPreserveConstantsAndLinearFields)
     }
 }
 
+// Motivation: The WENO-Z smooth limit must recover the independently derived
+// finite-volume optimal face value through the advertised design degree.
 TEST(InterpolationWENOScalar, WenoZOptimalFiniteVolumeReferencesMatchSmoothLimit)
 {
     for (int degree = 0; degree <= 2; ++degree) {
@@ -478,6 +495,8 @@ TEST(InterpolationWENOScalar, WenoZOptimalFiniteVolumeReferencesMatchSmoothLimit
     }
 }
 
+// Motivation: These cases force both raw tau signs so the tests protect the
+// documented absolute-value tau contract used by the WENO-Z schemes.
 TEST(InterpolationWENOScalar, WenoZTauAbsoluteValueMirrorSymmetry)
 {
     const CenteredFaceStencil9 z3_positive{amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0),
