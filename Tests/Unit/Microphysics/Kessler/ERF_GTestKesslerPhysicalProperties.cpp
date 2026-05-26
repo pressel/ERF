@@ -88,6 +88,8 @@ inline KesslerFaceState reference_column_face_state (const std::array<PrimitiveS
                                                      const int face_k)
 {
     KesslerFaceState face_state{amrex::Real(0.0), amrex::Real(0.0)};
+    // Mirror the production sedimentation face split: face-centered rho for the
+    // z-face flux and donor/upwind qp for downward transport.
     if (face_k == 2) {
         face_state.rho = states[1].rho;
         face_state.qp = states[1].qp;
@@ -130,6 +132,8 @@ inline SedimentationColumnState advance_reference_sedimentation_column (
             const amrex::Real terminal_velocity = reference_terminal_velocity(face_state.rho, face_state.qp);
             const amrex::Real donor_rho = result.states[donor_k].rho;
             const amrex::Real donor_qp = std::max(amrex::Real(0.0), result.states[donor_k].qp);
+            // Mirror the production donor-cap limiter, which is separate from the
+            // face-centered flux state.
             const amrex::Real max_flux = donor_rho * donor_qp / coef;
             face_fluxes[face_k] = amrex::min(
                 reference_precip_flux(face_state.rho, terminal_velocity, face_state.qp), max_flux);
@@ -493,9 +497,10 @@ TEST(KesslerPhysicalProperties, KesslerPublicFlow_DetJWeightedColumnWaterBudgetI
                 property_accumulation_tol(4, before.total_water_sum));
 }
 
-// Motivation: Compressed cells with detJ < 1 tighten the donor-cell water
-// capacity that can leave through a sedimentation face in one substep. The
-// detJ-weighted column water budget should still balance against surface rain.
+// Motivation: Compressed cells with detJ < 1 tighten the donor-cell rho * qp *
+// detJ capacity that can leave through a sedimentation face in one substep.
+// The detJ-weighted column water budget should still balance against surface
+// rain.
 TEST(KesslerPhysicalProperties, KesslerPublicFlow_DetJWeightedColumnWaterBudgetIncludesSurfaceRainWithCompressedCells)
 {
     const amrex::Geometry geom = make_geometry(1, 1, 4);
