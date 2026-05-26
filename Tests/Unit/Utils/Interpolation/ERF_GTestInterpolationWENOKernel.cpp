@@ -61,7 +61,16 @@ amrex::Real evaluate_weno_in_y (const int j,
     const amrex::Real upw = amrex::Real(sigma);
     amrex::Real value = amrex::Real(0.0);
 
-    if (adv_type == AdvType::Weno_3Z) {
+    if (adv_type == AdvType::Weno_3) {
+        WENO3 policy(qty, amrex::Real(1.0));
+        policy.InterpolateInY(0, j, 0, kQtyComp, value, upw);
+    } else if (adv_type == AdvType::Weno_5) {
+        WENO5 policy(qty, amrex::Real(1.0));
+        policy.InterpolateInY(0, j, 0, kQtyComp, value, upw);
+    } else if (adv_type == AdvType::Weno_7) {
+        WENO7 policy(qty, amrex::Real(1.0));
+        policy.InterpolateInY(0, j, 0, kQtyComp, value, upw);
+    } else if (adv_type == AdvType::Weno_3Z) {
         WENO_Z3 policy(qty, amrex::Real(1.0));
         policy.InterpolateInY(0, j, 0, kQtyComp, value, upw);
     } else if (adv_type == AdvType::Weno_3MZQ) {
@@ -211,6 +220,64 @@ TEST(InterpolationWENOKernel, Weno7DirectionalLowFaceIndexingInZ)
                 scaled_tol(out_const_arr(0, 0, 0, 0), amrex::Real(-0.5), kWenoDeviceRelTol));
     EXPECT_NEAR(out_const_arr(0, 0, 0, 1), amrex::Real(-0.5),
                 scaled_tol(out_const_arr(0, 0, 0, 1), amrex::Real(-0.5), kWenoDeviceRelTol));
+}
+
+TEST(InterpolationWENOKernel, Weno7DirectionalWrappersAreEquivalentOnBranchDenseProfiles)
+{
+    const amrex::Box qty_box = wrapper_branch_dense_box();
+    amrex::FArrayBox qty_x(qty_box, 1);
+    amrex::FArrayBox qty_y(qty_box, 1);
+    amrex::FArrayBox qty_z(qty_box, 1);
+
+    auto qty_x_arr = qty_x.array();
+    auto qty_y_arr = qty_y.array();
+    auto qty_z_arr = qty_z.array();
+    for (int k = qty_box.smallEnd(2); k <= qty_box.bigEnd(2); ++k) {
+        for (int j = qty_box.smallEnd(1); j <= qty_box.bigEnd(1); ++j) {
+            for (int i = qty_box.smallEnd(0); i <= qty_box.bigEnd(0); ++i) {
+                qty_x_arr(i, j, k, 0) = branch_dense_profile(i);
+                qty_y_arr(i, j, k, 0) = branch_dense_profile(j);
+                qty_z_arr(i, j, k, 0) = branch_dense_profile(k);
+            }
+        }
+    }
+
+    const auto qty_x_const_arr = qty_x.const_array();
+    const auto qty_y_const_arr = qty_y.const_array();
+    const auto qty_z_const_arr = qty_z.const_array();
+    amrex::FArrayBox output(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0)), 6);
+    auto out_arr = output.array();
+
+    amrex::ParallelFor(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0)), 6,
+    [=] AMREX_GPU_DEVICE (int i, int, int, int n) noexcept {
+        const int sigma = (n / 3 == 0) ? -1 : 1;
+        const int axis = n % 3;
+
+        if (axis == 0) {
+            out_arr(i, 0, 0, n) = evaluate_weno_in_x(i + 1, qty_x_const_arr, AdvType::Weno_7, sigma);
+        } else if (axis == 1) {
+            out_arr(i, 0, 0, n) = evaluate_weno_in_y(i + 1, qty_y_const_arr, AdvType::Weno_7, sigma);
+        } else {
+            out_arr(i, 0, 0, n) = evaluate_weno_in_z(i + 1, qty_z_const_arr, AdvType::Weno_7, sigma);
+        }
+    });
+    gpu_sync();
+
+    const auto out_const_arr = output.const_array();
+    for (int sigma_index = 0; sigma_index < 2; ++sigma_index) {
+        const int sigma = (sigma_index == 0) ? -1 : 1;
+        for (int i = 0; i < 4; ++i) {
+            const int base = 3 * sigma_index;
+            const amrex::Real x_value = out_const_arr(i, 0, 0, base + 0);
+            const amrex::Real y_value = out_const_arr(i, 0, 0, base + 1);
+            const amrex::Real z_value = out_const_arr(i, 0, 0, base + 2);
+
+            EXPECT_NEAR(x_value, y_value, scaled_tol(x_value, y_value, kWenoDeviceRelTol))
+                << "scheme=" << scheme_name(AdvType::Weno_7) << " sigma=" << sigma << " face=" << i;
+            EXPECT_NEAR(x_value, z_value, scaled_tol(x_value, z_value, kWenoDeviceRelTol))
+                << "scheme=" << scheme_name(AdvType::Weno_7) << " sigma=" << sigma << " face=" << i;
+        }
+    }
 }
 
 TEST(InterpolationWENOKernel, WenoZDirectionalWrappersAreEquivalentOnBranchDenseProfiles)

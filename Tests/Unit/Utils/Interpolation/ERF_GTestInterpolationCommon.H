@@ -59,6 +59,7 @@ constexpr amrex::Real kWeno3ObservedOrderMin = amrex::Real(2.0);
 constexpr amrex::Real kWeno5ObservedOrderMin = amrex::Real(4.0);
 constexpr amrex::Real kWeno7ObservedOrderMin = amrex::Real(5.8);
 constexpr amrex::Real kWenoMZQ3ObservedOrderMin = amrex::Real(1.8);
+constexpr amrex::Real kWenoSourceEps = amrex::Real(1.0e-12);
 #else
 constexpr amrex::Real kValueRelTol = amrex::Real(1.0e-12);
 constexpr amrex::Real kIdentityRelTol = amrex::Real(1.0e-12);
@@ -71,6 +72,7 @@ constexpr amrex::Real kWeno3ObservedOrderMin = amrex::Real(2.4);
 constexpr amrex::Real kWeno5ObservedOrderMin = amrex::Real(4.5);
 constexpr amrex::Real kWeno7ObservedOrderMin = amrex::Real(6.3);
 constexpr amrex::Real kWenoMZQ3ObservedOrderMin = amrex::Real(1.8);
+constexpr amrex::Real kWenoSourceEps = amrex::Real(1.0e-40);
 #endif
 
 constexpr int kQtyComp = 0;
@@ -398,6 +400,155 @@ amrex::Real weno7_fv_optimal_face_value (const CenteredFaceStencil7& stencil) no
            (amrex::Real(12.0) / amrex::Real(35.0)) * weno7_fv_candidate1(stencil) +
            (amrex::Real(18.0) / amrex::Real(35.0)) * weno7_fv_candidate2(stencil) +
            (amrex::Real(4.0) / amrex::Real(35.0)) * weno7_fv_candidate3(stencil);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno3_beta0 (const CenteredFaceStencil3& stencil) noexcept
+{
+    return (stencil.q0 - stencil.qm1) * (stencil.q0 - stencil.qm1);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno3_beta1 (const CenteredFaceStencil3& stencil) noexcept
+{
+    return (stencil.q1 - stencil.q0) * (stencil.q1 - stencil.q0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno3_tau (const CenteredFaceStencil3& stencil) noexcept
+{
+    return amrex::Math::abs(weno3_beta1(stencil) - weno3_beta0(stencil));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno_mzq3_beta_c (const CenteredFaceStencil3& stencil) noexcept
+{
+    return (amrex::Real(13.0) / amrex::Real(12.0)) *
+               (stencil.qm1 - amrex::Real(2.0) * stencil.q0 + stencil.q1) *
+               (stencil.qm1 - amrex::Real(2.0) * stencil.q0 + stencil.q1) +
+           amrex::Real(0.25) * (stencil.q1 - stencil.qm1) * (stencil.q1 - stencil.qm1);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno5_beta0 (const CenteredFaceStencil5& stencil) noexcept
+{
+    return (amrex::Real(13.0) / amrex::Real(12.0)) *
+               (stencil.qm2 - amrex::Real(2.0) * stencil.qm1 + stencil.q0) *
+               (stencil.qm2 - amrex::Real(2.0) * stencil.qm1 + stencil.q0) +
+           amrex::Real(0.25) * (stencil.qm2 - amrex::Real(4.0) * stencil.qm1 + amrex::Real(3.0) * stencil.q0) *
+                                  (stencil.qm2 - amrex::Real(4.0) * stencil.qm1 + amrex::Real(3.0) * stencil.q0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno5_beta1 (const CenteredFaceStencil5& stencil) noexcept
+{
+    return (amrex::Real(13.0) / amrex::Real(12.0)) *
+               (stencil.qm1 - amrex::Real(2.0) * stencil.q0 + stencil.q1) *
+               (stencil.qm1 - amrex::Real(2.0) * stencil.q0 + stencil.q1) +
+           amrex::Real(0.25) * (stencil.qm1 - stencil.q1) * (stencil.qm1 - stencil.q1);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno5_beta2 (const CenteredFaceStencil5& stencil) noexcept
+{
+    return (amrex::Real(13.0) / amrex::Real(12.0)) *
+               (stencil.q0 - amrex::Real(2.0) * stencil.q1 + stencil.q2) *
+               (stencil.q0 - amrex::Real(2.0) * stencil.q1 + stencil.q2) +
+           amrex::Real(0.25) * (amrex::Real(3.0) * stencil.q0 - amrex::Real(4.0) * stencil.q1 + stencil.q2) *
+                                  (amrex::Real(3.0) * stencil.q0 - amrex::Real(4.0) * stencil.q1 + stencil.q2);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno5_tau (const CenteredFaceStencil5& stencil) noexcept
+{
+    return amrex::Math::abs(weno5_beta2(stencil) - weno5_beta0(stencil));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno7_beta0 (const CenteredFaceStencil7& stencil) noexcept
+{
+    return (amrex::Real(547.0) * stencil.qm3 * stencil.qm3 -
+            amrex::Real(3882.0) * stencil.qm3 * stencil.qm2 +
+            amrex::Real(4642.0) * stencil.qm3 * stencil.qm1 -
+            amrex::Real(1854.0) * stencil.qm3 * stencil.q0 +
+            amrex::Real(7043.0) * stencil.qm2 * stencil.qm2 -
+            amrex::Real(17246.0) * stencil.qm2 * stencil.qm1 +
+            amrex::Real(7042.0) * stencil.qm2 * stencil.q0 +
+            amrex::Real(11003.0) * stencil.qm1 * stencil.qm1 -
+            amrex::Real(9402.0) * stencil.qm1 * stencil.q0 +
+            amrex::Real(2107.0) * stencil.q0 * stencil.q0) /
+           amrex::Real(240.0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno7_beta1 (const CenteredFaceStencil7& stencil) noexcept
+{
+    return (amrex::Real(267.0) * stencil.qm2 * stencil.qm2 -
+            amrex::Real(1642.0) * stencil.qm2 * stencil.qm1 +
+            amrex::Real(1602.0) * stencil.qm2 * stencil.q0 -
+            amrex::Real(494.0) * stencil.qm2 * stencil.q1 +
+            amrex::Real(2843.0) * stencil.qm1 * stencil.qm1 -
+            amrex::Real(5966.0) * stencil.qm1 * stencil.q0 +
+            amrex::Real(1922.0) * stencil.qm1 * stencil.q1 +
+            amrex::Real(3443.0) * stencil.q0 * stencil.q0 -
+            amrex::Real(2522.0) * stencil.q0 * stencil.q1 +
+            amrex::Real(547.0) * stencil.q1 * stencil.q1) /
+           amrex::Real(240.0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno7_beta2 (const CenteredFaceStencil7& stencil) noexcept
+{
+    return (amrex::Real(547.0) * stencil.qm1 * stencil.qm1 -
+            amrex::Real(2522.0) * stencil.qm1 * stencil.q0 +
+            amrex::Real(1922.0) * stencil.qm1 * stencil.q1 -
+            amrex::Real(494.0) * stencil.qm1 * stencil.q2 +
+            amrex::Real(3443.0) * stencil.q0 * stencil.q0 -
+            amrex::Real(5966.0) * stencil.q0 * stencil.q1 +
+            amrex::Real(1602.0) * stencil.q0 * stencil.q2 +
+            amrex::Real(2843.0) * stencil.q1 * stencil.q1 -
+            amrex::Real(1642.0) * stencil.q1 * stencil.q2 +
+            amrex::Real(267.0) * stencil.q2 * stencil.q2) /
+           amrex::Real(240.0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno7_beta3 (const CenteredFaceStencil7& stencil) noexcept
+{
+    return (amrex::Real(2107.0) * stencil.q0 * stencil.q0 -
+            amrex::Real(9402.0) * stencil.q0 * stencil.q1 +
+            amrex::Real(7042.0) * stencil.q0 * stencil.q2 -
+            amrex::Real(1854.0) * stencil.q0 * stencil.q3 +
+            amrex::Real(11003.0) * stencil.q1 * stencil.q1 -
+            amrex::Real(17246.0) * stencil.q1 * stencil.q2 +
+            amrex::Real(4642.0) * stencil.q1 * stencil.q3 +
+            amrex::Real(7043.0) * stencil.q2 * stencil.q2 -
+            amrex::Real(3882.0) * stencil.q2 * stencil.q3 +
+            amrex::Real(547.0) * stencil.q3 * stencil.q3) /
+           amrex::Real(240.0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno7_tau (const CenteredFaceStencil7& stencil) noexcept
+{
+    return amrex::Math::abs(weno7_beta0(stencil) - weno7_beta1(stencil) -
+                            weno7_beta2(stencil) + weno7_beta3(stencil));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno_classic_weight (const amrex::Real optimal_weight,
+                                 const amrex::Real beta) noexcept
+{
+    return optimal_weight / ((kWenoSourceEps + beta) * (kWenoSourceEps + beta));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real weno_z_weight (const amrex::Real optimal_weight,
+                           const amrex::Real beta,
+                           const amrex::Real tau) noexcept
+{
+    return optimal_weight * (amrex::Real(1.0) + (tau * tau) /
+           ((kWenoSourceEps + beta) * (kWenoSourceEps + beta)));
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE

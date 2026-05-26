@@ -69,6 +69,22 @@ CenteredFaceStencil7 take_stencil7 (const CenteredFaceStencil9& stencil)
                                 stencil.q1, stencil.q2, stencil.q3};
 }
 
+CenteredFaceStencil3 take_right_stencil3 (const CenteredFaceStencil9& stencil)
+{
+    return CenteredFaceStencil3{stencil.q2, stencil.q1, stencil.q0};
+}
+
+CenteredFaceStencil5 take_right_stencil5 (const CenteredFaceStencil9& stencil)
+{
+    return CenteredFaceStencil5{stencil.q3, stencil.q2, stencil.q1, stencil.q0, stencil.qm1};
+}
+
+CenteredFaceStencil7 take_right_stencil7 (const CenteredFaceStencil9& stencil)
+{
+    return CenteredFaceStencil7{stencil.q4, stencil.q3, stencil.q2, stencil.q1,
+                                stencil.q0, stencil.qm1, stencil.qm2};
+}
+
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 amrex::Real evaluate_weno_x_device (const AdvType adv_type,
                                     const amrex::Array4<const amrex::Real>& qty,
@@ -129,68 +145,135 @@ amrex::Real evaluate_weno_x_on_device (const CenteredFaceStencil9& stencil,
 // tau signs before the scheme takes abs(tau).
 amrex::Real raw_tau3 (const CenteredFaceStencil3& stencil)
 {
-    const amrex::Real b1 = (stencil.q0 - stencil.qm1) * (stencil.q0 - stencil.qm1);
-    const amrex::Real b2 = (stencil.q1 - stencil.q0) * (stencil.q1 - stencil.q0);
-    return b2 - b1;
+    return weno3_beta1(stencil) - weno3_beta0(stencil);
 }
 
 amrex::Real raw_tau5 (const CenteredFaceStencil5& stencil)
 {
-    const amrex::Real c1 = amrex::Real(13.0) / amrex::Real(12.0);
-    const amrex::Real b1 = c1 * (stencil.qm2 - amrex::Real(2.0) * stencil.qm1 + stencil.q0) *
-                                (stencil.qm2 - amrex::Real(2.0) * stencil.qm1 + stencil.q0) +
-                           amrex::Real(0.25) * (stencil.qm2 - amrex::Real(4.0) * stencil.qm1 + amrex::Real(3.0) * stencil.q0) *
-                                                (stencil.qm2 - amrex::Real(4.0) * stencil.qm1 + amrex::Real(3.0) * stencil.q0);
-    const amrex::Real b3 = c1 * (stencil.q0 - amrex::Real(2.0) * stencil.q1 + stencil.q2) *
-                                (stencil.q0 - amrex::Real(2.0) * stencil.q1 + stencil.q2) +
-                           amrex::Real(0.25) * (amrex::Real(3.0) * stencil.q0 - amrex::Real(4.0) * stencil.q1 + stencil.q2) *
-                                                (amrex::Real(3.0) * stencil.q0 - amrex::Real(4.0) * stencil.q1 + stencil.q2);
-    return b3 - b1;
+    return weno5_beta2(stencil) - weno5_beta0(stencil);
 }
 
 amrex::Real raw_tau7 (const CenteredFaceStencil7& stencil)
 {
-    const amrex::Real b1 = ( stencil.qm3 * stencil.qm3 * amrex::Real(6649.)/amrex::Real(2880.0)
-                           - stencil.qm3 * stencil.qm2 * amrex::Real(2623.)/amrex::Real(160.0)
-                           + stencil.qm3 * stencil.qm1 * amrex::Real(9449.)/amrex::Real(480.0)
-                           - stencil.qm3 * stencil.q0  * amrex::Real(11389.)/amrex::Real(1440.0)
-                           + stencil.qm2 * stencil.qm2 * amrex::Real(28547.)/amrex::Real(960.0)
-                           - stencil.qm2 * stencil.qm1 * amrex::Real(35047.)/amrex::Real(480.0)
-                           + stencil.qm2 * stencil.q0  * amrex::Real(14369.)/amrex::Real(480.0)
-                           + stencil.qm1 * stencil.qm1 * amrex::Real(44747.)/amrex::Real(960.0)
-                           - stencil.qm1 * stencil.q0  * amrex::Real(6383.)/amrex::Real(160.0)
-                           + stencil.q0  * stencil.q0  * amrex::Real(25729.)/amrex::Real(2880.0) );
-    const amrex::Real b2 = ( stencil.qm2 * stencil.qm2 * amrex::Real(3169.0)/amrex::Real(2880.0)
-                           - stencil.qm2 * stencil.qm1 * amrex::Real(3229.0)/amrex::Real(480.0)
-                           + stencil.qm2 * stencil.q0  * amrex::Real(3169.0)/amrex::Real(480.0)
-                           - stencil.qm2 * stencil.q1  * amrex::Real(2989.0)/amrex::Real(1440.0)
-                           + stencil.qm1 * stencil.qm1 * amrex::Real(11147.0)/amrex::Real(960.0)
-                           - stencil.qm1 * stencil.q0  * amrex::Real(11767.0)/amrex::Real(480.0)
-                           + stencil.qm1 * stencil.q1  * amrex::Real(1283.0)/amrex::Real(160.0)
-                           + stencil.q0  * stencil.q0  * amrex::Real(13667.0)/amrex::Real(960.0)
-                           - stencil.q0  * stencil.q1  * amrex::Real(5069.0)/amrex::Real(480.0)
-                           + stencil.q1  * stencil.q1  * amrex::Real(6649.0)/amrex::Real(2880.0) );
-    const amrex::Real b3 = ( stencil.qm1 * stencil.qm1 * amrex::Real(6649.)/amrex::Real(2880.0)
-                           - stencil.qm1 * stencil.q0  * amrex::Real(5069.)/amrex::Real(480.0)
-                           + stencil.qm1 * stencil.q1  * amrex::Real(1283.)/amrex::Real(160.0)
-                           - stencil.qm1 * stencil.q2  * amrex::Real(2989.)/amrex::Real(1440.0)
-                           + stencil.q0  * stencil.q0  * amrex::Real(13667.)/amrex::Real(960.0)
-                           - stencil.q0  * stencil.q1  * amrex::Real(11767.)/amrex::Real(480.0)
-                           + stencil.q0  * stencil.q2  * amrex::Real(3169.)/amrex::Real(480.0)
-                           + stencil.q1  * stencil.q1  * amrex::Real(11147.)/amrex::Real(960.0)
-                           - stencil.q1  * stencil.q2  * amrex::Real(3229.)/amrex::Real(480.0)
-                           + stencil.q2  * stencil.q2  * amrex::Real(3169.)/amrex::Real(2880.0) );
-    const amrex::Real b4 = ( stencil.q0  * stencil.q0  * amrex::Real(25729.)/amrex::Real(2880.0)
-                           - stencil.q0  * stencil.q1  * amrex::Real(6383.)/amrex::Real(160.0)
-                           + stencil.q0  * stencil.q2  * amrex::Real(14369.)/amrex::Real(480.0)
-                           - stencil.q0  * stencil.q3  * amrex::Real(11389.)/amrex::Real(1440.0)
-                           + stencil.q1  * stencil.q1  * amrex::Real(44747.)/amrex::Real(960.0)
-                           - stencil.q1  * stencil.q2  * amrex::Real(35047.)/amrex::Real(480.0)
-                           + stencil.q1  * stencil.q3  * amrex::Real(9449.)/amrex::Real(480.0)
-                           + stencil.q2  * stencil.q2  * amrex::Real(28547.)/amrex::Real(960.0)
-                           - stencil.q2  * stencil.q3  * amrex::Real(2623.)/amrex::Real(160.0)
-                           + stencil.q3  * stencil.q3  * amrex::Real(6649.)/amrex::Real(2880.0) );
-    return b1 - b2 - b3 + b4;
+    return weno7_beta0(stencil) - weno7_beta1(stencil) -
+           weno7_beta2(stencil) + weno7_beta3(stencil);
+}
+
+amrex::Real weno3_reference_value (const CenteredFaceStencil3& stencil)
+{
+    const amrex::Real w0 = weno_classic_weight(amrex::Real(1.0) / amrex::Real(3.0), weno3_beta0(stencil));
+    const amrex::Real w1 = weno_classic_weight(amrex::Real(2.0) / amrex::Real(3.0), weno3_beta1(stencil));
+    const amrex::Real wsum = w0 + w1;
+    return (w0 * weno3_fv_candidate0(stencil) + w1 * weno3_fv_candidate1(stencil)) / wsum;
+}
+
+amrex::Real weno5_reference_value (const CenteredFaceStencil5& stencil)
+{
+    const amrex::Real w0 = weno_classic_weight(amrex::Real(1.0) / amrex::Real(10.0), weno5_beta0(stencil));
+    const amrex::Real w1 = weno_classic_weight(amrex::Real(3.0) / amrex::Real(5.0), weno5_beta1(stencil));
+    const amrex::Real w2 = weno_classic_weight(amrex::Real(3.0) / amrex::Real(10.0), weno5_beta2(stencil));
+    const amrex::Real wsum = w0 + w1 + w2;
+    return (w0 * weno5_fv_candidate0(stencil) +
+            w1 * weno5_fv_candidate1(stencil) +
+            w2 * weno5_fv_candidate2(stencil)) / wsum;
+}
+
+amrex::Real weno7_reference_value (const CenteredFaceStencil7& stencil)
+{
+    const amrex::Real w0 = weno_classic_weight(amrex::Real(1.0) / amrex::Real(35.0), weno7_beta0(stencil));
+    const amrex::Real w1 = weno_classic_weight(amrex::Real(12.0) / amrex::Real(35.0), weno7_beta1(stencil));
+    const amrex::Real w2 = weno_classic_weight(amrex::Real(18.0) / amrex::Real(35.0), weno7_beta2(stencil));
+    const amrex::Real w3 = weno_classic_weight(amrex::Real(4.0) / amrex::Real(35.0), weno7_beta3(stencil));
+    const amrex::Real wsum = w0 + w1 + w2 + w3;
+    return (w0 * weno7_fv_candidate0(stencil) +
+            w1 * weno7_fv_candidate1(stencil) +
+            w2 * weno7_fv_candidate2(stencil) +
+            w3 * weno7_fv_candidate3(stencil)) / wsum;
+}
+
+amrex::Real weno3z_reference_value (const CenteredFaceStencil3& stencil)
+{
+    const amrex::Real tau = weno3_tau(stencil);
+    const amrex::Real w0 = weno_z_weight(amrex::Real(1.0) / amrex::Real(3.0), weno3_beta0(stencil), tau);
+    const amrex::Real w1 = weno_z_weight(amrex::Real(2.0) / amrex::Real(3.0), weno3_beta1(stencil), tau);
+    const amrex::Real wsum = w0 + w1;
+    return (w0 * weno3_fv_candidate0(stencil) + w1 * weno3_fv_candidate1(stencil)) / wsum;
+}
+
+amrex::Real weno_mzq3_reference_value (const CenteredFaceStencil3& stencil)
+{
+    const amrex::Real beta0 = weno3_beta0(stencil);
+    const amrex::Real beta1 = weno3_beta1(stencil);
+    const amrex::Real beta_c = weno_mzq3_beta_c(stencil);
+    // The MZQ tau scaling is method-specific; tests document and protect the
+    // existing contract unless a derivation shows otherwise.
+    const amrex::Real tau = (amrex::Math::abs(beta_c - beta0) +
+                             amrex::Math::abs(beta_c - beta1)) / amrex::Real(32.0);
+    const amrex::Real a0 = weno_z_weight(amrex::Real(1.0) / amrex::Real(3.0), beta0, tau);
+    const amrex::Real a1 = weno_z_weight(amrex::Real(1.0) / amrex::Real(3.0), beta1, tau);
+    const amrex::Real a2 = weno_z_weight(amrex::Real(1.0) / amrex::Real(3.0), beta_c, tau);
+    const amrex::Real asum = a0 + a1 + a2;
+    const amrex::Real w0 = a0 / asum;
+    const amrex::Real w1 = a1 / asum;
+    const amrex::Real w2 = a2 / asum;
+    const amrex::Real v0 = weno3_fv_candidate0(stencil);
+    const amrex::Real v1 = weno3_fv_candidate1(stencil);
+    const amrex::Real v2 = (-stencil.qm1 + amrex::Real(5.0) * stencil.q0 + amrex::Real(2.0) * stencil.q1) /
+                           amrex::Real(6.0);
+    return (w2 / (amrex::Real(1.0) / amrex::Real(3.0))) *
+               (v2 - (amrex::Real(1.0) / amrex::Real(3.0)) * v0 - (amrex::Real(1.0) / amrex::Real(3.0)) * v1) +
+           w0 * v0 + w1 * v1;
+}
+
+amrex::Real weno5z_reference_value (const CenteredFaceStencil5& stencil)
+{
+    const amrex::Real tau = weno5_tau(stencil);
+    const amrex::Real w0 = weno_z_weight(amrex::Real(1.0) / amrex::Real(10.0), weno5_beta0(stencil), tau);
+    const amrex::Real w1 = weno_z_weight(amrex::Real(3.0) / amrex::Real(5.0), weno5_beta1(stencil), tau);
+    const amrex::Real w2 = weno_z_weight(amrex::Real(3.0) / amrex::Real(10.0), weno5_beta2(stencil), tau);
+    const amrex::Real wsum = w0 + w1 + w2;
+    return (w0 * weno5_fv_candidate0(stencil) +
+            w1 * weno5_fv_candidate1(stencil) +
+            w2 * weno5_fv_candidate2(stencil)) / wsum;
+}
+
+amrex::Real weno7z_reference_value (const CenteredFaceStencil7& stencil)
+{
+    const amrex::Real tau = weno7_tau(stencil);
+    const amrex::Real w0 = weno_z_weight(amrex::Real(1.0) / amrex::Real(35.0), weno7_beta0(stencil), tau);
+    const amrex::Real w1 = weno_z_weight(amrex::Real(12.0) / amrex::Real(35.0), weno7_beta1(stencil), tau);
+    const amrex::Real w2 = weno_z_weight(amrex::Real(18.0) / amrex::Real(35.0), weno7_beta2(stencil), tau);
+    const amrex::Real w3 = weno_z_weight(amrex::Real(4.0) / amrex::Real(35.0), weno7_beta3(stencil), tau);
+    const amrex::Real wsum = w0 + w1 + w2 + w3;
+    return (w0 * weno7_fv_candidate0(stencil) +
+            w1 * weno7_fv_candidate1(stencil) +
+            w2 * weno7_fv_candidate2(stencil) +
+            w3 * weno7_fv_candidate3(stencil)) / wsum;
+}
+
+amrex::Real reference_weno_face_value (const CenteredFaceStencil9& stencil,
+                                       const AdvType adv_type,
+                                       const int sigma)
+{
+    if (adv_type == AdvType::Weno_3) {
+        return weno3_reference_value((sigma >= 0) ? take_stencil3(stencil) : take_right_stencil3(stencil));
+    }
+    if (adv_type == AdvType::Weno_5) {
+        return weno5_reference_value((sigma >= 0) ? take_stencil5(stencil) : take_right_stencil5(stencil));
+    }
+    if (adv_type == AdvType::Weno_7) {
+        return weno7_reference_value((sigma >= 0) ? take_stencil7(stencil) : take_right_stencil7(stencil));
+    }
+    if (adv_type == AdvType::Weno_3Z) {
+        return weno3z_reference_value((sigma >= 0) ? take_stencil3(stencil) : take_right_stencil3(stencil));
+    }
+    if (adv_type == AdvType::Weno_3MZQ) {
+        return weno_mzq3_reference_value((sigma >= 0) ? take_stencil3(stencil) : take_right_stencil3(stencil));
+    }
+    if (adv_type == AdvType::Weno_5Z) {
+        return weno5z_reference_value((sigma >= 0) ? take_stencil5(stencil) : take_right_stencil5(stencil));
+    }
+    return weno7z_reference_value((sigma >= 0) ? take_stencil7(stencil) : take_right_stencil7(stencil));
 }
 
 std::string weno_trace (const AdvType adv_type,
@@ -261,6 +344,89 @@ TEST(InterpolationWENOScalar, ClassicWenoOptimalFiniteVolumeReferencesMatchDesig
         const amrex::Real actual = weno7_fv_optimal_face_value(stencil);
         const amrex::Real expected = centered_face_value_monomial(degree, kFacePlusHalf);
         EXPECT_NEAR(actual, expected, scaled_tol(actual, expected, kPolynomialRelTol));
+    }
+}
+
+TEST(InterpolationWENOScalar, CandidateFiniteVolumeReferencesMatchSubstencilDegree)
+{
+    for (int degree = 0; degree <= 1; ++degree) {
+        const CenteredFaceStencil3 stencil = make_centered_monomial_stencil3(degree);
+        const amrex::Real expected = centered_face_value_monomial(degree, kFacePlusHalf);
+        EXPECT_NEAR(weno3_fv_candidate0(stencil), expected,
+                    scaled_tol(weno3_fv_candidate0(stencil), expected, kPolynomialRelTol));
+        EXPECT_NEAR(weno3_fv_candidate1(stencil), expected,
+                    scaled_tol(weno3_fv_candidate1(stencil), expected, kPolynomialRelTol));
+    }
+
+    for (int degree = 0; degree <= 2; ++degree) {
+        const CenteredFaceStencil5 stencil = make_centered_monomial_stencil5(degree);
+        const amrex::Real expected = centered_face_value_monomial(degree, kFacePlusHalf);
+        EXPECT_NEAR(weno5_fv_candidate0(stencil), expected,
+                    scaled_tol(weno5_fv_candidate0(stencil), expected, kPolynomialRelTol));
+        EXPECT_NEAR(weno5_fv_candidate1(stencil), expected,
+                    scaled_tol(weno5_fv_candidate1(stencil), expected, kPolynomialRelTol));
+        EXPECT_NEAR(weno5_fv_candidate2(stencil), expected,
+                    scaled_tol(weno5_fv_candidate2(stencil), expected, kPolynomialRelTol));
+    }
+
+    for (int degree = 0; degree <= 3; ++degree) {
+        const CenteredFaceStencil7 stencil = make_centered_monomial_stencil7(degree);
+        const amrex::Real expected = centered_face_value_monomial(degree, kFacePlusHalf);
+        EXPECT_NEAR(weno7_fv_candidate0(stencil), expected,
+                    scaled_tol(weno7_fv_candidate0(stencil), expected, kPolynomialRelTol));
+        EXPECT_NEAR(weno7_fv_candidate1(stencil), expected,
+                    scaled_tol(weno7_fv_candidate1(stencil), expected, kPolynomialRelTol));
+        EXPECT_NEAR(weno7_fv_candidate2(stencil), expected,
+                    scaled_tol(weno7_fv_candidate2(stencil), expected, kPolynomialRelTol));
+        EXPECT_NEAR(weno7_fv_candidate3(stencil), expected,
+                    scaled_tol(weno7_fv_candidate3(stencil), expected, kPolynomialRelTol));
+    }
+}
+
+TEST(InterpolationWENOScalar, NonlinearSchemesMatchIndependentFiniteVolumeReferences)
+{
+    const std::array<AdvType, 7> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7,
+                                             AdvType::Weno_3Z, AdvType::Weno_3MZQ,
+                                             AdvType::Weno_5Z, AdvType::Weno_7Z}};
+    const std::array<CenteredFaceStencil9, 3> samples = {{
+        CenteredFaceStencil9{amrex::Real(0.8), amrex::Real(-1.2), amrex::Real(0.45), amrex::Real(-0.6),
+                            amrex::Real(1.1), amrex::Real(-0.35), amrex::Real(0.9), amrex::Real(-1.4), amrex::Real(0.5)},
+        CenteredFaceStencil9{amrex::Real(-0.25), amrex::Real(0.4), amrex::Real(-0.9), amrex::Real(1.35),
+                            amrex::Real(-0.2), amrex::Real(0.75), amrex::Real(-1.1), amrex::Real(0.6), amrex::Real(-0.3)},
+        CenteredFaceStencil9{amrex::Real(1.0), amrex::Real(0.6), amrex::Real(-0.4), amrex::Real(0.2),
+                            amrex::Real(-0.1), amrex::Real(0.3), amrex::Real(-0.7), amrex::Real(1.4), amrex::Real(-0.8)} }};
+
+    for (const AdvType adv_type : schemes) {
+        for (int sample_index = 0; sample_index < static_cast<int>(samples.size()); ++sample_index) {
+            for (const int sigma : std::array<int, 2>{{-1, 1}}) {
+                const amrex::Real actual = evaluate_weno_x_on_device(samples[sample_index], adv_type, sigma);
+                const amrex::Real expected = reference_weno_face_value(samples[sample_index], adv_type, sigma);
+                EXPECT_NEAR(actual, expected, scaled_tol(actual, expected, kWenoValueRelTol))
+                    << weno_trace(adv_type, sigma, sample_index, actual, expected, kWenoValueRelTol);
+            }
+        }
+    }
+}
+
+TEST(InterpolationWENOScalar, NonlinearSchemesRespectMirrorSymmetry)
+{
+    const std::array<AdvType, 7> schemes = {{AdvType::Weno_3, AdvType::Weno_5, AdvType::Weno_7,
+                                             AdvType::Weno_3Z, AdvType::Weno_3MZQ,
+                                             AdvType::Weno_5Z, AdvType::Weno_7Z}};
+    const std::array<CenteredFaceStencil9, 2> samples = {{
+        CenteredFaceStencil9{amrex::Real(-0.4), amrex::Real(0.3), amrex::Real(1.2), amrex::Real(-0.8),
+                            amrex::Real(0.5), amrex::Real(-1.1), amrex::Real(0.9), amrex::Real(0.2), amrex::Real(-0.6)},
+        CenteredFaceStencil9{amrex::Real(0.15), amrex::Real(-0.9), amrex::Real(0.7), amrex::Real(0.1),
+                            amrex::Real(-0.2), amrex::Real(1.0), amrex::Real(-0.5), amrex::Real(0.8), amrex::Real(-1.3)} }};
+
+    for (const AdvType adv_type : schemes) {
+        for (int sample_index = 0; sample_index < static_cast<int>(samples.size()); ++sample_index) {
+            const CenteredFaceStencil9 mirrored = mirror_face_plus_half_stencil9(samples[sample_index]);
+            const amrex::Real positive = evaluate_weno_x_on_device(samples[sample_index], adv_type, 1);
+            const amrex::Real negative = evaluate_weno_x_on_device(mirrored, adv_type, -1);
+            EXPECT_NEAR(positive, negative, scaled_tol(positive, negative, kWenoValueRelTol))
+                << weno_trace(adv_type, 1, sample_index, positive, negative, kWenoValueRelTol);
+        }
     }
 }
 
