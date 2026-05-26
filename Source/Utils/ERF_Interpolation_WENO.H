@@ -358,14 +358,14 @@ struct WENO7
         if (upw_lo != amrex::Real(0)) upw_lo = (upw_lo > 0) ? amrex::Real(1) : -amrex::Real(1);
 
         // Data to interpolate on
-    amrex::Real sp3 = m_phi(i  , j  , k+3, qty_index);
+        amrex::Real sp3 = m_phi(i  , j  , k+3, qty_index);
         amrex::Real sp2 = m_phi(i  , j  , k+2, qty_index);
         amrex::Real sp1 = m_phi(i  , j  , k+1, qty_index);
         amrex::Real s   = m_phi(i  , j  , k  , qty_index);
         amrex::Real sm1 = m_phi(i  , j  , k-1, qty_index);
         amrex::Real sm2 = m_phi(i  , j  , k-2, qty_index);
         amrex::Real sm3 = m_phi(i  , j  , k-3, qty_index);
-    amrex::Real sm4 = m_phi(i  , j  , k-4, qty_index);
+        amrex::Real sm4 = m_phi(i  , j  , k-4, qty_index);
 
         // Left and right fluxes
         amrex::Real Fhi = Evaluate(sm4,sm3,sm2,sm1,s  ,sp1,sp2);
@@ -386,47 +386,47 @@ struct WENO7
               const amrex::Real& sp2,
               const amrex::Real& sp3) const
     {
-        // Smoothing factors
-        amrex::Real b1 = ( sm3 * sm3 * amrex::Real(6649.)/amrex::Real(2880.0)
-                         - sm3 * sm2 * amrex::Real(2623.)/amrex::Real(160.0)
-                         + sm3 * sm1 * amrex::Real(9449.)/amrex::Real(480.0)
-                         - sm3 * s   * amrex::Real(11389.)/amrex::Real(1440.0)
-                         + sm2 * sm2 * amrex::Real(28547.)/amrex::Real(960.0)
-                         - sm2 * sm1 * amrex::Real(35047.)/amrex::Real(480.0)
-                         + sm2 * s   * amrex::Real(14369.)/amrex::Real(480.0)
-                         + sm1 * sm1 * amrex::Real(44747.)/amrex::Real(960.0)
-                         - sm1 * s   * amrex::Real(6383.)/amrex::Real(160.0)
-                         + s   * s   * amrex::Real(25729.)/amrex::Real(2880.0) );
-        amrex::Real b2 = ( sm2 * sm2 * 3169/amrex::Real(2880.0)
-                         - sm2 * sm1 * 3229/amrex::Real(480.0)
-                         + sm2 * s   * 3169/amrex::Real(480.0)
-                         - sm2 * sp1 * 2989/amrex::Real(1440.0)
-                         + sm1 * sm1 * 11147/amrex::Real(960.0)
-                         - sm1 * s   * 11767/amrex::Real(480.0)
-                         + sm1 * sp1 * 1283/amrex::Real(160.0)
-                         + s   * s   * 13667/amrex::Real(960.0)
-                         - s   * sp1 * 5069/amrex::Real(480.0)
-                         + sp1 * sp1 * 6649/amrex::Real(2880.0) );
-        amrex::Real b3 = ( sm1 * sm1 * amrex::Real(6649.)/amrex::Real(2880.0)
-                         - sm1 * s   * amrex::Real(5069.)/amrex::Real(480.0)
-                         + sm1 * sp1 * amrex::Real(1283.)/amrex::Real(160.0)
-                         - sm1 * sp2 * amrex::Real(2989.)/amrex::Real(1440.0)
-                         + s   * s   * amrex::Real(13667.)/amrex::Real(960.0)
-                         - s   * sp1 * amrex::Real(11767.)/amrex::Real(480.0)
-                         + s   * sp2 * amrex::Real(3169.)/amrex::Real(480.0)
-                         + sp1 * sp1 * amrex::Real(11147.)/amrex::Real(960.0)
-                         - sp1 * sp2 * amrex::Real(3229.)/amrex::Real(480.0)
-                         + sp2 * sp2 * amrex::Real(3169.)/amrex::Real(2880.0) );
-        amrex::Real b4 = ( s   * s   * amrex::Real(25729.)/amrex::Real(2880.)
-                         - s   * sp1 * amrex::Real(6383.)/amrex::Real(160.)
-                         + s   * sp2 * amrex::Real(14369.)/amrex::Real(480.)
-                         - s   * sp3 * amrex::Real(11389.)/amrex::Real(1440.)
-                         + sp1 * sp1 * amrex::Real(44747.)/amrex::Real(960.)
-                         - sp1 * sp2 * amrex::Real(35047.)/amrex::Real(480.)
-                         + sp1 * sp3 * amrex::Real(9449.)/amrex::Real(480.)
-                         + sp2 * sp2 * amrex::Real(28547.)/amrex::Real(960.)
-                         - sp2 * sp3 * amrex::Real(2623.)/amrex::Real(160.)
-                         + sp3 * sp3 * amrex::Real(6649.)/amrex::Real(2880.) );
+        // Finite-volume Jiang-Shu smoothness indicators for cell-average data.
+        amrex::Real b1 = ( amrex::Real(547.0) * sm3 * sm3
+                 - amrex::Real(3882.0) * sm3 * sm2
+                 + amrex::Real(4642.0) * sm3 * sm1
+                 - amrex::Real(1854.0) * sm3 * s
+                 + amrex::Real(7043.0) * sm2 * sm2
+                 - amrex::Real(17246.0) * sm2 * sm1
+                 + amrex::Real(7042.0) * sm2 * s
+                 + amrex::Real(11003.0) * sm1 * sm1
+                 - amrex::Real(9402.0) * sm1 * s
+                 + amrex::Real(2107.0) * s * s ) / amrex::Real(240.0);
+        amrex::Real b2 = ( amrex::Real(267.0) * sm2 * sm2
+                 - amrex::Real(1642.0) * sm2 * sm1
+                 + amrex::Real(1602.0) * sm2 * s
+                 - amrex::Real(494.0) * sm2 * sp1
+                 + amrex::Real(2843.0) * sm1 * sm1
+                 - amrex::Real(5966.0) * sm1 * s
+                 + amrex::Real(1922.0) * sm1 * sp1
+                 + amrex::Real(3443.0) * s * s
+                 - amrex::Real(2522.0) * s * sp1
+                 + amrex::Real(547.0) * sp1 * sp1 ) / amrex::Real(240.0);
+        amrex::Real b3 = ( amrex::Real(547.0) * sm1 * sm1
+                 - amrex::Real(2522.0) * sm1 * s
+                 + amrex::Real(1922.0) * sm1 * sp1
+                 - amrex::Real(494.0) * sm1 * sp2
+                 + amrex::Real(3443.0) * s * s
+                 - amrex::Real(5966.0) * s * sp1
+                 + amrex::Real(1602.0) * s * sp2
+                 + amrex::Real(2843.0) * sp1 * sp1
+                 - amrex::Real(1642.0) * sp1 * sp2
+                 + amrex::Real(267.0) * sp2 * sp2 ) / amrex::Real(240.0);
+        amrex::Real b4 = ( amrex::Real(2107.0) * s * s
+                 - amrex::Real(9402.0) * s * sp1
+                 + amrex::Real(7042.0) * s * sp2
+                 - amrex::Real(1854.0) * s * sp3
+                 + amrex::Real(11003.0) * sp1 * sp1
+                 - amrex::Real(17246.0) * sp1 * sp2
+                 + amrex::Real(4642.0) * sp1 * sp3
+                 + amrex::Real(7043.0) * sp2 * sp2
+                 - amrex::Real(3882.0) * sp2 * sp3
+                 + amrex::Real(547.0) * sp3 * sp3 ) / amrex::Real(240.0);
 
         // Weight factors
         amrex::Real w1 = g1 / ( (eps + b1) * (eps + b1) );
