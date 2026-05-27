@@ -3,9 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#ifndef ERF_PARALLEL_TEST_NPROCS
-#define ERF_PARALLEL_TEST_NPROCS 2
-#endif
+#include <cstdlib>
 
 TEST(ParallelEnvironment, HelloWorld)
 {
@@ -14,8 +12,16 @@ TEST(ParallelEnvironment, HelloWorld)
 
     EXPECT_GE(my_rank, 0);
     EXPECT_LT(my_rank, n_ranks);
+    EXPECT_GE(n_ranks, 1);
 
-    EXPECT_EQ(n_ranks, ERF_PARALLEL_TEST_NPROCS);
+    if (const char* expected = std::getenv("ERF_PARALLEL_TEST_NPROCS")) {
+        char* end = nullptr;
+        const long expected_nprocs = std::strtol(expected, &end, 10);
+        ASSERT_NE(end, expected);
+        ASSERT_EQ(*end, '\0');
+        EXPECT_GT(expected_nprocs, 0);
+        EXPECT_EQ(n_ranks, expected_nprocs);
+    }
 
     int local_val = 1;
     amrex::ParallelDescriptor::ReduceIntSum(local_val);

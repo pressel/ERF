@@ -86,6 +86,7 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DERF_DIM:STRING=3 \
           -DERF_ENABLE_MPI:BOOL=ON \
+          '-DERF_PARALLEL_TEST_NRANKS:STRING=1;2;4' \
           -DERF_ENABLE_PARTICLES:BOOL=${{matrix.particles}} \
           -DERF_ENABLE_NETCDF:BOOL=${{matrix.netcdf}} \
           -DERF_ENABLE_HDF5:BOOL=${{matrix.netcdf}} \

@@ -1,8 +1,16 @@
 if(ERF_ENABLE_TESTS OR ERF_ENABLE_UNIT_TESTS)
   if(NOT DEFINED ERF_TEST_NRANKS OR "${ERF_TEST_NRANKS}" STREQUAL "")
-    set(ERF_TEST_NRANKS 2 CACHE STRING "Number of MPI ranks to use for each test" FORCE)
+    set(ERF_TEST_NRANKS 2 CACHE STRING "Number of MPI ranks to use for each regression test" FORCE)
   else()
-    set(ERF_TEST_NRANKS "${ERF_TEST_NRANKS}" CACHE STRING "Number of MPI ranks to use for each test")
+    set(ERF_TEST_NRANKS "${ERF_TEST_NRANKS}" CACHE STRING "Number of MPI ranks to use for each regression test")
+  endif()
+
+  if(NOT DEFINED ERF_PARALLEL_TEST_NRANKS OR "${ERF_PARALLEL_TEST_NRANKS}" STREQUAL "")
+    set(ERF_PARALLEL_TEST_NRANKS "2" CACHE STRING
+        "Semicolon-separated MPI rank counts for parallel GoogleTest unit tests" FORCE)
+  else()
+    set(ERF_PARALLEL_TEST_NRANKS "${ERF_PARALLEL_TEST_NRANKS}" CACHE STRING
+        "Semicolon-separated MPI rank counts for parallel GoogleTest unit tests")
   endif()
 endif()
 
