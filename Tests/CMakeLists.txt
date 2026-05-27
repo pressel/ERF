@@ -1,6 +1,13 @@
+if(ERF_ENABLE_TESTS OR ERF_ENABLE_UNIT_TESTS)
+  if(NOT DEFINED ERF_TEST_NRANKS OR "${ERF_TEST_NRANKS}" STREQUAL "")
+    set(ERF_TEST_NRANKS 2 CACHE STRING "Number of MPI ranks to use for each test" FORCE)
+  else()
+    set(ERF_TEST_NRANKS "${ERF_TEST_NRANKS}" CACHE STRING "Number of MPI ranks to use for each test")
+  endif()
+endif()
+
 if(ERF_ENABLE_TESTS)
   # Additional testing options
-  set(ERF_TEST_NRANKS 2 CACHE STRING  "Number of MPI ranks to use for each test")
   set(ERF_TEST_FCOMPARE_RTOL "2.0e-10" CACHE STRING "fcompare relative tolerance")
   set(ERF_TEST_FCOMPARE_ATOL "2.0e-10" CACHE STRING "fcompare absolute tolerance")
   set(ERF_TEST_GOLD_FILES_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ERFGoldFiles" CACHE PATH "Path to ERF gold files")

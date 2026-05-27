@@ -59,7 +59,24 @@ gtest_discover_tests(${erf_exe_name}
 if(ERF_ENABLE_MPI)
   find_package(MPI REQUIRED COMPONENTS CXX)
 
-  set(erf_parallel_nprocs ${ERF_TEST_NRANKS})
+  if(DEFINED ERF_TEST_NRANKS AND NOT "${ERF_TEST_NRANKS}" STREQUAL "")
+    set(erf_parallel_nprocs "${ERF_TEST_NRANKS}")
+  else()
+    set(erf_parallel_nprocs "2")
+  endif()
+
+  if(NOT "${erf_parallel_nprocs}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR
+      "ERF_TEST_NRANKS must be a positive integer; got '${erf_parallel_nprocs}'")
+  endif()
+
+  if(erf_parallel_nprocs LESS 2)
+    message(FATAL_ERROR
+      "Parallel unit tests require at least 2 MPI ranks; got '${erf_parallel_nprocs}'")
+  endif()
+
+  set(erf_parallel_test_name
+      "${erf_parallel_exe_name}_np${erf_parallel_nprocs}")
 
   add_executable(${erf_parallel_exe_name})
   target_sources(${erf_parallel_exe_name}
@@ -80,7 +97,7 @@ if(ERF_ENABLE_MPI)
       ERF_PARALLEL_TEST_NPROCS=${erf_parallel_nprocs}
   )
 
-  add_test(NAME ${erf_parallel_exe_name}_np${erf_parallel_nprocs}
+  add_test(NAME ${erf_parallel_test_name}
     COMMAND
       ${MPIEXEC_EXECUTABLE}
       ${MPIEXEC_NUMPROC_FLAG} ${erf_parallel_nprocs}
@@ -90,7 +107,7 @@ if(ERF_ENABLE_MPI)
     COMMAND_EXPAND_LISTS
   )
 
-  set_tests_properties(${erf_parallel_exe_name}_np${erf_parallel_nprocs}
+  set_tests_properties(${erf_parallel_test_name}
     PROPERTIES
       LABELS "parallel"
       PROCESSORS ${erf_parallel_nprocs}
