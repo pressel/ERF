@@ -12,6 +12,13 @@ if(ERF_ENABLE_TESTS OR ERF_ENABLE_UNIT_TESTS)
     set(ERF_PARALLEL_TEST_NRANKS "${ERF_PARALLEL_TEST_NRANKS}" CACHE STRING
         "Semicolon-separated MPI rank counts for parallel GoogleTest unit tests")
   endif()
+
+  option(ERF_PARALLEL_TEST_ALLOW_OVERSUBSCRIBE
+    "Allow oversubscribed MPI launches for parallel GoogleTest unit tests"
+    OFF)
+
+  set(ERF_PARALLEL_TEST_MPIEXEC_PREFLAGS "" CACHE STRING
+      "Extra mpiexec preflags for parallel GoogleTest unit tests")
 endif()
 
 if(ERF_ENABLE_TESTS)

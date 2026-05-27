@@ -70,6 +70,40 @@ if(ERF_ENABLE_MPI)
     set(ERF_PARALLEL_TEST_NRANKS "2")
   endif()
 
+  set(erf_parallel_test_mpiexec_preflags)
+
+  if(DEFINED ERF_PARALLEL_TEST_MPIEXEC_PREFLAGS AND
+     NOT "${ERF_PARALLEL_TEST_MPIEXEC_PREFLAGS}" STREQUAL "")
+    list(APPEND erf_parallel_test_mpiexec_preflags
+      ${ERF_PARALLEL_TEST_MPIEXEC_PREFLAGS})
+  endif()
+
+  if(ERF_PARALLEL_TEST_ALLOW_OVERSUBSCRIBE)
+    execute_process(
+      COMMAND ${MPIEXEC_EXECUTABLE} --version
+      OUTPUT_VARIABLE erf_mpiexec_version_out
+      ERROR_VARIABLE erf_mpiexec_version_err
+      RESULT_VARIABLE erf_mpiexec_version_result
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_STRIP_TRAILING_WHITESPACE
+    )
+
+    string(TOLOWER
+      "${erf_mpiexec_version_out} ${erf_mpiexec_version_err}"
+      erf_mpiexec_version_text)
+
+    if(erf_mpiexec_version_result EQUAL 0 AND
+       erf_mpiexec_version_text MATCHES "open mpi|openrte|prrte")
+      list(APPEND erf_parallel_test_mpiexec_preflags
+        "--map-by" ":OVERSUBSCRIBE")
+      message(STATUS
+        "Parallel GoogleTest MPI oversubscription enabled for Open MPI/PRRTE")
+    else()
+      message(STATUS
+        "ERF_PARALLEL_TEST_ALLOW_OVERSUBSCRIBE is ON, but mpiexec does not look like Open MPI/PRRTE; no oversubscribe flag was added.")
+    endif()
+  endif()
+
   add_executable(${erf_parallel_exe_name})
   target_sources(${erf_parallel_exe_name}
     PRIVATE
@@ -104,6 +138,7 @@ if(ERF_ENABLE_MPI)
         ${MPIEXEC_EXECUTABLE}
         ${MPIEXEC_NUMPROC_FLAG} ${erf_parallel_nprocs}
         ${MPIEXEC_PREFLAGS}
+        ${erf_parallel_test_mpiexec_preflags}
         $<TARGET_FILE:${erf_parallel_exe_name}>
         ${MPIEXEC_POSTFLAGS}
       COMMAND_EXPAND_LISTS
