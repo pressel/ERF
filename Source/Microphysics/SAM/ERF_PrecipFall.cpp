@@ -87,8 +87,9 @@ SAM::PrecipFall (const SolverChoice& sc)
         });
     }
 
-    // Compute number of substeps from maximum terminal velocity
-    Real wt_max;
+    // Compute the legacy reduced-flux substep count from the maximum
+    // density-corrected sedimentation flux rather than a direct fall speed.
+    Real max_reduced_flux;
     int n_substep;
     auto const& ma_fz_arr = fz.const_arrays();
     GpuTuple<Real> max = ParReduce(TypeList<ReduceOpMax>{},
@@ -99,8 +100,8 @@ SAM::PrecipFall (const SolverChoice& sc)
                          {
                              return { ma_fz_arr[box_no](i,j,k) };
                          });
-    wt_max = get<0>(max) + std::numeric_limits<Real>::epsilon();
-    n_substep = sam_substep_count_from_reduced_flux(wt_max, dtn, m_dzmin);
+    max_reduced_flux = get<0>(max) + std::numeric_limits<Real>::epsilon();
+    n_substep = sam_substep_count_from_reduced_flux(max_reduced_flux, dtn, m_dzmin);
     AMREX_ALWAYS_ASSERT(n_substep >= 1);
     coef /= Real(n_substep);
     dtn  /= Real(n_substep);
@@ -147,8 +148,7 @@ SAM::PrecipFall (const SolverChoice& sc)
 
                 if(k==k_lo){
                     const SAMSurfaceAccumulation surface_accum =
-                        sam_surface_accumulation(face_state.rho_avg, face_state.qp_avg,
-                                                 face_state.omp, face_state.omg,
+                        sam_surface_accumulation(face_state, rho_0,
                                                  vrain, vsnow, vgrau, dtn);
                     rain_accum_array(i,j,k)  = rain_accum_array(i,j,k)  + surface_accum.rain;
                     snow_accum_array(i,j,k)  = snow_accum_array(i,j,k)  + surface_accum.snow;

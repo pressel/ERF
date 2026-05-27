@@ -103,6 +103,12 @@ struct SAMSurfaceAccumulation {
     amrex::Real graupel{zero};
 };
 
+struct SAMPrecipFluxComponents {
+    amrex::Real rain{zero};
+    amrex::Real snow{zero};
+    amrex::Real graupel{zero};
+};
+
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_mbar_to_pa (const amrex::Real pres_mbar) noexcept
 {
@@ -571,7 +577,9 @@ int sam_substep_count_from_reduced_flux (const amrex::Real reduced_flux,
                                          const amrex::Real dt,
                                          const amrex::Real dz) noexcept
 {
-    // Substeps follow the legacy reduced-flux rule. Property tests will audit it.
+    // Substeps follow the legacy reduced-flux rule based on the maximum
+    // density-corrected precip flux, not directly on a terminal fall speed.
+    // Property tests characterize this behavior before any intended change.
     // MUST MATCH: SAM::CFL_MAX.
     return static_cast<int>(std::ceil(reduced_flux * (dt / dz) / myhalf));
 }
@@ -627,6 +635,25 @@ amrex::Real sam_precip_flux_from_face_state (const SAMPrecipFaceState& face_stat
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrecipFluxComponents sam_precip_flux_components_from_face_state (const SAMPrecipFaceState& face_state,
+                                                                    const amrex::Real vrain,
+                                                                    const amrex::Real vsnow,
+                                                                    const amrex::Real vgrau) noexcept
+{
+    SAMPrecipFluxComponents result{};
+    if (face_state.qp_avg <= qp_threshold) {
+        return result;
+    }
+
+    result.rain = face_state.omp * vrain * std::pow(face_state.rho_avg * face_state.qrr, one + crain);
+    result.snow = (one - face_state.omp) * (one - face_state.omg)
+        * vsnow * std::pow(face_state.rho_avg * face_state.qss, one + csnow);
+    result.graupel = (one - face_state.omp) * face_state.omg
+        * vgrau * std::pow(face_state.rho_avg * face_state.qgg, one + cgrau);
+    return result;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_precip_flux_density_corrected (const amrex::Real precip_flux,
                                                const amrex::Real rho_0,
                                                const amrex::Real rho_avg) noexcept
@@ -645,20 +672,24 @@ amrex::Real sam_sedimentation_tendency (const amrex::Real fz_hi,
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-SAMSurfaceAccumulation sam_surface_accumulation (const amrex::Real rho_avg,
-                                                 const amrex::Real qp_avg,
-                                                 const amrex::Real omp,
-                                                 const amrex::Real omg,
+SAMSurfaceAccumulation sam_surface_accumulation (const SAMPrecipFaceState& face_state,
+                                                 const amrex::Real rho_0,
                                                  const amrex::Real vrain,
                                                  const amrex::Real vsnow,
                                                  const amrex::Real vgrau,
                                                  const amrex::Real dtn) noexcept
 {
     SAMSurfaceAccumulation result{};
-    // Surface accumulation preserves the SAM baseline formula. Property tests will audit it.
-    result.rain = rho_avg * (omp * qp_avg) * vrain * dtn / rhor * amrex::Real(1000.0);
-    result.snow = rho_avg * (one - omp) * (one - omg) * qp_avg * vsnow * dtn / rhos * amrex::Real(1000.0);
-    result.graupel = rho_avg * (one - omp) * omg * qp_avg * vgrau * dtn / rhog * amrex::Real(1000.0);
+    const SAMPrecipFluxComponents face_fluxes =
+        sam_precip_flux_components_from_face_state(face_state, vrain, vsnow, vgrau);
+    const amrex::Real density_correction = std::sqrt(rho_0 / face_state.rho_avg);
+
+    // Surface accumulation uses the same bottom outgoing density-corrected
+    // component fluxes as the sedimentation operator, integrated over dt and
+    // converted from mass per area to depth.
+    result.rain = face_fluxes.rain * density_correction * dtn / rhor * amrex::Real(1000.0);
+    result.snow = face_fluxes.snow * density_correction * dtn / rhos * amrex::Real(1000.0);
+    result.graupel = face_fluxes.graupel * density_correction * dtn / rhog * amrex::Real(1000.0);
     return result;
 }
 

@@ -147,6 +147,9 @@ public:
     void
     Compute_Coefficients ();
 
+    SAMCoefficientRow
+    CoefficientRowAt (int k) const;
+
     int
     Qmoist_Size () override { return SAM::m_qmoist_size; }
 
