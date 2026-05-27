@@ -164,6 +164,70 @@ amrex::Real branch_dense_profile (const int index)
     return smooth_periodic_cell_average(index + 9, 32) + amrex::Real(0.05) * amrex::Real(index * index - 3 * index);
 }
 
+void launch_weno7_z_indexing_case (const amrex::Array4<const amrex::Real>& qty,
+                                   const amrex::Array4<amrex::Real>& output)
+{
+    amrex::ParallelFor(1, [=] AMREX_GPU_DEVICE (int) noexcept {
+        output(0, 0, 0, 0) = evaluate_weno_in_z(0, qty, AdvType::Weno_7, 1);
+        output(0, 0, 0, 1) = evaluate_weno_in_z(0, qty, AdvType::Weno_7, -1);
+    });
+    gpu_sync();
+}
+
+void launch_weno7_directional_wrapper_cases (const amrex::Box& out_box,
+                                             const amrex::Array4<const amrex::Real>& qty_x,
+                                             const amrex::Array4<const amrex::Real>& qty_y,
+                                             const amrex::Array4<const amrex::Real>& qty_z,
+                                             const amrex::Array4<amrex::Real>& output)
+{
+    amrex::ParallelFor(out_box, 6, [=] AMREX_GPU_DEVICE (int i, int, int, int n) noexcept {
+        const int sigma = (n / 3 == 0) ? -1 : 1;
+        const int axis = n % 3;
+
+        if (axis == 0) {
+            output(i, 0, 0, n) = evaluate_weno_in_x(i + 1, qty_x, AdvType::Weno_7, sigma);
+        } else if (axis == 1) {
+            output(i, 0, 0, n) = evaluate_weno_in_y(i + 1, qty_y, AdvType::Weno_7, sigma);
+        } else {
+            output(i, 0, 0, n) = evaluate_weno_in_z(i + 1, qty_z, AdvType::Weno_7, sigma);
+        }
+    });
+    gpu_sync();
+}
+
+AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+AdvType wenoz_directional_wrapper_scheme (const int group) noexcept
+{
+    return (group == 0) ? AdvType::Weno_3Z :
+           (group == 1) ? AdvType::Weno_3MZQ :
+           (group == 2) ? AdvType::Weno_5Z :
+                          AdvType::Weno_7Z;
+}
+
+void launch_wenoz_directional_wrapper_cases (const amrex::Box& out_box,
+                                             const int ncomp,
+                                             const amrex::Array4<const amrex::Real>& qty_x,
+                                             const amrex::Array4<const amrex::Real>& qty_y,
+                                             const amrex::Array4<const amrex::Real>& qty_z,
+                                             const amrex::Array4<amrex::Real>& output)
+{
+    amrex::ParallelFor(out_box, ncomp, [=] AMREX_GPU_DEVICE (int i, int, int, int n) noexcept {
+        const int group = n / 3;
+        const int axis = n % 3;
+        const AdvType adv_type = wenoz_directional_wrapper_scheme(group / 2);
+        const int sigma = (group % 2 == 0) ? -1 : 1;
+
+        if (axis == 0) {
+            output(i, 0, 0, n) = evaluate_weno_in_x(i + 1, qty_x, adv_type, sigma);
+        } else if (axis == 1) {
+            output(i, 0, 0, n) = evaluate_weno_in_y(i + 1, qty_y, adv_type, sigma);
+        } else {
+            output(i, 0, 0, n) = evaluate_weno_in_z(i + 1, qty_z, adv_type, sigma);
+        }
+    });
+    gpu_sync();
+}
+
 } // namespace
 
 // Motivation: Smooth periodic convergence is the kernel-side end-to-end check
@@ -211,13 +275,7 @@ TEST(InterpolationWENOKernel, Weno7DirectionalLowFaceIndexingInZ)
 
     const auto qty_const_arr = qty.const_array();
     amrex::FArrayBox output(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(0, 0, 0)), 2);
-    auto out_arr = output.array();
-
-    amrex::ParallelFor(1, [=] AMREX_GPU_DEVICE (int) noexcept {
-        out_arr(0, 0, 0, 0) = evaluate_weno_in_z(0, qty_const_arr, AdvType::Weno_7, 1);
-        out_arr(0, 0, 0, 1) = evaluate_weno_in_z(0, qty_const_arr, AdvType::Weno_7, -1);
-    });
-    gpu_sync();
+    launch_weno7_z_indexing_case(qty_const_arr, output.array());
 
     const auto out_const_arr = output.const_array();
     EXPECT_NEAR(out_const_arr(0, 0, 0, 0), amrex::Real(-0.5),
@@ -231,6 +289,7 @@ TEST(InterpolationWENOKernel, Weno7DirectionalLowFaceIndexingInZ)
 TEST(InterpolationWENOKernel, Weno7DirectionalWrappersAreEquivalentOnBranchDenseProfiles)
 {
     const amrex::Box qty_box = wrapper_branch_dense_box();
+    const amrex::Box out_box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0));
     amrex::FArrayBox qty_x(qty_box, 1);
     amrex::FArrayBox qty_y(qty_box, 1);
     amrex::FArrayBox qty_z(qty_box, 1);
@@ -251,23 +310,9 @@ TEST(InterpolationWENOKernel, Weno7DirectionalWrappersAreEquivalentOnBranchDense
     const auto qty_x_const_arr = qty_x.const_array();
     const auto qty_y_const_arr = qty_y.const_array();
     const auto qty_z_const_arr = qty_z.const_array();
-    amrex::FArrayBox output(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0)), 6);
-    auto out_arr = output.array();
-
-    amrex::ParallelFor(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0)), 6,
-    [=] AMREX_GPU_DEVICE (int i, int, int, int n) noexcept {
-        const int sigma = (n / 3 == 0) ? -1 : 1;
-        const int axis = n % 3;
-
-        if (axis == 0) {
-            out_arr(i, 0, 0, n) = evaluate_weno_in_x(i + 1, qty_x_const_arr, AdvType::Weno_7, sigma);
-        } else if (axis == 1) {
-            out_arr(i, 0, 0, n) = evaluate_weno_in_y(i + 1, qty_y_const_arr, AdvType::Weno_7, sigma);
-        } else {
-            out_arr(i, 0, 0, n) = evaluate_weno_in_z(i + 1, qty_z_const_arr, AdvType::Weno_7, sigma);
-        }
-    });
-    gpu_sync();
+    amrex::FArrayBox output(out_box, 6);
+    launch_weno7_directional_wrapper_cases(out_box, qty_x_const_arr, qty_y_const_arr,
+                                           qty_z_const_arr, output.array());
 
     const auto out_const_arr = output.const_array();
     for (int sigma_index = 0; sigma_index < 2; ++sigma_index) {
@@ -293,6 +338,7 @@ TEST(InterpolationWENOKernel, WenoZDirectionalWrappersAreEquivalentOnBranchDense
     const std::array<AdvType, 4> schemes = {{AdvType::Weno_3Z, AdvType::Weno_3MZQ,
                                              AdvType::Weno_5Z, AdvType::Weno_7Z}};
     const amrex::Box qty_box = wrapper_branch_dense_box();
+    const amrex::Box out_box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0));
     amrex::FArrayBox qty_x(qty_box, 1);
     amrex::FArrayBox qty_y(qty_box, 1);
     amrex::FArrayBox qty_z(qty_box, 1);
@@ -314,25 +360,9 @@ TEST(InterpolationWENOKernel, WenoZDirectionalWrappersAreEquivalentOnBranchDense
     const auto qty_y_const_arr = qty_y.const_array();
     const auto qty_z_const_arr = qty_z.const_array();
     const int ncomp = 2 * static_cast<int>(schemes.size()) * 3;
-    amrex::FArrayBox output(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0)), ncomp);
-    auto out_arr = output.array();
-
-    amrex::ParallelFor(amrex::Box(amrex::IntVect(0, 0, 0), amrex::IntVect(3, 0, 0)), ncomp,
-    [=] AMREX_GPU_DEVICE (int i, int, int, int n) noexcept {
-        const int group = n / 3;
-        const int axis = n % 3;
-        const AdvType adv_type = schemes[group / 2];
-        const int sigma = (group % 2 == 0) ? -1 : 1;
-
-        if (axis == 0) {
-            out_arr(i, 0, 0, n) = evaluate_weno_in_x(i + 1, qty_x_const_arr, adv_type, sigma);
-        } else if (axis == 1) {
-            out_arr(i, 0, 0, n) = evaluate_weno_in_y(i + 1, qty_y_const_arr, adv_type, sigma);
-        } else {
-            out_arr(i, 0, 0, n) = evaluate_weno_in_z(i + 1, qty_z_const_arr, adv_type, sigma);
-        }
-    });
-    gpu_sync();
+    amrex::FArrayBox output(out_box, ncomp);
+    launch_wenoz_directional_wrapper_cases(out_box, ncomp, qty_x_const_arr, qty_y_const_arr,
+                                           qty_z_const_arr, output.array());
 
     const auto out_const_arr = output.const_array();
     for (int n = 0; n < 2 * static_cast<int>(schemes.size()); ++n) {
