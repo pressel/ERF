@@ -85,6 +85,7 @@ if(ERF_ENABLE_MPI)
   separate_arguments(erf_mpiexec_preflags UNIX_COMMAND "${MPIEXEC_PREFLAGS}")
   separate_arguments(erf_mpiexec_postflags UNIX_COMMAND "${MPIEXEC_POSTFLAGS}")
 
+
   set(erf_parallel_test_mpiexec_preflags)
 
   if(DEFINED ERF_PARALLEL_TEST_MPIEXEC_PREFLAGS AND
