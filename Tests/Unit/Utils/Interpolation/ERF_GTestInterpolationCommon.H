@@ -75,7 +75,9 @@ constexpr amrex::Real kWenoMZQ3ObservedOrderMin = amrex::Real(1.8);
 constexpr amrex::Real kWenoSourceEps = amrex::Real(1.0e-40);
 #endif
 
-constexpr int kQtyComp = 0;
+enum : int {
+    kQtyComp = 0
+};
 constexpr int kEvalLo = -1;
 constexpr int kEvalHi = 1;
 constexpr amrex::Real kPerturbationConstant = amrex::Real(10.0);
