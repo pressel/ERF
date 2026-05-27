@@ -88,10 +88,16 @@ jobs:
         grep -Eq '^[A-Za-z0-9_].*\.$' ${{runner.workspace}}/unit-test-list.txt
       working-directory: ${{runner.workspace}}/ERF/build
 
-    - name: CMake Unit Tests
+    - name: Run Serial Unit Tests
       if: matrix.particles_precision == 'DOUBLE' && matrix.mesh_precision == 'DOUBLE'
       run: |
-        ctest -L unit -VV
+        ctest -L unit --output-on-failure --no-tests=error
+      working-directory: ${{runner.workspace}}/ERF/build
+
+    - name: Run Parallel Tests
+      if: matrix.particles_precision == 'DOUBLE' && matrix.mesh_precision == 'DOUBLE'
+      run: |
+        ctest -L parallel --output-on-failure --no-tests=error
       working-directory: ${{runner.workspace}}/ERF/build
 
     - name: CMake Regression Tests # see file ERF/Tests/CTestList.cmake

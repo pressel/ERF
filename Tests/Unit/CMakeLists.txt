@@ -24,6 +24,7 @@ endif()
 
 set(erf_lib_name erf_srclib)
 set(erf_exe_name erf_unit_tests)
+set(erf_parallel_exe_name erf_parallel_tests)
 
 add_executable(${erf_exe_name})
 target_sources(${erf_exe_name}
@@ -45,7 +46,7 @@ target_sources(${erf_exe_name}
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/ERF_GTestKesslerKernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/ERF_GTestKesslerPhysicalProperties.cpp
 )
-build_erf_exe(${erf_exe_name})
+build_erf_exe(${erf_exe_name} NO_ERF_MAIN)
 target_link_libraries(${erf_exe_name} PRIVATE GTest::gtest)
 
 include(GoogleTest)
@@ -54,3 +55,44 @@ gtest_discover_tests(${erf_exe_name}
   PROPERTIES
     LABELS "unit"
 )
+
+if(ERF_ENABLE_MPI)
+  find_package(MPI REQUIRED COMPONENTS CXX)
+
+  set(erf_parallel_nprocs ${ERF_TEST_NRANKS})
+
+  add_executable(${erf_parallel_exe_name})
+  target_sources(${erf_parallel_exe_name}
+    PRIVATE
+      ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestParallelMain.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestParallelHelloWorld.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestRuntimeStubs.cpp
+  )
+  build_erf_exe(${erf_parallel_exe_name} NO_ERF_MAIN)
+  target_link_libraries(${erf_parallel_exe_name}
+    PRIVATE
+      GTest::gtest
+      MPI::MPI_CXX
+  )
+  target_compile_definitions(${erf_parallel_exe_name}
+    PRIVATE
+      ERF_PARALLEL_TEST_NPROCS=${erf_parallel_nprocs}
+  )
+
+  add_test(NAME ${erf_parallel_exe_name}_np${erf_parallel_nprocs}
+    COMMAND
+      ${MPIEXEC_EXECUTABLE}
+      ${MPIEXEC_NUMPROC_FLAG} ${erf_parallel_nprocs}
+      ${MPIEXEC_PREFLAGS}
+      $<TARGET_FILE:${erf_parallel_exe_name}>
+      ${MPIEXEC_POSTFLAGS}
+    COMMAND_EXPAND_LISTS
+  )
+
+  set_tests_properties(${erf_parallel_exe_name}_np${erf_parallel_nprocs}
+    PROPERTIES
+      LABELS "parallel"
+      PROCESSORS ${erf_parallel_nprocs}
+  )
+endif()
