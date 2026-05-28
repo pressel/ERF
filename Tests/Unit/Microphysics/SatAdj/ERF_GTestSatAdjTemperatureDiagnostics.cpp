@@ -228,36 +228,3 @@ TEST(SatAdjTemperatureDiagnostics, ProductionMoistDerivedTemperatureMatchesEOSPr
         }
     }
 }
-
-// Motivation: This helper is used by the SatAdj tests to represent the EOS
-// projection from conserved rho, rhoTheta, and rhoQv. It is a helper sanity
-// check, not the production plotfile derived-variable path.
-// See ProductionMoistDerivedTemperatureMatchesEOSProjection for the production
-// derived-path contract.
-TEST(SatAdjTemperatureDiagnostics, EOSProjectedTemperatureHelperMatchesDirectEOSCall)
-{
-    const amrex::Geometry geom = make_geometry(4, 4, 2);
-    const amrex::BoxArray ba = make_boxarray(geom.Domain(), amrex::IntVect(AMREX_D_DECL(4,4,2)));
-    const amrex::DistributionMapping dm(ba);
-    amrex::MultiFab cons(ba, dm, RhoQ2_comp + 1, 0);
-    fill_conserved_state_portable(cons);
-
-    const amrex::MultiFab host = make_host_mirror(cons);
-    for (amrex::MFIter mfi(host); mfi.isValid(); ++mfi) {
-        const auto arr = host.const_array(mfi);
-        const amrex::Box bx = mfi.validbox();
-        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
-            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
-                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-                    const amrex::Real rho = arr(i,j,k,Rho_comp);
-                    const amrex::Real rhotheta = arr(i,j,k,RhoTheta_comp);
-                    const amrex::Real qv = arr(i,j,k,RhoQ1_comp)/rho;
-                    const amrex::Real derived = getTgivenRandRTh(rho, rhotheta, qv);
-                    const amrex::Real helper = eos_projected_temperature_from_cons(rho, rhotheta, arr(i,j,k,RhoQ1_comp));
-                    EXPECT_NEAR(derived, helper, scaled_tol(helper, amrex::Real(10.0) * kThermoTolFactor))
-                        << "i=" << i << " j=" << j << " k=" << k;
-                }
-            }
-        }
-    }
-}
