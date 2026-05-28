@@ -536,15 +536,28 @@ amrex::Real eos_projected_temperature_from_cons (const amrex::Real rho,
     return getTgivenRandRTh(rho, rhotheta, rhoqv / rho);
 }
 
-inline amrex::Real satadj_component_change_tol (const amrex::Real reference)
+// Active-region tests infer execution from whether SatAdj-written components
+// changed. Moisture components must use water-scaled tolerances so smaller but
+// real qv/qc updates are not hidden by the generic O(1) tolerance floor.
+inline amrex::Real satadj_component_change_tol (const int component,
+                                                const amrex::Real rho_reference,
+                                                const amrex::Real conserved_reference)
 {
-    return scaled_tol(reference, amrex::Real(10.0) * kStateTolFactor);
+    if (component == RhoQ1_comp || component == RhoQ2_comp) {
+        const amrex::Real q_reference = conserved_reference / rho_reference;
+        return conserved_moisture_tol(rho_reference, q_reference);
+    }
+
+    return scaled_tol(conserved_reference, amrex::Real(10.0) * kStateTolFactor);
 }
 
-inline bool satadj_written_component_changed (const amrex::Real before,
+inline bool satadj_written_component_changed (const int component,
+                                              const amrex::Real rho_reference,
+                                              const amrex::Real before,
                                               const amrex::Real after)
 {
-    return amrex::Math::abs(after - before) > satadj_component_change_tol(before);
+    return amrex::Math::abs(after - before) >
+           satadj_component_change_tol(component, rho_reference, before);
 }
 
 inline amrex::MultiFab make_host_mirror (const amrex::MultiFab& src)
@@ -602,10 +615,21 @@ inline void compare_public_flow_to_scalar_reference (const amrex::MultiFab& init
                         initial_arr(i,j,k,RhoQ1_comp),
                         initial_arr(i,j,k,RhoQ2_comp));
 
+                    const amrex::Real rho_initial = initial_arr(i,j,k,Rho_comp);
+
                     const bool changed =
-                        satadj_written_component_changed(initial_arr(i,j,k,RhoTheta_comp), final_arr(i,j,k,RhoTheta_comp)) ||
-                        satadj_written_component_changed(initial_arr(i,j,k,RhoQ1_comp), final_arr(i,j,k,RhoQ1_comp)) ||
-                        satadj_written_component_changed(initial_arr(i,j,k,RhoQ2_comp), final_arr(i,j,k,RhoQ2_comp));
+                        satadj_written_component_changed(RhoTheta_comp,
+                                                         rho_initial,
+                                                         initial_arr(i,j,k,RhoTheta_comp),
+                                                         final_arr(i,j,k,RhoTheta_comp)) ||
+                        satadj_written_component_changed(RhoQ1_comp,
+                                                         rho_initial,
+                                                         initial_arr(i,j,k,RhoQ1_comp),
+                                                         final_arr(i,j,k,RhoQ1_comp)) ||
+                        satadj_written_component_changed(RhoQ2_comp,
+                                                         rho_initial,
+                                                         initial_arr(i,j,k,RhoQ2_comp),
+                                                         final_arr(i,j,k,RhoQ2_comp));
 
                     if (changed) {
                         ++counts.changed;

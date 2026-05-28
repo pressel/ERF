@@ -111,8 +111,16 @@ TEST(SatAdjKesslerComparison, SmallCondensationAsymptoticallyConsistent)
     const amrex::Real tabs = amrex::Real(290.0);
     const amrex::Real pres_mbar = amrex::Real(900.0);
     const amrex::Real qsat_initial = qsat(tabs, pres_mbar);
+    // Float builds need perturbations above the absolute tolerance floor for this
+    // asymptotic comparison to remain diagnostic. Double builds keep smaller
+    // perturbations to exercise the limiting behavior closer to roundoff.
+#ifdef AMREX_USE_FLOAT
+    const std::array<amrex::Real, 3> supersaturation = {
+        amrex::Real(1.0e-6), amrex::Real(3.0e-6), amrex::Real(1.0e-5)};
+#else
     const std::array<amrex::Real, 3> supersaturation = {
         amrex::Real(1.0e-8), amrex::Real(1.0e-7), amrex::Real(1.0e-6)};
+#endif
 
     for (const amrex::Real delta_qv : supersaturation) {
         SCOPED_TRACE("delta_qv=" + std::to_string(static_cast<double>(delta_qv)));
@@ -137,8 +145,16 @@ TEST(SatAdjKesslerComparison, SmallCloudEvaporationAsymptoticallyConsistent)
     const amrex::Real tabs = amrex::Real(290.0);
     const amrex::Real pres_mbar = amrex::Real(900.0);
     const amrex::Real qsat_initial = qsat(tabs, pres_mbar);
+    // Float builds need perturbations above the absolute tolerance floor for this
+    // asymptotic comparison to remain diagnostic. Double builds keep smaller
+    // perturbations to exercise the limiting behavior closer to roundoff.
+#ifdef AMREX_USE_FLOAT
+    const std::array<amrex::Real, 3> subsaturation = {
+        amrex::Real(1.0e-6), amrex::Real(3.0e-6), amrex::Real(1.0e-5)};
+#else
     const std::array<amrex::Real, 3> subsaturation = {
         amrex::Real(1.0e-8), amrex::Real(1.0e-7), amrex::Real(1.0e-6)};
+#endif
 
     for (const amrex::Real deficit_qv : subsaturation) {
         SCOPED_TRACE("deficit_qv=" + std::to_string(static_cast<double>(deficit_qv)));

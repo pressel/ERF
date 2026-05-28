@@ -205,10 +205,20 @@ TEST(SatAdjBoxCoverage, ActiveRegionCoversEveryValidCell)
                             const amrex::Real delta_rhoq1 = amrex::Math::abs(after_arr(i,j,k,RhoQ1_comp) - before_arr(i,j,k,RhoQ1_comp));
                             const amrex::Real delta_rhoq2 = amrex::Math::abs(after_arr(i,j,k,RhoQ2_comp) - before_arr(i,j,k,RhoQ2_comp));
 
+                            const amrex::Real rho_before = before_arr(i,j,k,Rho_comp);
                             const bool changed =
-                                satadj_written_component_changed(before_arr(i,j,k,RhoTheta_comp), after_arr(i,j,k,RhoTheta_comp)) ||
-                                satadj_written_component_changed(before_arr(i,j,k,RhoQ1_comp), after_arr(i,j,k,RhoQ1_comp)) ||
-                                satadj_written_component_changed(before_arr(i,j,k,RhoQ2_comp), after_arr(i,j,k,RhoQ2_comp));
+                                satadj_written_component_changed(RhoTheta_comp,
+                                                                  rho_before,
+                                                                  before_arr(i,j,k,RhoTheta_comp),
+                                                                  after_arr(i,j,k,RhoTheta_comp)) ||
+                                satadj_written_component_changed(RhoQ1_comp,
+                                                                  rho_before,
+                                                                  before_arr(i,j,k,RhoQ1_comp),
+                                                                  after_arr(i,j,k,RhoQ1_comp)) ||
+                                satadj_written_component_changed(RhoQ2_comp,
+                                                                  rho_before,
+                                                                  before_arr(i,j,k,RhoQ2_comp),
+                                                                  after_arr(i,j,k,RhoQ2_comp));
 
                             if (changed) {
                                 ++counts.changed;
@@ -711,14 +721,34 @@ TEST(SatAdjBoxCoverage, ActiveRegionMatchesKesslerNoRain)
             for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
                 for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
                     for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                        const amrex::Real satadj_rho_before = satadj_before_arr(i,j,k,Rho_comp);
                         const bool satadj_changed_here =
-                            satadj_written_component_changed(satadj_before_arr(i,j,k,RhoTheta_comp), satadj_after_arr(i,j,k,RhoTheta_comp)) ||
-                            satadj_written_component_changed(satadj_before_arr(i,j,k,RhoQ1_comp), satadj_after_arr(i,j,k,RhoQ1_comp)) ||
-                            satadj_written_component_changed(satadj_before_arr(i,j,k,RhoQ2_comp), satadj_after_arr(i,j,k,RhoQ2_comp));
+                            satadj_written_component_changed(RhoTheta_comp,
+                                                              satadj_rho_before,
+                                                              satadj_before_arr(i,j,k,RhoTheta_comp),
+                                                              satadj_after_arr(i,j,k,RhoTheta_comp)) ||
+                            satadj_written_component_changed(RhoQ1_comp,
+                                                              satadj_rho_before,
+                                                              satadj_before_arr(i,j,k,RhoQ1_comp),
+                                                              satadj_after_arr(i,j,k,RhoQ1_comp)) ||
+                            satadj_written_component_changed(RhoQ2_comp,
+                                                              satadj_rho_before,
+                                                              satadj_before_arr(i,j,k,RhoQ2_comp),
+                                                              satadj_after_arr(i,j,k,RhoQ2_comp));
+                        const amrex::Real kessler_rho_before = kessler_before_arr(i,j,k,Rho_comp);
                         const bool kessler_changed_here =
-                            satadj_written_component_changed(kessler_before_arr(i,j,k,RhoTheta_comp), kessler_after_arr(i,j,k,RhoTheta_comp)) ||
-                            satadj_written_component_changed(kessler_before_arr(i,j,k,RhoQ1_comp), kessler_after_arr(i,j,k,RhoQ1_comp)) ||
-                            satadj_written_component_changed(kessler_before_arr(i,j,k,RhoQ2_comp), kessler_after_arr(i,j,k,RhoQ2_comp));
+                            satadj_written_component_changed(RhoTheta_comp,
+                                                              kessler_rho_before,
+                                                              kessler_before_arr(i,j,k,RhoTheta_comp),
+                                                              kessler_after_arr(i,j,k,RhoTheta_comp)) ||
+                            satadj_written_component_changed(RhoQ1_comp,
+                                                              kessler_rho_before,
+                                                              kessler_before_arr(i,j,k,RhoQ1_comp),
+                                                              kessler_after_arr(i,j,k,RhoQ1_comp)) ||
+                            satadj_written_component_changed(RhoQ2_comp,
+                                                              kessler_rho_before,
+                                                              kessler_before_arr(i,j,k,RhoQ2_comp),
+                                                              kessler_after_arr(i,j,k,RhoQ2_comp));
 
                         satadj_changed += satadj_changed_here ? 1 : 0;
                         kessler_changed += kessler_changed_here ? 1 : 0;
