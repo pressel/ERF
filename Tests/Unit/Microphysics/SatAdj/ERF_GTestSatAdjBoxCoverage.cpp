@@ -345,8 +345,10 @@ TEST(SatAdjBoxCoverage, CopyOnlyRoundTripMultiBox)
                         const amrex::Real actual = after_arr(i,j,k,comp);
                         const amrex::Real expected = before_arr(i,j,k,comp);
                         const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
-                        const amrex::Real normalized_error = absolute_error
-                            / scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        const amrex::Real tol = (comp == RhoQ1_comp || comp == RhoQ2_comp)
+                            ? conserved_moisture_tol(before_arr(i,j,k,Rho_comp), expected / before_arr(i,j,k,Rho_comp))
+                            : scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        const amrex::Real normalized_error = absolute_error / tol;
                         if (normalized_error > worst.normalized_error) {
                             worst = LocatedError{normalized_error,
                                                  absolute_error,
@@ -444,8 +446,15 @@ TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterCopyBack)
                                                                                   wrapped_k,
                                                                                   evap_then_recond);
                         const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
-                        const amrex::Real normalized_error = absolute_error
-                            / scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        const amrex::Real tol = [&]() -> amrex::Real {
+                            if (comp == RhoQ1_comp || comp == RhoQ2_comp) {
+                                const amrex::Real rho_exp = expected_conserved_component(
+                                    Rho_comp, wrapped_i, wrapped_j, wrapped_k, evap_then_recond);
+                                return conserved_moisture_tol(rho_exp, expected / rho_exp);
+                            }
+                            return scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        }();
+                        const amrex::Real normalized_error = absolute_error / tol;
                         if (normalized_error > worst.normalized_error) {
                             worst = LocatedError{normalized_error,
                                                  absolute_error,
@@ -548,8 +557,15 @@ TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterFullPublicFlow)
                                                                                   wrapped_k,
                                                                                   evap_then_recond);
                         const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
-                        const amrex::Real normalized_error = absolute_error
-                            / scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        const amrex::Real tol = [&]() -> amrex::Real {
+                            if (comp == RhoQ1_comp || comp == RhoQ2_comp) {
+                                const amrex::Real rho_exp = expected_full_flow_component(
+                                    Rho_comp, wrapped_i, wrapped_j, wrapped_k, evap_then_recond);
+                                return conserved_moisture_tol(rho_exp, expected / rho_exp);
+                            }
+                            return scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        }();
+                        const amrex::Real normalized_error = absolute_error / tol;
                         if (normalized_error > worst.normalized_error) {
                             worst = LocatedError{normalized_error,
                                                  absolute_error,

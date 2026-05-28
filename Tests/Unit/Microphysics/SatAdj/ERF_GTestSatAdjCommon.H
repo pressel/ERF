@@ -181,6 +181,43 @@ amrex::Real latent_energy_budget_tol (const amrex::Real reference)
 #endif
 }
 
+// Water mixing ratios are O(1e-3) to O(1e-2), so the generic scaled_tol(...)
+// helper with an O(1) absolute floor is too permissive for qv/qc checks.
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real mixing_ratio_tol (const amrex::Real reference)
+{
+#ifdef AMREX_USE_FLOAT
+    return amrex::max(amrex::Real(2.0e-7),
+                      amrex::Real(2.0e-5) * amrex::Math::abs(reference));
+#else
+    return amrex::max(amrex::Real(1.0e-13),
+                      amrex::Real(1.0e-12) * amrex::Math::abs(reference));
+#endif
+}
+
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real conserved_moisture_tol (const amrex::Real rho,
+                                    const amrex::Real q_reference)
+{
+    return amrex::max(amrex::Real(1.0e-14),
+                      amrex::Math::abs(rho) * mixing_ratio_tol(q_reference));
+}
+
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real derived_temperature_tol (const amrex::Real temperature)
+{
+#ifdef AMREX_USE_FLOAT
+    return amrex::max(amrex::Real(2.0e-4),
+                      amrex::Real(5.0e-6) * amrex::Math::abs(temperature));
+#else
+    return amrex::max(amrex::Real(1.0e-10),
+                      amrex::Real(1.0e-12) * amrex::Math::abs(temperature));
+#endif
+}
+
 AMREX_GPU_HOST_DEVICE
 AMREX_FORCE_INLINE
 amrex::Real qsat (const amrex::Real tabs, const amrex::Real pres_mbar)
@@ -585,20 +622,16 @@ inline void compare_public_flow_to_scalar_reference (const amrex::MultiFab& init
                         reference.rhotheta,
                         reference.rhoqv);
 
-                    const int components[3] = {RhoTheta_comp, RhoQ1_comp, RhoQ2_comp};
-                    const amrex::Real expected_values[3] = {
-                        reference.rhotheta,
-                        reference.rhoqv,
-                        reference.rhoqc};
+                    const amrex::Real rho_actual = final_arr(i,j,k,Rho_comp);
+                    const amrex::Real rho_expected = reference.rho;
 
-                    for (int idx = 0; idx < 3; ++idx) {
-                        const int comp = components[idx];
-                        const amrex::Real actual = final_arr(i,j,k,comp);
-                        const amrex::Real expected = expected_values[idx];
+                    // RhoTheta: compare in conserved space
+                    {
+                        const amrex::Real actual = final_arr(i,j,k,RhoTheta_comp);
+                        const amrex::Real expected = reference.rhotheta;
                         const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
                         const amrex::Real normalized_error = absolute_error
                             / scaled_tol(expected, amrex::Real(20.0) * kStateTolFactor);
-
                         if (normalized_error > worst_error.normalized_error) {
                             worst_error = LocatedError{normalized_error,
                                                        absolute_error,
@@ -609,14 +642,58 @@ inline void compare_public_flow_to_scalar_reference (const amrex::MultiFab& init
                                                        i,
                                                        j,
                                                        k,
-                                                       comp,
+                                                       RhoTheta_comp,
+                                                       mfi.index()};
+                        }
+                    }
+
+                    // RhoQ1: compare qv in mixing-ratio space
+                    {
+                        const amrex::Real qv_actual = final_arr(i,j,k,RhoQ1_comp) / rho_actual;
+                        const amrex::Real qv_expected = reference.rhoqv / rho_expected;
+                        const amrex::Real absolute_error = amrex::Math::abs(qv_actual - qv_expected);
+                        const amrex::Real normalized_error = absolute_error
+                            / mixing_ratio_tol(qv_expected);
+                        if (normalized_error > worst_error.normalized_error) {
+                            worst_error = LocatedError{normalized_error,
+                                                       absolute_error,
+                                                       qv_actual,
+                                                       qv_expected,
+                                                       eos_actual,
+                                                       eos_expected,
+                                                       i,
+                                                       j,
+                                                       k,
+                                                       RhoQ1_comp,
+                                                       mfi.index()};
+                        }
+                    }
+
+                    // RhoQ2: compare qc in mixing-ratio space
+                    {
+                        const amrex::Real qc_actual = final_arr(i,j,k,RhoQ2_comp) / rho_actual;
+                        const amrex::Real qc_expected = reference.rhoqc / rho_expected;
+                        const amrex::Real absolute_error = amrex::Math::abs(qc_actual - qc_expected);
+                        const amrex::Real normalized_error = absolute_error
+                            / mixing_ratio_tol(qc_expected);
+                        if (normalized_error > worst_error.normalized_error) {
+                            worst_error = LocatedError{normalized_error,
+                                                       absolute_error,
+                                                       qc_actual,
+                                                       qc_expected,
+                                                       eos_actual,
+                                                       eos_expected,
+                                                       i,
+                                                       j,
+                                                       k,
+                                                       RhoQ2_comp,
                                                        mfi.index()};
                         }
                     }
 
                     const amrex::Real eos_absolute_error = amrex::Math::abs(eos_actual - eos_expected);
                     const amrex::Real eos_normalized_error = eos_absolute_error
-                        / scaled_tol(eos_expected, amrex::Real(20.0) * kThermoTolFactor);
+                        / derived_temperature_tol(eos_expected);
                     if (eos_normalized_error > worst_error.normalized_error) {
                         worst_error = LocatedError{eos_normalized_error,
                                                    eos_absolute_error,

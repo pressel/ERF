@@ -320,8 +320,15 @@ TEST(SatAdjParallel, CopyMicroToStateFillBoundaryParallel)
 																				  wrapped_k,
 																				  evap_then_recond);
 						const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
-						const amrex::Real normalized_error = absolute_error
-							/ scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+						const amrex::Real tol = [&]() -> amrex::Real {
+							if (comp == RhoQ1_comp || comp == RhoQ2_comp) {
+								const amrex::Real rho_exp = expected_conserved_component(
+									Rho_comp, wrapped_i, wrapped_j, wrapped_k, evap_then_recond);
+								return conserved_moisture_tol(rho_exp, expected / rho_exp);
+							}
+							return scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+						}();
+						const amrex::Real normalized_error = absolute_error / tol;
 						if (normalized_error > local_worst.normalized_error) {
 							local_worst = LocatedError{normalized_error,
 													   absolute_error,
@@ -436,8 +443,15 @@ TEST(SatAdjParallel, FullPublicFlowFillBoundaryParallel)
 																  wrapped_k,
 																  evap_then_recond);
 						const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
-						const amrex::Real normalized_error = absolute_error
-							/ scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+						const amrex::Real tol = [&]() -> amrex::Real {
+							if (comp == RhoQ1_comp || comp == RhoQ2_comp) {
+								const amrex::Real rho_exp = expected_full_flow_component(
+									Rho_comp, wrapped_i, wrapped_j, wrapped_k, evap_then_recond);
+								return conserved_moisture_tol(rho_exp, expected / rho_exp);
+							}
+							return scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+						}();
+						const amrex::Real normalized_error = absolute_error / tol;
 						if (normalized_error > local_worst.normalized_error) {
 							local_worst = LocatedError{normalized_error,
 											   absolute_error,

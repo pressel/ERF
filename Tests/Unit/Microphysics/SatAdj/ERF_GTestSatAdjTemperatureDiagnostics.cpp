@@ -139,13 +139,13 @@ TEST(SatAdjTemperatureDiagnostics, PublicFlowMatchesScalarDiagnosticInputs)
                     }
 
                     const amrex::Real abs_err_qv = amrex::Math::abs(qv_public - qv_ref);
-                    const amrex::Real norm_err_qv = abs_err_qv / scaled_tol(qv_ref, amrex::Real(20.0) * kStateTolFactor);
+                    const amrex::Real norm_err_qv = abs_err_qv / mixing_ratio_tol(qv_ref);
                     if (norm_err_qv > worst[DIAG_QV].normalized_error) {
                         worst[DIAG_QV] = ThermoDiagnosticError{norm_err_qv, abs_err_qv, qv_public, qv_ref, i, j, k, mfi.index(), "qv"};
                     }
 
                     const amrex::Real abs_err_qc = amrex::Math::abs(qc_public - qc_ref);
-                    const amrex::Real norm_err_qc = abs_err_qc / scaled_tol(qc_ref, amrex::Real(20.0) * kStateTolFactor);
+                    const amrex::Real norm_err_qc = abs_err_qc / mixing_ratio_tol(qc_ref);
                     if (norm_err_qc > worst[DIAG_QC].normalized_error) {
                         worst[DIAG_QC] = ThermoDiagnosticError{norm_err_qc, abs_err_qc, qc_public, qc_ref, i, j, k, mfi.index(), "qc"};
                     }
@@ -157,14 +157,14 @@ TEST(SatAdjTemperatureDiagnostics, PublicFlowMatchesScalarDiagnosticInputs)
                     }
 
                     const amrex::Real abs_err_teos = amrex::Math::abs(T_eos_public - T_eos_ref);
-                    const amrex::Real norm_err_teos = abs_err_teos / scaled_tol(T_eos_ref, amrex::Real(20.0) * kThermoTolFactor);
+                    const amrex::Real norm_err_teos = abs_err_teos / derived_temperature_tol(T_eos_ref);
                     if (norm_err_teos > worst[DIAG_T_EOS].normalized_error) {
                         worst[DIAG_T_EOS] = ThermoDiagnosticError{norm_err_teos, abs_err_teos, T_eos_public, T_eos_ref, i, j, k, mfi.index(), "T_eos"};
                     }
 
                     const amrex::Real tfix_actual = getTgivenPandTh(amrex::Real(100.0) * initial_state.pres_mbar, theta_public, kRdOcp);
                     const amrex::Real abs_err_tfix = amrex::Math::abs(tfix_actual - T_fixed_p_ref);
-                    const amrex::Real norm_err_tfix = abs_err_tfix / scaled_tol(T_fixed_p_ref, amrex::Real(20.0) * kThermoTolFactor);
+                    const amrex::Real norm_err_tfix = abs_err_tfix / derived_temperature_tol(T_fixed_p_ref);
                     if (norm_err_tfix > worst[DIAG_T_FIXED_P].normalized_error) {
                         worst[DIAG_T_FIXED_P] = ThermoDiagnosticError{norm_err_tfix, abs_err_tfix, tfix_actual, T_fixed_p_ref, i, j, k, mfi.index(), "T_fixed_p"};
                     }
@@ -218,7 +218,7 @@ TEST(SatAdjTemperatureDiagnostics, ProductionMoistDerivedTemperatureMatchesEOSPr
                     const amrex::Real expected = getTgivenRandRTh(rho, rhotheta, qv);
                     const amrex::Real actual = der(i, j, k);
                     EXPECT_NEAR(actual, expected,
-                                scaled_tol(expected, amrex::Real(10.0) * kThermoTolFactor))
+                                derived_temperature_tol(expected))
                         << "i=" << i << " j=" << j << " k=" << k
                         << " rho=" << rho
                         << " rhotheta=" << rhotheta
