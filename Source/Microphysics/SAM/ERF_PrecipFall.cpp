@@ -50,16 +50,13 @@ SAM::PrecipFall (const SolverChoice& sc)
     auto ngrow = tabs->nGrowVect();
 
     MultiFab fz;
-    fz.define(convert(ba, IntVect(0,0,1)), dm, 1, ngrow);
+    fz.define(convert(ba, IntVect(0,0,1)), dm, 3, ngrow);
 
-    int SAM_moisture_type = 1;
-    if (sc.moisture_type == MoistureType::SAM_NoIce) {
-        SAM_moisture_type = 2;
-    }
-
-    //  Precompute the vertical fluxes for CFL constraint
+    //  Precompute the vertical component fluxes for the legacy reduced-flux substep rule.
     for (MFIter mfi(fz, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        auto qp_array   = qp->const_array(mfi);
+        auto qpr_array  = qpr->const_array(mfi);
+        auto qps_array  = qps->const_array(mfi);
+        auto qpg_array  = qpg->const_array(mfi);
         auto rho_array  = rho->const_array(mfi);
         auto tabs_array = tabs->const_array(mfi);
         auto fz_array   = fz.array(mfi);
@@ -68,22 +65,21 @@ SAM::PrecipFall (const SolverChoice& sc)
 
         ParallelFor(box3d, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
         {
-            const SAMPrecipFaceState face_state =
-                sam_precip_face_state(SAM_moisture_type,
-                                      rho_array, tabs_array, qp_array,
-                                      i, j, k, k_lo, k_hi);
-            const Real Pprecip = sam_precip_flux_from_face_state(face_state,
-                                                                 vrain, vsnow, vgrau);
+            const SAMPrecipComponentFaceState face_state =
+                sam_precip_component_face_state(rho_array, tabs_array,
+                                                qpr_array, qps_array, qpg_array,
+                                                i, j, k, k_lo, k_hi);
+            const SAMPrecipFluxComponents raw_fluxes =
+                sam_precip_component_fluxes_from_face_state(face_state,
+                                                            vrain, vsnow, vgrau);
+            const SAMPrecipFluxComponents corrected_fluxes =
+                sam_precip_flux_components_density_corrected(raw_fluxes,
+                                                             rho_0,
+                                                             face_state.rho_avg);
 
-            // NOTE: Fz is the sedimentation flux from the advective operator.
-            //       In the terrain-following coordinate system, the z-deriv in
-            //       the divergence uses the normal velocity (Omega). However,
-            //       there are no u/v components to the sedimentation velocity.
-            //       Therefore, we simply end up with a division by detJ when
-            //       evaluating the source term: dJinv * (flux_hi - flux_lo) * dzinv.
-            fz_array(i,j,k) = sam_precip_flux_density_corrected(Pprecip,
-                                                                rho_0,
-                                                                face_state.rho_avg);
+            fz_array(i,j,k,0) = corrected_fluxes.rain;
+            fz_array(i,j,k,1) = corrected_fluxes.snow;
+            fz_array(i,j,k,2) = corrected_fluxes.graupel;
         });
     }
 
@@ -98,9 +94,13 @@ SAM::PrecipFall (const SolverChoice& sc)
                          [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
                          -> GpuTuple<Real>
                          {
-                             return { ma_fz_arr[box_no](i,j,k) };
+                             return { ma_fz_arr[box_no](i,j,k,0)
+                                 + ma_fz_arr[box_no](i,j,k,1)
+                                 + ma_fz_arr[box_no](i,j,k,2) };
                          });
-    max_reduced_flux = get<0>(max) + std::numeric_limits<Real>::epsilon();
+    max_reduced_flux = get<0>(max);
+    ParallelDescriptor::ReduceRealMax(max_reduced_flux);
+    max_reduced_flux += std::numeric_limits<Real>::epsilon();
     n_substep = sam_substep_count_from_reduced_flux(max_reduced_flux, dtn, m_dzmin);
     AMREX_ALWAYS_ASSERT(n_substep >= 1);
     coef /= Real(n_substep);
@@ -129,12 +129,19 @@ SAM::PrecipFall (const SolverChoice& sc)
             // Update vertical flux every substep
             ParallelFor(tbz, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
             {
-                const SAMPrecipFaceState face_state =
-                    sam_precip_face_state(SAM_moisture_type,
-                                          rho_array, tabs_array, qp_array,
-                                          i, j, k, k_lo, k_hi);
-                const Real Pprecip = sam_precip_flux_from_face_state(face_state,
-                                                                     vrain, vsnow, vgrau);
+                const SAMPrecipComponentFaceState face_state =
+                    sam_precip_component_face_state(rho_array, tabs_array,
+                                                    qpr_array, qps_array, qpg_array,
+                                                    i, j, k, k_lo, k_hi);
+                const SAMPrecipFluxComponents raw_fluxes =
+                    sam_precip_component_fluxes_from_face_state(face_state,
+                                                                vrain, vsnow, vgrau);
+                const SAMPrecipFluxComponents corrected_fluxes =
+                    sam_precip_flux_components_density_corrected(raw_fluxes,
+                                                                 rho_0,
+                                                                 face_state.rho_avg);
+                const int donor_k = sam_precip_face_donor_k(k, k_lo, k_hi);
+                const Real detJ_donor = (dJ_array) ? dJ_array(i,j,donor_k) : one;
 
                 // NOTE: Fz is the sedimentation flux from the advective operator.
                 //       In the terrain-following coordinate system, the z-deriv in
@@ -142,14 +149,27 @@ SAM::PrecipFall (const SolverChoice& sc)
                 //       there are no u/v components to the sedimentation velocity.
                 //       Therefore, we simply end up with a division by detJ when
                 //       evaluating the source term: dJinv * (flux_hi - flux_lo) * dzinv.
-                fz_array(i,j,k) = sam_precip_flux_density_corrected(Pprecip,
-                                                                    rho_0,
-                                                                    face_state.rho_avg);
+                fz_array(i,j,k,0) = sam_limit_precip_component_flux(corrected_fluxes.rain,
+                                                                    rho_array(i,j,donor_k),
+                                                                    qpr_array(i,j,donor_k),
+                                                                    detJ_donor,
+                                                                    coef);
+                fz_array(i,j,k,1) = sam_limit_precip_component_flux(corrected_fluxes.snow,
+                                                                    rho_array(i,j,donor_k),
+                                                                    qps_array(i,j,donor_k),
+                                                                    detJ_donor,
+                                                                    coef);
+                fz_array(i,j,k,2) = sam_limit_precip_component_flux(corrected_fluxes.graupel,
+                                                                    rho_array(i,j,donor_k),
+                                                                    qpg_array(i,j,donor_k),
+                                                                    detJ_donor,
+                                                                    coef);
 
-                if(k==k_lo){
+                if (k == k_lo) {
                     const SAMSurfaceAccumulation surface_accum =
-                        sam_surface_accumulation(face_state, rho_0,
-                                                 vrain, vsnow, vgrau, dtn);
+                        sam_surface_accumulation_from_component_fluxes(
+                            {fz_array(i,j,k,0), fz_array(i,j,k,1), fz_array(i,j,k,2)},
+                            dtn);
                     rain_accum_array(i,j,k)  = rain_accum_array(i,j,k)  + surface_accum.rain;
                     snow_accum_array(i,j,k)  = snow_accum_array(i,j,k)  + surface_accum.snow;
                     graup_accum_array(i,j,k) = graup_accum_array(i,j,k) + surface_accum.graupel;
@@ -165,16 +185,16 @@ SAM::PrecipFall (const SolverChoice& sc)
                 //==================================================
                 // Precipitating sedimentation (A19)
                 //==================================================
-                Real dqp = sam_sedimentation_tendency(fz_array(i,j,k+1), fz_array(i,j,k),
-                                                      rho_array(i,j,k), dJinv, coef);
-                const Real omp = sam_precip_rain_fraction(SAM_moisture_type,
-                                                          tabs_array(i,j,k));
-                const Real omg = sam_graupel_fraction(SAM_moisture_type,
-                                                      tabs_array(i,j,k));
+                const Real dqpr = sam_sedimentation_tendency(fz_array(i,j,k+1,0), fz_array(i,j,k,0),
+                                                             rho_array(i,j,k), dJinv, coef);
+                const Real dqps = sam_sedimentation_tendency(fz_array(i,j,k+1,1), fz_array(i,j,k,1),
+                                                             rho_array(i,j,k), dJinv, coef);
+                const Real dqpg = sam_sedimentation_tendency(fz_array(i,j,k+1,2), fz_array(i,j,k,2),
+                                                             rho_array(i,j,k), dJinv, coef);
 
-                qpr_array(i,j,k) = std::max(Real(0), qpr_array(i,j,k) + dqp*omp);
-                qps_array(i,j,k) = std::max(Real(0), qps_array(i,j,k) + dqp*(one-omp)*(one-omg));
-                qpg_array(i,j,k) = std::max(Real(0), qpg_array(i,j,k) + dqp*(one-omp)*omg);
+                qpr_array(i,j,k) = std::max(Real(0.0), qpr_array(i,j,k) + dqpr);
+                qps_array(i,j,k) = std::max(Real(0.0), qps_array(i,j,k) + dqps);
+                qpg_array(i,j,k) = std::max(Real(0.0), qpg_array(i,j,k) + dqpg);
                  qp_array(i,j,k) = qpr_array(i,j,k) + qps_array(i,j,k) + qpg_array(i,j,k);
 
                  // NOTE: Sedimentation does not affect the potential temperature,

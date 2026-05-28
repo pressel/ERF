@@ -121,6 +121,14 @@ struct SAMPrecipFaceState {
     amrex::Real qgg{zero};
 };
 
+struct SAMPrecipComponentFaceState {
+    amrex::Real rho_avg{zero};
+    amrex::Real tabs_avg{zero};
+    amrex::Real qpr_avg{zero};
+    amrex::Real qps_avg{zero};
+    amrex::Real qpg_avg{zero};
+};
+
 struct SAMFaceState {
     amrex::Real rho_avg{zero};
     amrex::Real tabs_avg{zero};
@@ -744,6 +752,20 @@ SAMFaceState sam_face_average_state (const int k,
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+int sam_precip_face_donor_k (const int face_k,
+                             const int k_lo,
+                             const int k_hi) noexcept
+{
+    if (face_k <= k_lo) {
+        return k_lo;
+    }
+    if (face_k >= k_hi + 1) {
+        return k_hi;
+    }
+    return face_k;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 int sam_substep_count_from_reduced_flux (const amrex::Real reduced_flux,
                                          const amrex::Real dt,
                                          const amrex::Real dz) noexcept
@@ -791,6 +813,43 @@ SAMPrecipFaceState sam_precip_face_state (
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrecipComponentFaceState sam_precip_component_face_state (
+    const amrex::Array4<const amrex::Real>& rho_array,
+    const amrex::Array4<const amrex::Real>& tabs_array,
+    const amrex::Array4<const amrex::Real>& qpr_array,
+    const amrex::Array4<const amrex::Real>& qps_array,
+    const amrex::Array4<const amrex::Real>& qpg_array,
+    const int i,
+    const int j,
+    const int k,
+    const int k_lo,
+    const int k_hi) noexcept
+{
+    // MUST MATCH: SAM PrecipFall bottom/interior/top face rules.
+    SAMPrecipComponentFaceState result{};
+    if (k == k_lo) {
+        result.rho_avg = rho_array(i,j,k);
+        result.tabs_avg = tabs_array(i,j,k);
+        result.qpr_avg = qpr_array(i,j,k);
+        result.qps_avg = qps_array(i,j,k);
+        result.qpg_avg = qpg_array(i,j,k);
+    } else if (k == k_hi + 1) {
+        result.rho_avg = rho_array(i,j,k-1);
+        result.tabs_avg = tabs_array(i,j,k-1);
+        result.qpr_avg = qpr_array(i,j,k-1);
+        result.qps_avg = qps_array(i,j,k-1);
+        result.qpg_avg = qpg_array(i,j,k-1);
+    } else {
+        result.rho_avg = myhalf * (rho_array(i,j,k-1) + rho_array(i,j,k));
+        result.tabs_avg = myhalf * (tabs_array(i,j,k-1) + tabs_array(i,j,k));
+        result.qpr_avg = myhalf * (qpr_array(i,j,k-1) + qpr_array(i,j,k));
+        result.qps_avg = myhalf * (qps_array(i,j,k-1) + qps_array(i,j,k));
+        result.qpg_avg = myhalf * (qpg_array(i,j,k-1) + qpg_array(i,j,k));
+    }
+    return result;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_precip_flux_from_face_state (const SAMPrecipFaceState& face_state,
                                              const amrex::Real vrain,
                                              const amrex::Real vsnow,
@@ -825,11 +884,57 @@ SAMPrecipFluxComponents sam_precip_flux_components_from_face_state (const SAMPre
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrecipFluxComponents sam_precip_component_fluxes_from_face_state (
+    const SAMPrecipComponentFaceState& face_state,
+    const amrex::Real vrain,
+    const amrex::Real vsnow,
+    const amrex::Real vgrau) noexcept
+{
+    SAMPrecipFluxComponents result{};
+    if (face_state.qpr_avg > zero) {
+        result.rain = vrain * std::pow(face_state.rho_avg * face_state.qpr_avg, one + crain);
+    }
+    if (face_state.qps_avg > zero) {
+        result.snow = vsnow * std::pow(face_state.rho_avg * face_state.qps_avg, one + csnow);
+    }
+    if (face_state.qpg_avg > zero) {
+        result.graupel = vgrau * std::pow(face_state.rho_avg * face_state.qpg_avg, one + cgrau);
+    }
+    return result;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real sam_precip_flux_density_corrected (const amrex::Real precip_flux,
                                                const amrex::Real rho_0,
                                                const amrex::Real rho_avg) noexcept
 {
     return precip_flux * std::sqrt(rho_0 / rho_avg);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrecipFluxComponents sam_precip_flux_components_density_corrected (
+    const SAMPrecipFluxComponents& precip_fluxes,
+    const amrex::Real rho_0,
+    const amrex::Real rho_avg) noexcept
+{
+    const amrex::Real density_correction = std::sqrt(rho_0 / rho_avg);
+    return {
+        precip_fluxes.rain * density_correction,
+        precip_fluxes.snow * density_correction,
+        precip_fluxes.graupel * density_correction};
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_limit_precip_component_flux (
+    const amrex::Real raw_flux,
+    const amrex::Real rho_donor,
+    const amrex::Real q_donor,
+    const amrex::Real detJ_donor,
+    const amrex::Real coef) noexcept
+{
+    const amrex::Real available_flux =
+        rho_donor * amrex::max(amrex::Real(0.0), q_donor) * detJ_donor / coef;
+    return amrex::min(raw_flux, available_flux);
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -840,6 +945,18 @@ amrex::Real sam_sedimentation_tendency (const amrex::Real fz_hi,
                                         const amrex::Real coef) noexcept
 {
     return dJinv * (one / rho) * (fz_hi - fz_lo) * coef;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMSurfaceAccumulation sam_surface_accumulation_from_component_fluxes (
+    const SAMPrecipFluxComponents& component_fluxes,
+    const amrex::Real dtn) noexcept
+{
+    SAMSurfaceAccumulation result{};
+    result.rain = component_fluxes.rain * dtn / rhor * amrex::Real(1000.0);
+    result.snow = component_fluxes.snow * dtn / rhos * amrex::Real(1000.0);
+    result.graupel = component_fluxes.graupel * dtn / rhog * amrex::Real(1000.0);
+    return result;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -855,13 +972,9 @@ SAMSurfaceAccumulation sam_surface_accumulation (const SAMPrecipFaceState& face_
         sam_precip_flux_components_from_face_state(face_state, vrain, vsnow, vgrau);
     const amrex::Real density_correction = std::sqrt(rho_0 / face_state.rho_avg);
 
-    // Surface accumulation uses the same bottom outgoing density-corrected
-    // component fluxes as the sedimentation operator, integrated over dt and
-    // converted from mass per area to depth.
-    result.rain = face_fluxes.rain * density_correction * dtn / rhor * amrex::Real(1000.0);
-    result.snow = face_fluxes.snow * density_correction * dtn / rhos * amrex::Real(1000.0);
-    result.graupel = face_fluxes.graupel * density_correction * dtn / rhog * amrex::Real(1000.0);
-    return result;
+    return sam_surface_accumulation_from_component_fluxes(
+        sam_precip_flux_components_density_corrected(face_fluxes, rho_0, face_state.rho_avg),
+        dtn);
 }
 
 #endif

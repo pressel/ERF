@@ -1,5 +1,6 @@
 #include <array>
 #include <string>
+#include <vector>
 
 #include <AMReX_Box.H>
 #include <AMReX_BoxArray.H>
@@ -406,6 +407,180 @@ void fill_precipfall_conserved_state (amrex::MultiFab& cons,
     amrex::Gpu::streamSynchronize();
 }
 
+SAMCellState make_precipfall_component_budget_state (const int i,
+                                                     const int j,
+                                                     const int k,
+                                                     const int nz,
+                                                     const amrex::Real pres_mbar)
+{
+    const bool is_top = (k == nz - 1);
+    const int phase_index = (i + j + k) % 3;
+    const amrex::Real tabs = (phase_index == 0) ? amrex::Real(282.0)
+                            : (phase_index == 1) ? amrex::Real(262.0)
+                                                 : amrex::Real(242.0);
+    const amrex::Real qsat = mixed_qsat_for_state(MoistureType::SAM, tabs, pres_mbar);
+    const amrex::Real scale = is_top ? amrex::Real(0.0) : amrex::Real(nz - 1 - k);
+
+    SAMCellState state{};
+    state.tabs = tabs;
+    state.pres_mbar = pres_mbar;
+    state.qv = amrex::Real(0.75) * qsat;
+    state.qcl = amrex::Real(0.0);
+    state.qci = amrex::Real(0.0);
+    state.qpr = is_top ? amrex::Real(0.0)
+                       : amrex::Real(2.0e-5) + scale * (amrex::Real(3.0e-5) + amrex::Real(1.0e-6) * i);
+    state.qps = is_top ? amrex::Real(0.0)
+                       : amrex::Real(1.5e-5) + scale * (amrex::Real(2.0e-5) + amrex::Real(1.0e-6) * j);
+    state.qpg = is_top ? amrex::Real(0.0)
+                       : amrex::Real(1.0e-5) + scale * (amrex::Real(2.5e-5) + amrex::Real(5.0e-7) * (i + j));
+    state.qn = amrex::Real(0.0);
+    state.qt = state.qv;
+    state.qp = state.qpr + state.qps + state.qpg;
+    state.theta = sam_theta_from_stored_mbar_converted_to_pa(tabs, pres_mbar, kRdOcp);
+    state.rho = getRhogivenTandPress(tabs, sam_mbar_to_pa(pres_mbar), state.qv);
+    return state;
+}
+
+void fill_precipfall_component_budget_conserved_state (amrex::MultiFab& cons,
+                                                       const amrex::Real pres_mbar)
+{
+    const int nz = cons.boxArray().minimalBox().length(2);
+    cons.setVal(amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        auto arr = cons.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const SAMCellState state = make_precipfall_component_budget_state(i, j, k, nz, pres_mbar);
+            arr(i,j,k,Rho_comp) = state.rho;
+            arr(i,j,k,RhoKE_comp) = amrex::Real(0.0);
+            arr(i,j,k,RhoScalar_comp) = amrex::Real(0.0);
+            sam_primitive_to_cons(state, arr, i, j, k);
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+}
+
+amrex::Real sum_component_mass (const amrex::Geometry& geom,
+                                const amrex::MultiFab& cons,
+                                const int comp,
+                                const amrex::MultiFab* detJ_cc = nullptr)
+{
+    const amrex::Real cell_volume = geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
+    if (detJ_cc == nullptr) {
+        return cons.sum(comp) * cell_volume;
+    }
+
+    auto cons_arrays = cons.const_arrays();
+    auto detj_arrays = detJ_cc->const_arrays();
+    amrex::GpuTuple<amrex::Real> reduced = amrex::ParReduce(
+        amrex::TypeList<amrex::ReduceOpSum>{},
+        amrex::TypeList<amrex::Real>{},
+        cons, amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real> {
+            return {cell_volume * detj_arrays[box_no](i,j,k) * cons_arrays[box_no](i,j,k,comp)};
+        });
+    amrex::Real total = amrex::get<0>(reduced);
+    amrex::ParallelDescriptor::ReduceRealSum(total);
+    return total;
+}
+
+amrex::Real sum_accum_mass (const amrex::Geometry& geom,
+                            const amrex::MultiFab& accum,
+                            const amrex::Real precip_density)
+{
+    const amrex::Real cell_area = geom.CellSize(0) * geom.CellSize(1);
+    return accum.sum(0) * cell_area * precip_density / amrex::Real(1000.0);
+}
+
+struct PrecipFallComponentBudgetResult {
+    amrex::Real rain_residual{amrex::Real(0.0)};
+    amrex::Real snow_residual{amrex::Real(0.0)};
+    amrex::Real graupel_residual{amrex::Real(0.0)};
+    amrex::Real total_residual{amrex::Real(0.0)};
+    amrex::Real rain_accum_mass{amrex::Real(0.0)};
+    amrex::Real snow_accum_mass{amrex::Real(0.0)};
+    amrex::Real graupel_accum_mass{amrex::Real(0.0)};
+    amrex::Real detj_min{amrex::Real(1.0)};
+    amrex::Real detj_max{amrex::Real(1.0)};
+    amrex::IntVect max_size{AMREX_D_DECL(0, 0, 0)};
+};
+
+PrecipFallComponentBudgetResult run_precipfall_component_budget_case (const amrex::IntVect& max_size)
+{
+    constexpr int nx = 8;
+    constexpr int ny = 4;
+    constexpr int nz = 4;
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real dt = amrex::Real(0.25);
+
+    amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
+    amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                            {AMREX_D_DECL(8.0, 4.0, 4.0)});
+    amrex::Array<int, AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(1, 1, 0)};
+    amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(max_size);
+    amrex::DistributionMapping dm(ba);
+
+    amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
+    fill_precipfall_component_budget_conserved_state(cons, pres_mbar);
+
+    amrex::MultiFab detJ_cc(ba, dm, 1, 0);
+    fill_nonuniform_detj(detJ_cc);
+
+    const amrex::Real initial_rain_mass = sum_component_mass(geom, cons, RhoQ4_comp, &detJ_cc);
+    const amrex::Real initial_snow_mass = sum_component_mass(geom, cons, RhoQ5_comp, &detJ_cc);
+    const amrex::Real initial_graupel_mass = sum_component_mass(geom, cons, RhoQ6_comp, &detJ_cc);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detj_owned = std::make_unique<amrex::MultiFab>(detJ_cc.boxArray(), detJ_cc.DistributionMap(), 1, 0);
+    amrex::MultiFab::Copy(*detj_owned, detJ_cc, 0, 0, 1, 0);
+
+    SolverChoice sc = make_sam_solver_choice(MoistureType::SAM);
+    SAM sam;
+    sam.Define(sc);
+    sam.Set_dzmin(geom.CellSize(2));
+    sam.Set_RealWidth(0);
+    sam.Init(cons, ba, geom, dt, z_phys_nd, detj_owned);
+    sam.Copy_State_to_Micro(cons);
+    sam.PrecipFall(sc);
+    sam.Copy_Micro_to_State(cons);
+
+    PrecipFallComponentBudgetResult result{};
+    result.rain_accum_mass = sum_accum_mass(geom, *sam.Qmoist_Ptr(0), rhor);
+    result.snow_accum_mass = sum_accum_mass(geom, *sam.Qmoist_Ptr(1), rhos);
+    result.graupel_accum_mass = sum_accum_mass(geom, *sam.Qmoist_Ptr(2), rhog);
+
+    const amrex::Real final_rain_mass = sum_component_mass(geom, cons, RhoQ4_comp, &detJ_cc);
+    const amrex::Real final_snow_mass = sum_component_mass(geom, cons, RhoQ5_comp, &detJ_cc);
+    const amrex::Real final_graupel_mass = sum_component_mass(geom, cons, RhoQ6_comp, &detJ_cc);
+    result.rain_residual = initial_rain_mass - final_rain_mass - result.rain_accum_mass;
+    result.snow_residual = initial_snow_mass - final_snow_mass - result.snow_accum_mass;
+    result.graupel_residual = initial_graupel_mass - final_graupel_mass - result.graupel_accum_mass;
+    result.total_residual = result.rain_residual + result.snow_residual + result.graupel_residual;
+    result.max_size = max_size;
+
+    for (amrex::MFIter mfi(detJ_cc); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        const auto detj = detJ_cc.const_array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    result.detj_min = std::min(result.detj_min, detj(i,j,k));
+                    result.detj_max = std::max(result.detj_max, detj(i,j,k));
+                }
+            }
+        }
+    }
+    amrex::ParallelDescriptor::ReduceRealMin(result.detj_min);
+    amrex::ParallelDescriptor::ReduceRealMax(result.detj_max);
+
+    return result;
+}
+
 int wrap_index (const int idx,
                 const int lo,
                 const int hi)
@@ -596,23 +771,39 @@ TEST(SAMParallel, PrecipFallGlobalMassAndSurfaceAccumulation)
     amrex::Real expected_rain_accum_mass = amrex::Real(0.0);
     amrex::Real expected_snow_accum_mass = amrex::Real(0.0);
     amrex::Real expected_graup_accum_mass = amrex::Real(0.0);
+    const amrex::Real coef = dt / dz;
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const PrecipFallCellState state = precipfall_cell_state(i, j, pressure_pa);
-            const amrex::Real qp_total = state.qpr + state.qps + state.qpg;
-            SAMPrecipFaceState face_state{};
-            face_state.rho_avg = state.rho;
-            face_state.tabs_avg = state.tabs;
-            face_state.qp_avg = qp_total;
-            face_state.omp = sam_precip_rain_fraction(kSAMWithIceMode, state.tabs);
-            face_state.omg = sam_graupel_fraction(kSAMWithIceMode, state.tabs);
-            face_state.qrr = face_state.omp * face_state.qp_avg;
-            face_state.qss = (one - face_state.omp) * (one - face_state.omg) * face_state.qp_avg;
-            face_state.qgg = (one - face_state.omp) * face_state.omg * face_state.qp_avg;
+            const SAMPrecipComponentFaceState face_state{
+                state.rho, state.tabs, state.qpr, state.qps, state.qpg};
+            const SAMPrecipFluxComponents corrected_fluxes =
+                sam_precip_flux_components_density_corrected(
+                    sam_precip_component_fluxes_from_face_state(face_state,
+                                                                terminal_velocities[0],
+                                                                terminal_velocities[1],
+                                                                terminal_velocities[2]),
+                    rho0,
+                    face_state.rho_avg);
+            const SAMPrecipFluxComponents limited_fluxes{
+                sam_limit_precip_component_flux(corrected_fluxes.rain,
+                                                state.rho,
+                                                state.qpr,
+                                                amrex::Real(1.0),
+                                                coef),
+                sam_limit_precip_component_flux(corrected_fluxes.snow,
+                                                state.rho,
+                                                state.qps,
+                                                amrex::Real(1.0),
+                                                coef),
+                sam_limit_precip_component_flux(corrected_fluxes.graupel,
+                                                state.rho,
+                                                state.qpg,
+                                                amrex::Real(1.0),
+                                                coef)};
 
-            const SAMSurfaceAccumulation expected_accum = sam_surface_accumulation(
-                face_state, rho0,
-                terminal_velocities[0], terminal_velocities[1], terminal_velocities[2], dt);
+            const SAMSurfaceAccumulation expected_accum =
+                sam_surface_accumulation_from_component_fluxes(limited_fluxes, dt);
 
             expected_rain_accum_mass += expected_accum.rain * cell_area * rhor / amrex::Real(1000.0);
             expected_snow_accum_mass += expected_accum.snow * cell_area * rhos / amrex::Real(1000.0);
@@ -811,4 +1002,68 @@ TEST(SAMParallel, PrecipDetJWeightedWaterBudgetDecompositionInvariant)
     EXPECT_NEAR(final_budget.graupel_accum_mass, amrex::Real(0.0), exact_zero_tol())
         << "rank=" << rank
         << " graupel_accum_mass=" << final_budget.graupel_accum_mass;
+}
+
+// Motivation:
+// The public PrecipFall path should conserve rain, snow, and graupel budgets
+// independently under multiple x-y decompositions and MPI rank counts, while
+// keeping each test box unsplit in z.
+TEST(SAMParallel, PrecipFallComponentBudgetsIndependentOfDecomposition)
+{
+    const std::vector<amrex::IntVect> max_sizes = {
+        amrex::IntVect(8, 4, 4),
+        amrex::IntVect(4, 2, 4),
+        amrex::IntVect(2, 1, 4)};
+
+    const int rank = amrex::ParallelDescriptor::MyProc();
+    const int num_terms = 8 * 4 * 4;
+    std::vector<PrecipFallComponentBudgetResult> results;
+    results.reserve(max_sizes.size());
+
+    for (const amrex::IntVect& max_size : max_sizes) {
+        results.push_back(run_precipfall_component_budget_case(max_size));
+        const PrecipFallComponentBudgetResult& result = results.back();
+
+        EXPECT_NEAR(result.rain_residual,
+                    amrex::Real(0.0),
+                    mpi_reduction_tol(amrex::Real(1.0), num_terms))
+            << "rank=" << rank
+            << " max_size=" << result.max_size
+            << " rain_residual=" << result.rain_residual
+            << " snow_residual=" << result.snow_residual
+            << " graupel_residual=" << result.graupel_residual
+            << " total_residual=" << result.total_residual
+            << " rain_accum_mass=" << result.rain_accum_mass
+            << " snow_accum_mass=" << result.snow_accum_mass
+            << " graupel_accum_mass=" << result.graupel_accum_mass
+            << " detj_min=" << result.detj_min
+            << " detj_max=" << result.detj_max;
+        EXPECT_NEAR(result.snow_residual,
+                    amrex::Real(0.0),
+                    mpi_reduction_tol(amrex::Real(1.0), num_terms));
+        EXPECT_NEAR(result.graupel_residual,
+                    amrex::Real(0.0),
+                    mpi_reduction_tol(amrex::Real(1.0), num_terms));
+        EXPECT_NEAR(result.total_residual,
+                    amrex::Real(0.0),
+                    mpi_reduction_tol(amrex::Real(1.0), 3 * num_terms));
+    }
+
+    ASSERT_FALSE(results.empty());
+    const PrecipFallComponentBudgetResult& baseline = results.front();
+    for (std::size_t idx = 1; idx < results.size(); ++idx) {
+        const PrecipFallComponentBudgetResult& result = results[idx];
+        EXPECT_NEAR(result.rain_accum_mass,
+                    baseline.rain_accum_mass,
+                    mpi_reduction_tol(baseline.rain_accum_mass, num_terms))
+            << "rank=" << rank
+            << " baseline_max_size=" << baseline.max_size
+            << " compare_max_size=" << result.max_size;
+        EXPECT_NEAR(result.snow_accum_mass,
+                    baseline.snow_accum_mass,
+                    mpi_reduction_tol(baseline.snow_accum_mass, num_terms));
+        EXPECT_NEAR(result.graupel_accum_mass,
+                    baseline.graupel_accum_mass,
+                    mpi_reduction_tol(baseline.graupel_accum_mass, num_terms));
+    }
 }

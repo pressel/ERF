@@ -727,6 +727,147 @@ TEST(SAMScalar, SurfaceAccumulationMatchesPurePhaseBottomFlux)
 }
 
 // Motivation:
+// Conservative component sedimentation uses the same bottom/interior/top face
+// selection rules as the total-qp face helper, but reads qpr, qps, and qpg
+// directly from the neighboring cell states.
+TEST(SAMScalar, PrecipComponentFaceState_BottomTopInteriorBranches)
+{
+    const amrex::Box column_box(amrex::IntVect(0, 0, 0), amrex::IntVect(0, 0, 1));
+    amrex::FArrayBox rho_fab(column_box, 1);
+    amrex::FArrayBox tabs_fab(column_box, 1);
+    amrex::FArrayBox qpr_fab(column_box, 1);
+    amrex::FArrayBox qps_fab(column_box, 1);
+    amrex::FArrayBox qpg_fab(column_box, 1);
+
+    auto rho = rho_fab.array();
+    auto tabs = tabs_fab.array();
+    auto qpr = qpr_fab.array();
+    auto qps = qps_fab.array();
+    auto qpg = qpg_fab.array();
+
+    rho(0,0,0) = amrex::Real(1.0);
+    tabs(0,0,0) = amrex::Real(280.0);
+    qpr(0,0,0) = amrex::Real(1.0e-4);
+    qps(0,0,0) = amrex::Real(2.0e-4);
+    qpg(0,0,0) = amrex::Real(3.0e-4);
+
+    rho(0,0,1) = amrex::Real(1.2);
+    tabs(0,0,1) = amrex::Real(260.0);
+    qpr(0,0,1) = amrex::Real(4.0e-4);
+    qps(0,0,1) = amrex::Real(5.0e-4);
+    qpg(0,0,1) = amrex::Real(6.0e-4);
+
+    const auto bottom = sam_precip_component_face_state(rho, tabs, qpr, qps, qpg, 0, 0, 0, 0, 1);
+    expect_near_roundoff(bottom.rho_avg, rho(0,0,0));
+    expect_near_roundoff(bottom.qpr_avg, qpr(0,0,0));
+    expect_near_roundoff(bottom.qps_avg, qps(0,0,0));
+    expect_near_roundoff(bottom.qpg_avg, qpg(0,0,0));
+
+    const auto interior = sam_precip_component_face_state(rho, tabs, qpr, qps, qpg, 0, 0, 1, 0, 1);
+    expect_near_roundoff(interior.rho_avg, myhalf * (rho(0,0,0) + rho(0,0,1)));
+    expect_near_roundoff(interior.qpr_avg, myhalf * (qpr(0,0,0) + qpr(0,0,1)));
+    expect_near_roundoff(interior.qps_avg, myhalf * (qps(0,0,0) + qps(0,0,1)));
+    expect_near_roundoff(interior.qpg_avg, myhalf * (qpg(0,0,0) + qpg(0,0,1)));
+
+    const auto top = sam_precip_component_face_state(rho, tabs, qpr, qps, qpg, 0, 0, 2, 0, 1);
+    expect_near_roundoff(top.rho_avg, rho(0,0,1));
+    expect_near_roundoff(top.qpr_avg, qpr(0,0,1));
+    expect_near_roundoff(top.qps_avg, qps(0,0,1));
+    expect_near_roundoff(top.qpg_avg, qpg(0,0,1));
+
+    EXPECT_EQ(sam_precip_face_donor_k(0, 0, 1), 0);
+    EXPECT_EQ(sam_precip_face_donor_k(1, 0, 1), 1);
+    EXPECT_EQ(sam_precip_face_donor_k(2, 0, 1), 1);
+}
+
+// Motivation:
+// Conservative component fluxes must vanish exactly when the corresponding
+// component mass is zero.
+TEST(SAMScalar, PrecipComponentFlux_ZeroWhenComponentIsZero)
+{
+    const SAMPrecipComponentFaceState face_state{
+        amrex::Real(1.0), amrex::Real(270.0),
+        amrex::Real(0.0), amrex::Real(4.0e-4), amrex::Real(5.0e-4)};
+    const SAMPrecipFluxComponents fluxes = sam_precip_component_fluxes_from_face_state(
+        face_state, amrex::Real(2.0), amrex::Real(3.0), amrex::Real(4.0));
+
+    EXPECT_NEAR(fluxes.rain, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_GT(fluxes.snow, amrex::Real(0.0));
+    EXPECT_GT(fluxes.graupel, amrex::Real(0.0));
+}
+
+// Motivation:
+// For fixed rho, each conservative component flux must increase with its own
+// component mass.
+TEST(SAMScalar, PrecipComponentFlux_MonotoneInComponentMass)
+{
+    const amrex::Real vrain = amrex::Real(2.0);
+    const amrex::Real vsnow = amrex::Real(3.0);
+    const amrex::Real vgrau = amrex::Real(4.0);
+
+    const SAMPrecipComponentFaceState base_state{
+        amrex::Real(1.0), amrex::Real(270.0),
+        amrex::Real(3.0e-4), amrex::Real(4.0e-4), amrex::Real(5.0e-4)};
+    SAMPrecipComponentFaceState larger_rain = base_state;
+    SAMPrecipComponentFaceState larger_snow = base_state;
+    SAMPrecipComponentFaceState larger_graupel = base_state;
+    larger_rain.qpr_avg *= amrex::Real(1.5);
+    larger_snow.qps_avg *= amrex::Real(1.5);
+    larger_graupel.qpg_avg *= amrex::Real(1.5);
+
+    const SAMPrecipFluxComponents base_fluxes =
+        sam_precip_component_fluxes_from_face_state(base_state, vrain, vsnow, vgrau);
+    const SAMPrecipFluxComponents rain_fluxes =
+        sam_precip_component_fluxes_from_face_state(larger_rain, vrain, vsnow, vgrau);
+    const SAMPrecipFluxComponents snow_fluxes =
+        sam_precip_component_fluxes_from_face_state(larger_snow, vrain, vsnow, vgrau);
+    const SAMPrecipFluxComponents graupel_fluxes =
+        sam_precip_component_fluxes_from_face_state(larger_graupel, vrain, vsnow, vgrau);
+
+    EXPECT_GT(rain_fluxes.rain, base_fluxes.rain);
+    EXPECT_GT(snow_fluxes.snow, base_fluxes.snow);
+    EXPECT_GT(graupel_fluxes.graupel, base_fluxes.graupel);
+}
+
+// Motivation:
+// The component donor limiter must never export more component mass through a
+// face than the donor cell contains over one substep.
+TEST(SAMScalar, PrecipComponentFluxLimiter_CapsAtAvailableDonorMass)
+{
+    const amrex::Real rho_donor = amrex::Real(1.0);
+    const amrex::Real q_donor = amrex::Real(3.0e-4);
+    const amrex::Real detJ_donor = amrex::Real(0.8);
+    const amrex::Real coef = amrex::Real(0.25);
+    const amrex::Real available_flux = rho_donor * q_donor * detJ_donor / coef;
+
+    const amrex::Real inactive = sam_limit_precip_component_flux(
+        amrex::Real(0.5) * available_flux, rho_donor, q_donor, detJ_donor, coef);
+    const amrex::Real active = sam_limit_precip_component_flux(
+        amrex::Real(2.0) * available_flux, rho_donor, q_donor, detJ_donor, coef);
+
+    expect_near_roundoff(inactive, amrex::Real(0.5) * available_flux);
+    expect_near_roundoff(active, available_flux);
+    EXPECT_LE(active, available_flux + exact_zero_or_near_zero_tol());
+}
+
+// Motivation:
+// Conservative surface accumulation must be computed from the same limited
+// density-corrected component fluxes used by the state update.
+TEST(SAMScalar, SurfaceAccumulation_UsesLimitedComponentFluxes)
+{
+    const SAMPrecipFluxComponents limited_fluxes{
+        amrex::Real(0.12), amrex::Real(0.09), amrex::Real(0.06)};
+    const amrex::Real dt = amrex::Real(2.5);
+
+    const SAMSurfaceAccumulation accum =
+        sam_surface_accumulation_from_component_fluxes(limited_fluxes, dt);
+
+    expect_near_pow_sqrt(accum.rain, limited_fluxes.rain * dt / rhor * amrex::Real(1000.0));
+    expect_near_pow_sqrt(accum.snow, limited_fluxes.snow * dt / rhos * amrex::Real(1000.0));
+    expect_near_pow_sqrt(accum.graupel, limited_fluxes.graupel * dt / rhog * amrex::Real(1000.0));
+}
+
+// Motivation:
 // Away from the qp activation threshold, the density-corrected pure-phase SAM
 // precip flux has a closed-form derivative in both q and rho. This verifies
 // the documented rain, snow, and graupel derivative contracts directly.
