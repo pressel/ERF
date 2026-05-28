@@ -5,14 +5,18 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 
 #include <AMReX_FArrayBox.H>
+#include <AMReX_MultiFab.H>
+#include <AMReX_Reduce.H>
 
 #include <ERF_Constants.H>
 #include <ERF_EOS.H>
 #include <ERF_IndexDefines.H>
 #include <ERF_MicrophysicsUtils.H>
+#include <ERF_SAM.H>
 #include <ERF_SAMUtils.H>
 
 namespace sam_test {
@@ -20,6 +24,7 @@ namespace sam_test {
 constexpr amrex::Real kRdOcp = R_d / Cp_d;
 constexpr amrex::Real kFacCond = lcond / Cp_d;
 constexpr amrex::Real kFacFus = lfus / Cp_d;
+constexpr amrex::Real kFacSub = lsub / Cp_d;
 
 // MUST MATCH the SAM helper integer used in ERF_CloudSAM.cpp and ERF_Precip.cpp
 // for the cloud-ice-enabled mode.
@@ -38,8 +43,16 @@ constexpr amrex::Real kQpThresholdForBranchSampling = qp_threshold;
 constexpr amrex::Real kPhaseActivationLow = amrex::Real(0.001);
 constexpr amrex::Real kPhaseActivationHigh = amrex::Real(0.999);
 
+struct SAMBudget {
+    amrex::Real total_water_mass{amrex::Real(0.0)};
+    amrex::Real latent_proxy_mass{amrex::Real(0.0)};
+    amrex::Real rain_accum_mass{amrex::Real(0.0)};
+    amrex::Real snow_accum_mass{amrex::Real(0.0)};
+    amrex::Real graupel_accum_mass{amrex::Real(0.0)};
+};
+
 // Provenance: exact-zero branches only accumulate machine roundoff.
-inline amrex::Real exact_zero_tol ()
+inline amrex::Real exact_zero_or_near_zero_tol ()
 {
 #ifdef AMREX_USE_FLOAT
     return amrex::Real(64.0) * std::numeric_limits<amrex::Real>::epsilon();
@@ -48,8 +61,13 @@ inline amrex::Real exact_zero_tol ()
 #endif
 }
 
+inline amrex::Real exact_zero_tol ()
+{
+    return exact_zero_or_near_zero_tol();
+}
+
 // Provenance: a handful of multiplies/divides on smooth algebraic identities.
-inline amrex::Real roundoff_tol (const amrex::Real expected)
+inline amrex::Real formula_abs_tol (const amrex::Real expected)
 {
 #ifdef AMREX_USE_FLOAT
     const amrex::Real factor = amrex::Real(128.0);
@@ -60,8 +78,13 @@ inline amrex::Real roundoff_tol (const amrex::Real expected)
            std::max(amrex::Real(1.0), std::abs(expected));
 }
 
+inline amrex::Real roundoff_tol (const amrex::Real expected)
+{
+    return formula_abs_tol(expected);
+}
+
 // Provenance: pow/sqrt helpers vary slightly across host math libraries.
-inline amrex::Real pow_sqrt_tol (const amrex::Real expected)
+inline amrex::Real backend_math_abs_tol (const amrex::Real expected)
 {
 #ifdef AMREX_USE_FLOAT
     const amrex::Real factor = amrex::Real(4096.0);
@@ -72,8 +95,14 @@ inline amrex::Real pow_sqrt_tol (const amrex::Real expected)
            std::max(amrex::Real(1.0), std::abs(expected));
 }
 
+inline amrex::Real pow_sqrt_tol (const amrex::Real expected)
+{
+    return backend_math_abs_tol(expected);
+}
+
 // Provenance: reduced sums over several flux/source terms in a single cell.
-inline amrex::Real flux_conservation_tol (const amrex::Real scale)
+inline amrex::Real property_accumulation_tol (const int num_terms,
+                                              const amrex::Real scale)
 {
 #ifdef AMREX_USE_FLOAT
     const amrex::Real factor = amrex::Real(256.0);
@@ -81,7 +110,12 @@ inline amrex::Real flux_conservation_tol (const amrex::Real scale)
     const amrex::Real factor = amrex::Real(64.0);
 #endif
     return factor * std::numeric_limits<amrex::Real>::epsilon() *
-           std::max(amrex::Real(1.0), std::abs(scale));
+           std::max(amrex::Real(1.0), std::abs(scale)) * std::max(1, num_terms);
+}
+
+inline amrex::Real flux_conservation_tol (const amrex::Real scale)
+{
+    return property_accumulation_tol(1, scale);
 }
 
 // Provenance: MPI/global reduction order plus accumulation over many cellwise
@@ -96,6 +130,21 @@ inline amrex::Real mpi_reduction_tol (const amrex::Real scale,
 #endif
     return factor * std::numeric_limits<amrex::Real>::epsilon() *
            std::max(amrex::Real(1.0), std::abs(scale)) * std::max(1, num_terms);
+}
+
+inline amrex::Real finite_difference_tol (const amrex::Real scale,
+                                          const amrex::Real h)
+{
+#ifdef AMREX_USE_FLOAT
+    const amrex::Real truncation = amrex::Real(8.0) * std::abs(scale) * h * h;
+    const amrex::Real roundoff = amrex::Real(256.0) * std::numeric_limits<amrex::Real>::epsilon() *
+                                 std::max(amrex::Real(1.0), std::abs(scale)) / h;
+#else
+    const amrex::Real truncation = amrex::Real(4.0) * std::abs(scale) * h * h;
+    const amrex::Real roundoff = amrex::Real(64.0) * std::numeric_limits<amrex::Real>::epsilon() *
+                                 std::max(amrex::Real(1.0), std::abs(scale)) / h;
+#endif
+    return std::max({exact_zero_or_near_zero_tol(), truncation, roundoff});
 }
 
 // Provenance: Newton helper temperatures are in kelvin and the scalar formulas
@@ -155,6 +204,99 @@ inline std::string branch_label (const char* helper_name,
 {
     return std::string(helper_name) + " sample=" +
            std::to_string(static_cast<double>(sample));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_total_water (const SAMCellState& s) noexcept
+{
+    return s.qv + s.qcl + s.qci + s.qpr + s.qps + s.qpg;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_latent_proxy (const SAMCellState& s,
+                              amrex::Real fac_cond,
+                              amrex::Real fac_fus) noexcept
+{
+    return s.tabs + fac_cond * s.qv - fac_fus * (s.qci + s.qps + s.qpg);
+}
+
+inline amrex::Real sum_multifab_scalar (const amrex::MultiFab& mf)
+{
+    auto arrays = mf.const_arrays();
+    amrex::GpuTuple<amrex::Real> reduced = amrex::ParReduce(
+        amrex::TypeList<amrex::ReduceOpSum>{},
+        amrex::TypeList<amrex::Real>{},
+        mf, amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real> {
+            return {arrays[box_no](i,j,k)};
+        });
+    return amrex::get<0>(reduced);
+}
+
+inline SAMBudget compute_sam_budget (const amrex::Geometry& geom,
+                                     const amrex::MultiFab& cons,
+                                     const SAM& sam,
+                                     const amrex::MultiFab* detJ_cc = nullptr)
+{
+    const amrex::Real cell_volume = geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
+    const amrex::Real cell_area = geom.CellSize(0) * geom.CellSize(1);
+    auto cons_arrays = cons.const_arrays();
+
+    amrex::Real total_water_mass = amrex::Real(0.0);
+    amrex::Real latent_proxy_mass = amrex::Real(0.0);
+
+    if (detJ_cc != nullptr) {
+        auto detj_arrays = detJ_cc->const_arrays();
+        amrex::GpuTuple<amrex::Real, amrex::Real> reduced = amrex::ParReduce(
+            amrex::TypeList<amrex::ReduceOpSum, amrex::ReduceOpSum>{},
+            amrex::TypeList<amrex::Real, amrex::Real>{},
+            cons, amrex::IntVect(0),
+            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real, amrex::Real> {
+                const auto& arr = cons_arrays[box_no];
+                const SAMPrimitiveCell primitive =
+                    sam_cons_to_primitive(arr(i,j,k,Rho_comp),
+                                          arr(i,j,k,RhoTheta_comp),
+                                          arr(i,j,k,RhoQ1_comp),
+                                          arr(i,j,k,RhoQ2_comp),
+                                          arr(i,j,k,RhoQ3_comp),
+                                          arr(i,j,k,RhoQ4_comp),
+                                          arr(i,j,k,RhoQ5_comp),
+                                          arr(i,j,k,RhoQ6_comp));
+                const amrex::Real weight = cell_volume * detj_arrays[box_no](i,j,k);
+                return {weight * primitive.rho * sam_total_water(primitive),
+                        weight * primitive.rho * sam_latent_proxy(primitive, kFacCond, kFacFus)};
+            });
+        total_water_mass = amrex::get<0>(reduced);
+        latent_proxy_mass = amrex::get<1>(reduced);
+    } else {
+        amrex::GpuTuple<amrex::Real, amrex::Real> reduced = amrex::ParReduce(
+            amrex::TypeList<amrex::ReduceOpSum, amrex::ReduceOpSum>{},
+            amrex::TypeList<amrex::Real, amrex::Real>{},
+            cons, amrex::IntVect(0),
+            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real, amrex::Real> {
+                const auto& arr = cons_arrays[box_no];
+                const SAMPrimitiveCell primitive =
+                    sam_cons_to_primitive(arr(i,j,k,Rho_comp),
+                                          arr(i,j,k,RhoTheta_comp),
+                                          arr(i,j,k,RhoQ1_comp),
+                                          arr(i,j,k,RhoQ2_comp),
+                                          arr(i,j,k,RhoQ3_comp),
+                                          arr(i,j,k,RhoQ4_comp),
+                                          arr(i,j,k,RhoQ5_comp),
+                                          arr(i,j,k,RhoQ6_comp));
+                return {cell_volume * primitive.rho * sam_total_water(primitive),
+                        cell_volume * primitive.rho * sam_latent_proxy(primitive, kFacCond, kFacFus)};
+            });
+        total_water_mass = amrex::get<0>(reduced);
+        latent_proxy_mass = amrex::get<1>(reduced);
+    }
+
+    return SAMBudget{
+        total_water_mass,
+        latent_proxy_mass,
+        sum_multifab_scalar(*sam.Qmoist_Ptr(0)) * cell_area * rhor / amrex::Real(1000.0),
+        sum_multifab_scalar(*sam.Qmoist_Ptr(1)) * cell_area * rhos / amrex::Real(1000.0),
+        sum_multifab_scalar(*sam.Qmoist_Ptr(2)) * cell_area * rhog / amrex::Real(1000.0)};
 }
 
 } // namespace sam_test

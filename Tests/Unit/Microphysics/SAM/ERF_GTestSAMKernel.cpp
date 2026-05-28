@@ -1,3 +1,4 @@
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,257 @@ struct SAMKernelOutputs {
     amrex::Real face_qp;
     int substeps;
 };
+
+struct SAMPrecipKernelCase {
+    int mode;
+    int enable_precip;
+    amrex::Real dtn;
+    amrex::Real tabs;
+    amrex::Real pres_mbar;
+    amrex::Real qv;
+    amrex::Real qcl;
+    amrex::Real qci;
+    amrex::Real qpr;
+    amrex::Real qps;
+    amrex::Real qpg;
+    amrex::Real coeff_scale;
+};
+
+struct SAMPrecipKernelOutputs {
+    amrex::Real qv;
+    amrex::Real qcl;
+    amrex::Real qci;
+    amrex::Real qpr;
+    amrex::Real qps;
+    amrex::Real qpg;
+    amrex::Real qn;
+    amrex::Real qt;
+    amrex::Real qp;
+    amrex::Real theta;
+    amrex::Real tabs;
+    amrex::Real rho;
+    amrex::Real dqca;
+    amrex::Real dqia;
+    amrex::Real dprc;
+    amrex::Real dpsc;
+    amrex::Real dpgc;
+    amrex::Real dpsi;
+    amrex::Real dpgi;
+    amrex::Real dqpr;
+    amrex::Real dqps;
+    amrex::Real dqpg;
+};
+
+amrex::Real kernel_mixed_phase_tabs ()
+{
+    const amrex::Real lower = std::max(tprmin, tgrmin) + amrex::Real(1.0e-3);
+    const amrex::Real upper = std::min(tprmax, tgrmax) - amrex::Real(1.0e-3);
+    EXPECT_LT(lower, upper);
+    return amrex::Real(0.5) * (lower + upper);
+}
+
+amrex::Real kernel_mixed_qsat_for_state (const int sam_mode,
+                                         const amrex::Real tabs,
+                                         const amrex::Real pres_mbar)
+{
+    amrex::Real qsatw;
+    amrex::Real qsati;
+    erf_qsatw(tabs, pres_mbar, qsatw);
+    erf_qsati(tabs, pres_mbar, qsati);
+    const amrex::Real omn = sam_cloud_liquid_fraction(sam_mode, tabs, a_bg, tbgmin * a_bg);
+    return sam_mixed_qsat(omn, qsatw, qsati);
+}
+
+SAMCellState make_precip_kernel_state (const SAMPrecipKernelCase& test_case)
+{
+    SAMCellState state{};
+    state.tabs = test_case.tabs;
+    state.pres_mbar = test_case.pres_mbar;
+    state.qv = test_case.qv;
+    state.qcl = test_case.qcl;
+    state.qci = test_case.qci;
+    state.qpr = test_case.qpr;
+    state.qps = test_case.qps;
+    state.qpg = test_case.qpg;
+    state.qn = state.qcl + state.qci;
+    state.qt = state.qv + state.qn;
+    state.qp = state.qpr + state.qps + state.qpg;
+    state.theta = sam_theta_from_stored_mbar_converted_to_pa(state.tabs, state.pres_mbar, kRdOcp);
+    state.rho = getRhogivenTandPress(state.tabs, sam_mbar_to_pa(state.pres_mbar), state.qv);
+    return state;
+}
+
+SAMPrecipConfig make_precip_kernel_config (const SAMPrecipKernelCase& test_case)
+{
+    return {
+        test_case.mode,
+        test_case.enable_precip != 0,
+        test_case.dtn,
+        kRdOcp,
+        kFacCond,
+        kFacFus,
+        kFacSub,
+        std::numeric_limits<amrex::Real>::epsilon(),
+        (three + b_rain) / amrex::Real(4.0),
+        (three + b_snow) / amrex::Real(4.0),
+        (three + b_grau) / amrex::Real(4.0),
+        (amrex::Real(5.0) + b_rain) / amrex::Real(8.0),
+        (amrex::Real(5.0) + b_snow) / amrex::Real(8.0),
+        (amrex::Real(5.0) + b_grau) / amrex::Real(8.0)};
+}
+
+SAMCoefficientRow make_precip_kernel_coeffs (const amrex::Real scale)
+{
+    return {
+        amrex::Real(2.0) * scale,
+        amrex::Real(2.5) * scale,
+        amrex::Real(2.2) * scale,
+        amrex::Real(1.8) * scale,
+        amrex::Real(1.1) * scale,
+        amrex::Real(1.4) * scale,
+        amrex::Real(2.4) * scale,
+        amrex::Real(2.1) * scale,
+        amrex::Real(1.2) * scale,
+        amrex::Real(1.6) * scale,
+        amrex::Real(1.3) * scale,
+        amrex::Real(1.7) * scale};
+}
+
+SAMPrecipKernelOutputs host_precip_reference (const SAMPrecipKernelCase& test_case)
+{
+    SAMPrecipCellDiagnostics diagnostics;
+    const SAMCellState state = sam_precip_cell_update(
+        make_precip_kernel_state(test_case),
+        make_precip_kernel_coeffs(test_case.coeff_scale),
+        make_precip_kernel_config(test_case),
+        &diagnostics);
+
+    return {
+        state.qv, state.qcl, state.qci,
+        state.qpr, state.qps, state.qpg,
+        state.qn, state.qt, state.qp,
+        state.theta, state.tabs, state.rho,
+        diagnostics.autoconversion.dqca,
+        diagnostics.autoconversion.dqia,
+        diagnostics.accretion.dprc,
+        diagnostics.accretion.dpsc,
+        diagnostics.accretion.dpgc,
+        diagnostics.accretion.dpsi,
+        diagnostics.accretion.dpgi,
+        diagnostics.evaporation.dqpr,
+        diagnostics.evaporation.dqps,
+        diagnostics.evaporation.dqpg};
+}
+
+void launch_sam_precip_update_kernel (const int ncases,
+                                      const SAMPrecipKernelCase* cases_ptr,
+                                      SAMPrecipKernelOutputs* outputs_ptr)
+{
+    amrex::ParallelFor(ncases, [=] AMREX_GPU_DEVICE (int idx) noexcept {
+        const SAMPrecipKernelCase test_case = cases_ptr[idx];
+        SAMPrecipCellDiagnostics diagnostics;
+        const SAMCellState state = sam_precip_cell_update(
+            make_precip_kernel_state(test_case),
+            make_precip_kernel_coeffs(test_case.coeff_scale),
+            make_precip_kernel_config(test_case),
+            &diagnostics);
+
+        outputs_ptr[idx] = SAMPrecipKernelOutputs{
+            state.qv, state.qcl, state.qci,
+            state.qpr, state.qps, state.qpg,
+            state.qn, state.qt, state.qp,
+            state.theta, state.tabs, state.rho,
+            diagnostics.autoconversion.dqca,
+            diagnostics.autoconversion.dqia,
+            diagnostics.accretion.dprc,
+            diagnostics.accretion.dpsc,
+            diagnostics.accretion.dpgc,
+            diagnostics.accretion.dpsi,
+            diagnostics.accretion.dpgi,
+            diagnostics.evaporation.dqpr,
+            diagnostics.evaporation.dqps,
+            diagnostics.evaporation.dqpg};
+    });
+
+    amrex::Gpu::synchronize();
+}
+
+std::vector<SAMPrecipKernelCase> make_precip_kernel_cases ()
+{
+    auto make_case = [](const int mode,
+                        const bool enable_precip,
+                        const amrex::Real tabs,
+                        const amrex::Real qv_fraction,
+                        const amrex::Real qcl,
+                        const amrex::Real qci,
+                        const amrex::Real qpr,
+                        const amrex::Real qps,
+                        const amrex::Real qpg,
+                        const amrex::Real coeff_scale,
+                        const amrex::Real dtn) {
+        const amrex::Real pres_mbar = amrex::Real(900.0);
+        return SAMPrecipKernelCase{
+            mode,
+            enable_precip ? 1 : 0,
+            dtn,
+            tabs,
+            pres_mbar,
+            qv_fraction * kernel_mixed_qsat_for_state(mode, tabs, pres_mbar),
+            qcl,
+            qci,
+            qpr,
+            qps,
+            qpg,
+            coeff_scale};
+    };
+
+    return {
+        make_case(kSAMWithIceMode, true,
+                  amrex::Real(285.0), amrex::Real(0.65),
+                  qcw0 + amrex::Real(5.0e-4), amrex::Real(0.0),
+                  amrex::Real(6.0e-4), amrex::Real(0.0), amrex::Real(0.0),
+                  amrex::Real(1.0), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, true,
+                  amrex::Real(260.0), amrex::Real(0.55),
+                  amrex::Real(0.0), qci0 + amrex::Real(5.0e-4),
+                  amrex::Real(0.0), amrex::Real(7.0e-4), amrex::Real(0.0),
+                  amrex::Real(1.0), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, true,
+                  amrex::Real(245.0), amrex::Real(0.5),
+                  amrex::Real(0.0), qci0 + amrex::Real(4.0e-4),
+                  amrex::Real(0.0), amrex::Real(0.0), amrex::Real(8.0e-4),
+                  amrex::Real(1.1), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, true,
+                  kernel_mixed_phase_tabs(), amrex::Real(0.5),
+                  qcw0 + amrex::Real(8.0e-4), qci0 + amrex::Real(7.0e-4),
+                  amrex::Real(4.0e-4), amrex::Real(5.0e-4), amrex::Real(6.0e-4),
+                  amrex::Real(1.0), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, true,
+                  amrex::Real(278.0), amrex::Real(0.98),
+                  qcw0 + amrex::Real(5.0e-6), amrex::Real(0.0),
+                  amrex::Real(2.5e-4), amrex::Real(0.0), amrex::Real(0.0),
+                  amrex::Real(2.5), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, true,
+                  amrex::Real(252.0), amrex::Real(0.6),
+                  qcw0 + amrex::Real(2.0e-5), qci0 + amrex::Real(2.0e-5),
+                  amrex::Real(4.0e-4), amrex::Real(3.0e-4), amrex::Real(2.0e-4),
+                  amrex::Real(3.0), amrex::Real(1.0)),
+        make_case(kSAMNoIceMode, true,
+                  amrex::Real(255.0), amrex::Real(0.7),
+                  qcw0 + amrex::Real(4.0e-4), qci0 + amrex::Real(3.0e-4),
+                  amrex::Real(5.0e-4), amrex::Real(2.0e-4), amrex::Real(1.0e-4),
+                  amrex::Real(0.9), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, false,
+                  kernel_mixed_phase_tabs(), amrex::Real(0.6),
+                  qcw0 + amrex::Real(6.0e-4), qci0 + amrex::Real(5.0e-4),
+                  amrex::Real(3.0e-4), amrex::Real(4.0e-4), amrex::Real(5.0e-4),
+                  amrex::Real(1.0), amrex::Real(1.0)),
+        make_case(kSAMWithIceMode, true,
+                  amrex::Real(270.0), amrex::Real(0.8),
+                  amrex::Real(0.0), amrex::Real(0.0),
+                  amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0),
+                  amrex::Real(1.0), amrex::Real(1.0))};
+}
 
 SAMKernelOutputs host_reference (const SAMKernelCase& test_case)
 {
@@ -307,6 +559,34 @@ void expect_close (const char* helper_name,
         << " tolerance=" << tol;
 }
 
+    void expect_precip_close (const char* field_name,
+                  const int idx,
+                  const SAMPrecipKernelCase& test_case,
+                  const amrex::Real host_value,
+                  const amrex::Real device_value,
+                  const amrex::Real tol)
+    {
+        EXPECT_LE(std::abs(device_value - host_value), tol)
+        << "helper=sam_precip_cell_update"
+        << " field=" << field_name
+        << " sample_index=" << idx
+        << " mode=" << test_case.mode
+        << " enable_precip=" << test_case.enable_precip
+        << " tabs=" << test_case.tabs
+        << " pres_mbar=" << test_case.pres_mbar
+        << " qv=" << test_case.qv
+        << " qcl=" << test_case.qcl
+        << " qci=" << test_case.qci
+        << " qpr=" << test_case.qpr
+        << " qps=" << test_case.qps
+        << " qpg=" << test_case.qpg
+        << " coeff_scale=" << test_case.coeff_scale
+        << " host=" << host_value
+        << " device=" << device_value
+        << " normalized_error=" << normalized_error(device_value, host_value)
+        << " tolerance=" << tol;
+    }
+
 } // namespace
 
 // Motivation:
@@ -399,5 +679,78 @@ TEST(SAMKernel, SAMUtilsSweptHostDeviceEquivalence)
                      roundoff_tol(host_outputs[idx].face_qp));
         EXPECT_EQ(device_outputs[idx].substeps, host_outputs[idx].substeps)
             << "helper=sam_substep_count_from_reduced_flux sample_index=" << idx;
+    }
+}
+
+// Motivation:
+// The composed SAM precip source helper runs inside device kernels in
+// production. This sweep checks that representative warm, cold, mixed,
+// limiter-active, no-ice, disabled-precip, and zero-precip cases stay
+// host/device equivalent for both the updated state and key diagnostics.
+TEST(SAMKernel, PrecipCellUpdateHostDeviceEquivalence)
+{
+    const std::vector<SAMPrecipKernelCase> cases = make_precip_kernel_cases();
+    std::vector<SAMPrecipKernelOutputs> host_outputs(cases.size());
+
+    for (int idx = 0; idx < static_cast<int>(cases.size()); ++idx) {
+        host_outputs[idx] = host_precip_reference(cases[idx]);
+    }
+
+    amrex::Gpu::DeviceVector<SAMPrecipKernelCase> d_cases(cases.size());
+    amrex::Gpu::DeviceVector<SAMPrecipKernelOutputs> d_outputs(cases.size());
+    amrex::Gpu::copy(amrex::Gpu::hostToDevice, cases.begin(), cases.end(), d_cases.begin());
+
+    launch_sam_precip_update_kernel(static_cast<int>(cases.size()), d_cases.data(), d_outputs.data());
+
+    std::vector<SAMPrecipKernelOutputs> device_outputs(cases.size());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, d_outputs.begin(), d_outputs.end(), device_outputs.begin());
+
+    for (int idx = 0; idx < static_cast<int>(cases.size()); ++idx) {
+        SCOPED_TRACE("sample_index=" + std::to_string(idx));
+
+        expect_precip_close("state.qv", idx, cases[idx], host_outputs[idx].qv, device_outputs[idx].qv,
+                            pow_sqrt_tol(host_outputs[idx].qv));
+        expect_precip_close("state.qcl", idx, cases[idx], host_outputs[idx].qcl, device_outputs[idx].qcl,
+                            pow_sqrt_tol(host_outputs[idx].qcl));
+        expect_precip_close("state.qci", idx, cases[idx], host_outputs[idx].qci, device_outputs[idx].qci,
+                            pow_sqrt_tol(host_outputs[idx].qci));
+        expect_precip_close("state.qpr", idx, cases[idx], host_outputs[idx].qpr, device_outputs[idx].qpr,
+                            pow_sqrt_tol(host_outputs[idx].qpr));
+        expect_precip_close("state.qps", idx, cases[idx], host_outputs[idx].qps, device_outputs[idx].qps,
+                            pow_sqrt_tol(host_outputs[idx].qps));
+        expect_precip_close("state.qpg", idx, cases[idx], host_outputs[idx].qpg, device_outputs[idx].qpg,
+                            pow_sqrt_tol(host_outputs[idx].qpg));
+        expect_precip_close("state.qn", idx, cases[idx], host_outputs[idx].qn, device_outputs[idx].qn,
+                            pow_sqrt_tol(host_outputs[idx].qn));
+        expect_precip_close("state.qt", idx, cases[idx], host_outputs[idx].qt, device_outputs[idx].qt,
+                            pow_sqrt_tol(host_outputs[idx].qt));
+        expect_precip_close("state.qp", idx, cases[idx], host_outputs[idx].qp, device_outputs[idx].qp,
+                            pow_sqrt_tol(host_outputs[idx].qp));
+        expect_precip_close("state.theta", idx, cases[idx], host_outputs[idx].theta, device_outputs[idx].theta,
+                            pow_sqrt_tol(host_outputs[idx].theta));
+        expect_precip_close("state.tabs", idx, cases[idx], host_outputs[idx].tabs, device_outputs[idx].tabs,
+                            pow_sqrt_tol(host_outputs[idx].tabs));
+        expect_precip_close("state.rho", idx, cases[idx], host_outputs[idx].rho, device_outputs[idx].rho,
+                            pow_sqrt_tol(host_outputs[idx].rho));
+        expect_precip_close("diag.dqca", idx, cases[idx], host_outputs[idx].dqca, device_outputs[idx].dqca,
+                            pow_sqrt_tol(host_outputs[idx].dqca));
+        expect_precip_close("diag.dqia", idx, cases[idx], host_outputs[idx].dqia, device_outputs[idx].dqia,
+                            pow_sqrt_tol(host_outputs[idx].dqia));
+        expect_precip_close("diag.dprc", idx, cases[idx], host_outputs[idx].dprc, device_outputs[idx].dprc,
+                            pow_sqrt_tol(host_outputs[idx].dprc));
+        expect_precip_close("diag.dpsc", idx, cases[idx], host_outputs[idx].dpsc, device_outputs[idx].dpsc,
+                            pow_sqrt_tol(host_outputs[idx].dpsc));
+        expect_precip_close("diag.dpgc", idx, cases[idx], host_outputs[idx].dpgc, device_outputs[idx].dpgc,
+                            pow_sqrt_tol(host_outputs[idx].dpgc));
+        expect_precip_close("diag.dpsi", idx, cases[idx], host_outputs[idx].dpsi, device_outputs[idx].dpsi,
+                            pow_sqrt_tol(host_outputs[idx].dpsi));
+        expect_precip_close("diag.dpgi", idx, cases[idx], host_outputs[idx].dpgi, device_outputs[idx].dpgi,
+                            pow_sqrt_tol(host_outputs[idx].dpgi));
+        expect_precip_close("diag.dqpr", idx, cases[idx], host_outputs[idx].dqpr, device_outputs[idx].dqpr,
+                            pow_sqrt_tol(host_outputs[idx].dqpr));
+        expect_precip_close("diag.dqps", idx, cases[idx], host_outputs[idx].dqps, device_outputs[idx].dqps,
+                            pow_sqrt_tol(host_outputs[idx].dqps));
+        expect_precip_close("diag.dqpg", idx, cases[idx], host_outputs[idx].dqpg, device_outputs[idx].dqpg,
+                            pow_sqrt_tol(host_outputs[idx].dqpg));
     }
 }

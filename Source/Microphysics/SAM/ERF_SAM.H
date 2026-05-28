@@ -144,6 +144,13 @@ public:
         return mic_fab_vars[MicVarMap[varIdx]].get();
     }
 
+    const amrex::MultiFab*
+    Qmoist_Ptr (const int& varIdx) const
+    {
+        AMREX_ALWAYS_ASSERT(varIdx < m_qmoist_size);
+        return mic_fab_vars[MicVarMap[varIdx]].get();
+    }
+
     void
     Compute_Coefficients ();
 

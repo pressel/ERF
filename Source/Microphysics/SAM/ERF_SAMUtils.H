@@ -64,6 +64,37 @@ struct SAMPrimitiveCell {
     amrex::Real qp{zero};
 };
 
+using SAMCellState = SAMPrimitiveCell;
+
+struct SAMPrecipConfig {
+    int sam_moisture_type{1};
+    bool enable_precip{true};
+    amrex::Real dtn{zero};
+    amrex::Real rdOcp{zero};
+    amrex::Real fac_cond{zero};
+    amrex::Real fac_fus{zero};
+    amrex::Real fac_sub{zero};
+    amrex::Real eps{zero};
+    amrex::Real powr1{zero};
+    amrex::Real pows1{zero};
+    amrex::Real powg1{zero};
+    amrex::Real powr2{zero};
+    amrex::Real pows2{zero};
+    amrex::Real powg2{zero};
+};
+
+struct SAMPrecipCellDiagnostics {
+    SAMPrecipSources autoconversion{};
+    SAMPrecipSources accretion{};
+    SAMPrecipSources limited_sources{};
+    SAMPrecipSources partitioned_sources{};
+    SAMPrecipSources evaporation{};
+    amrex::Real qsat{zero};
+    amrex::Real omn{one};
+    amrex::Real omp{one};
+    amrex::Real omg{zero};
+};
+
 struct SAMCoefficientRow {
     amrex::Real accrrc{zero};
     amrex::Real accrsi{zero};
@@ -472,6 +503,146 @@ SAMPrecipSources sam_apply_precip_evaporation_limiter (const amrex::Real qpr,
     result.dqpg = amrex::min(qpg, result.dqpg);
     result.dqp = result.dqpr + result.dqps + result.dqpg;
     return result;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMCellState sam_precip_cell_update (SAMCellState state,
+                                     const SAMCoefficientRow& coeffs,
+                                     const SAMPrecipConfig& config,
+                                     SAMPrecipCellDiagnostics* diagnostics = nullptr) noexcept
+{
+    if (diagnostics != nullptr) {
+        *diagnostics = {};
+    }
+
+    state.qn = state.qcl + state.qci;
+    state.qt = state.qv + state.qn;
+    state.qp = state.qpr + state.qps + state.qpg;
+
+    if (!config.enable_precip || state.qn + state.qp <= zero) {
+        return state;
+    }
+
+    amrex::Real omn;
+    amrex::Real omp;
+    amrex::Real omg;
+    if (config.sam_moisture_type == 2) {
+        omn = one;
+        omp = one;
+        omg = zero;
+    } else {
+        omn = sam_cloud_liquid_fraction(config.sam_moisture_type,
+                                        state.tabs, a_bg, tbgmin * a_bg);
+        omp = sam_precip_rain_fraction(config.sam_moisture_type,
+                                       state.tabs);
+        omg = sam_graupel_fraction(config.sam_moisture_type,
+                                   state.tabs);
+    }
+
+    if (diagnostics != nullptr) {
+        diagnostics->omn = omn;
+        diagnostics->omp = omp;
+        diagnostics->omg = omg;
+    }
+
+    if (state.qn > zero) {
+        SAMPrecipSources source_terms =
+            sam_autoconversion_rates(config.dtn, state.qcl, state.qci, coeffs.coefice);
+        const SAMPrecipSources accretion_terms =
+            sam_accretion_rates(config.dtn, state.qcl, state.qci, state.qpr, state.qps, state.qpg,
+                                config.powr1, config.pows1, config.powg1,
+                                omp, omg,
+                                coeffs.accrrc, coeffs.accrsc, coeffs.accrsi,
+                                coeffs.accrgc, coeffs.accrgi);
+        if (diagnostics != nullptr) {
+            diagnostics->autoconversion = source_terms;
+            diagnostics->accretion = accretion_terms;
+        }
+
+        source_terms.dprc = accretion_terms.dprc;
+        source_terms.dpsc = accretion_terms.dpsc;
+        source_terms.dpgc = accretion_terms.dpgc;
+        source_terms.dpsi = accretion_terms.dpsi;
+        source_terms.dpgi = accretion_terms.dpgi;
+        source_terms = sam_rescale_cloud_sinks(state.qcl, state.qci,
+                                               config.eps, source_terms);
+        if (diagnostics != nullptr) {
+            diagnostics->limited_sources = source_terms;
+        }
+
+        source_terms = sam_partition_autoconverted_precip(source_terms, omp, omg);
+        if (diagnostics != nullptr) {
+            diagnostics->partitioned_sources = source_terms;
+        }
+
+        const amrex::Real dqca = source_terms.dqca;
+        const amrex::Real dqia = source_terms.dqia;
+
+        state.qcl -= source_terms.dqc;
+        state.qci -= source_terms.dqi;
+        state.qpr += source_terms.dqpr;
+        state.qps += source_terms.dqps;
+        state.qpg += source_terms.dqpg;
+
+        state.qn = state.qcl + state.qci;
+        state.qt = state.qv + state.qn;
+        state.qp = state.qpr + state.qps + state.qpg;
+
+        // Cloud-liquid accretion onto snow and graupel increases frozen mass
+        // and must contribute the same fusion-heating term to the local latent
+        // proxy as the autoconverted frozen branch.
+        state.tabs += config.fac_fus * (dqca * (one - omp) - dqia * omp
+                          + source_terms.dpsc + source_terms.dpgc);
+        state.theta = sam_theta_from_stored_mbar_converted_to_pa(state.tabs,
+                                                                 state.pres_mbar,
+                                                                 config.rdOcp);
+    }
+
+    amrex::Real qsatw;
+    amrex::Real qsati;
+    erf_qsatw(state.tabs, state.pres_mbar, qsatw);
+    erf_qsati(state.tabs, state.pres_mbar, qsati);
+    const amrex::Real qsat = sam_mixed_qsat(omn, qsatw, qsati);
+    if (diagnostics != nullptr) {
+        diagnostics->qsat = qsat;
+    }
+
+    if (state.qp > zero && state.qv < qsat) {
+        SAMPrecipSources evaporation_terms =
+            sam_precip_evaporation_rates(state.qpr, state.qps, state.qpg,
+                                         config.powr2, config.pows2, config.powg2,
+                                         coeffs.evapr1, coeffs.evapr2,
+                                         coeffs.evaps1, coeffs.evaps2,
+                                         coeffs.evapg1, coeffs.evapg2);
+
+        const amrex::Real supersat_factor = config.dtn * (one - state.qv / qsat);
+        evaporation_terms.dqpr *= supersat_factor;
+        evaporation_terms.dqps *= supersat_factor;
+        evaporation_terms.dqpg *= supersat_factor;
+        evaporation_terms = sam_apply_precip_evaporation_limiter(state.qpr,
+                                                                 state.qps,
+                                                                 state.qpg,
+                                                                 evaporation_terms);
+        if (diagnostics != nullptr) {
+            diagnostics->evaporation = evaporation_terms;
+        }
+
+        state.qv += evaporation_terms.dqp;
+        state.qpr -= evaporation_terms.dqpr;
+        state.qps -= evaporation_terms.dqps;
+        state.qpg -= evaporation_terms.dqpg;
+
+        state.qt = state.qv + state.qn;
+        state.qp = state.qpr + state.qps + state.qpg;
+
+        state.tabs -= config.fac_cond * evaporation_terms.dqpr
+                    + config.fac_sub * (evaporation_terms.dqps + evaporation_terms.dqpg);
+        state.theta = sam_theta_from_stored_mbar_converted_to_pa(state.tabs,
+                                                                 state.pres_mbar,
+                                                                 config.rdOcp);
+    }
+
+    return state;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE

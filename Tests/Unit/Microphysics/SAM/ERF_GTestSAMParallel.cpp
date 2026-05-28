@@ -20,13 +20,13 @@ using namespace sam_test;
 
 namespace {
 
-SolverChoice make_sam_solver_choice ()
+SolverChoice make_sam_solver_choice (const MoistureType moisture_type = MoistureType::SAM)
 {
     SolverChoice sc{};
     sc.c_p = Cp_d;
     sc.rdOcp = kRdOcp;
     sc.ave_plane = 2;
-    sc.moisture_type = MoistureType::SAM;
+    sc.moisture_type = moisture_type;
     sc.use_shoc = false;
     return sc;
 }
@@ -201,6 +201,133 @@ void poison_ghost_cells (amrex::MultiFab& cons,
                     arr(i,j,k,comp) = sentinel;
                 }
             }
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+}
+
+amrex::Real mixed_phase_tabs ()
+{
+    const amrex::Real lower = std::max(tprmin, tgrmin) + amrex::Real(1.0e-3);
+    const amrex::Real upper = std::min(tprmax, tgrmax) - amrex::Real(1.0e-3);
+    EXPECT_LT(lower, upper);
+    return amrex::Real(0.5) * (lower + upper);
+}
+
+amrex::Real mixed_qsat_for_state (const MoistureType moisture_type,
+                                  const amrex::Real tabs,
+                                  const amrex::Real pres_mbar)
+{
+    amrex::Real qsatw;
+    amrex::Real qsati;
+    erf_qsatw(tabs, pres_mbar, qsatw);
+    erf_qsati(tabs, pres_mbar, qsati);
+    const int sam_mode = sam_is_no_ice(moisture_type) ? kSAMNoIceMode : kSAMWithIceMode;
+    const amrex::Real omn = sam_cloud_liquid_fraction(sam_mode, tabs, a_bg, tbgmin * a_bg);
+    return sam_mixed_qsat(omn, qsatw, qsati);
+}
+
+SAMCellState make_precip_budget_state (const int i,
+                                       const int j,
+                                       const int k,
+                                       const MoistureType moisture_type,
+                                       const amrex::Real pres_mbar)
+{
+    const int pattern = (i + 2 * j + 3 * k) % 4;
+
+    amrex::Real tabs = amrex::Real(285.0);
+    amrex::Real vapor_fraction = amrex::Real(0.75);
+    amrex::Real qcl = amrex::Real(0.0);
+    amrex::Real qci = amrex::Real(0.0);
+    amrex::Real qpr = amrex::Real(0.0);
+    amrex::Real qps = amrex::Real(0.0);
+    amrex::Real qpg = amrex::Real(0.0);
+
+    switch (pattern) {
+    case 0:
+        tabs = amrex::Real(285.0);
+        vapor_fraction = amrex::Real(0.75);
+        qcl = qcw0 + amrex::Real(5.0e-4);
+        qpr = amrex::Real(3.0e-4);
+        break;
+    case 1:
+        tabs = mixed_phase_tabs();
+        vapor_fraction = amrex::Real(0.6);
+        qcl = qcw0 + amrex::Real(8.0e-4);
+        qci = qci0 + amrex::Real(7.0e-4);
+        qpr = amrex::Real(4.0e-4);
+        qps = amrex::Real(5.0e-4);
+        qpg = amrex::Real(6.0e-4);
+        break;
+    case 2:
+        tabs = amrex::Real(260.0);
+        vapor_fraction = amrex::Real(0.7);
+        qci = qci0 + amrex::Real(4.0e-4);
+        qps = amrex::Real(4.0e-4);
+        break;
+    default:
+        tabs = amrex::Real(245.0);
+        vapor_fraction = amrex::Real(0.7);
+        qci = qci0 + amrex::Real(4.0e-4);
+        qpg = amrex::Real(4.0e-4);
+        break;
+    }
+
+    if (sam_is_no_ice(moisture_type)) {
+        qci = amrex::Real(0.0);
+        qps = amrex::Real(0.0);
+        qpg = amrex::Real(0.0);
+        tabs = std::max(tbgmax + amrex::Real(1.0), tabs);
+    }
+
+    const amrex::Real qv = vapor_fraction * mixed_qsat_for_state(moisture_type, tabs, pres_mbar);
+
+    SAMCellState state{};
+    state.tabs = tabs;
+    state.pres_mbar = pres_mbar;
+    state.qv = qv;
+    state.qcl = qcl;
+    state.qci = qci;
+    state.qpr = qpr;
+    state.qps = qps;
+    state.qpg = qpg;
+    state.qn = qcl + qci;
+    state.qt = qv + state.qn;
+    state.qp = qpr + qps + qpg;
+    state.theta = sam_theta_from_stored_mbar_converted_to_pa(tabs, pres_mbar, kRdOcp);
+    state.rho = getRhogivenTandPress(tabs, sam_mbar_to_pa(pres_mbar), qv);
+    return state;
+}
+
+void fill_precip_budget_conserved_state (amrex::MultiFab& cons,
+                                         const MoistureType moisture_type,
+                                         const amrex::Real pres_mbar)
+{
+    cons.setVal(amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        auto arr = cons.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const SAMCellState state = make_precip_budget_state(i, j, k, moisture_type, pres_mbar);
+            arr(i,j,k,Rho_comp) = state.rho;
+            arr(i,j,k,RhoKE_comp) = amrex::Real(0.0);
+            arr(i,j,k,RhoScalar_comp) = amrex::Real(0.0);
+            sam_primitive_to_cons(state, arr, i, j, k);
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+}
+
+void fill_nonuniform_detj (amrex::MultiFab& detJ_cc)
+{
+    for (amrex::MFIter mfi(detJ_cc, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        auto arr = detJ_cc.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            arr(i,j,k) = amrex::Real(0.8) + amrex::Real(0.05) * i + amrex::Real(0.03) * j + amrex::Real(0.07) * k;
         });
     }
 
@@ -443,7 +570,7 @@ TEST(SAMParallel, PrecipFallGlobalMassAndSurfaceAccumulation)
     constexpr int ny = 4;
     constexpr int nz = 1;
     const amrex::Real pressure_pa = amrex::Real(9.0e4);
-    const amrex::Real dt = amrex::Real(1.0);
+    const amrex::Real dt = amrex::Real(0.1);
     const amrex::Real rho0 = amrex::Real(1.29);
 
     amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
@@ -555,4 +682,133 @@ TEST(SAMParallel, PrecipFallGlobalMassAndSurfaceAccumulation)
         << " rain_accum_mass=" << rain_accum_mass
         << " snow_accum_mass=" << snow_accum_mass
         << " graup_accum_mass=" << graup_accum_mass;
+}
+
+// Motivation:
+// The public SAM Precip path is cell-local except for the precomputed
+// coefficient rows and MPI reductions used by the test budget checks. Running
+// this same contract under 1, 2, and 4 ranks should preserve the global total
+// water budget and leave the surface accumulation reservoirs untouched,
+// independent of box ownership and reduction order.
+TEST(SAMParallel, PrecipGlobalWaterBudgetDecompositionInvariant)
+{
+    constexpr int nx = 8;
+    constexpr int ny = 4;
+    constexpr int nz = 4;
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real dt = amrex::Real(0.1);
+
+    amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
+    amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                            {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    amrex::Array<int, AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(1, 1, 1)};
+    amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(amrex::IntVect(4, 2, 2));
+    amrex::DistributionMapping dm(ba);
+
+    amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
+    fill_precip_budget_conserved_state(cons, MoistureType::SAM, pres_mbar);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc;
+
+    SolverChoice sc = make_sam_solver_choice(MoistureType::SAM);
+    SAM sam;
+    sam.Define(sc);
+    sam.Set_dzmin(geom.CellSize(2));
+    sam.Set_RealWidth(0);
+    sam.Init(cons, ba, geom, dt, z_phys_nd, detJ_cc);
+
+    const SAMBudget initial_budget = compute_sam_budget(geom, cons, sam);
+
+    sam.Copy_State_to_Micro(cons);
+    sam.Compute_Coefficients();
+    sam.Precip(sc);
+    sam.Copy_Micro_to_State(cons);
+
+    const SAMBudget final_budget = compute_sam_budget(geom, cons, sam);
+    const int num_terms = nx * ny * nz;
+    const int rank = amrex::ParallelDescriptor::MyProc();
+
+    EXPECT_NEAR(final_budget.total_water_mass,
+                initial_budget.total_water_mass,
+                mpi_reduction_tol(initial_budget.total_water_mass, num_terms))
+        << "rank=" << rank
+        << " initial_total_water_mass=" << initial_budget.total_water_mass
+        << " final_total_water_mass=" << final_budget.total_water_mass;
+    EXPECT_NEAR(final_budget.rain_accum_mass, amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " rain_accum_mass=" << final_budget.rain_accum_mass;
+    EXPECT_NEAR(final_budget.snow_accum_mass, amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " snow_accum_mass=" << final_budget.snow_accum_mass;
+    EXPECT_NEAR(final_budget.graupel_accum_mass, amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " graupel_accum_mass=" << final_budget.graupel_accum_mass;
+}
+
+// Motivation:
+// The same public Precip water-budget contract should remain decomposition-
+// invariant when the budget is checked in terrain-like coordinates with a
+// nonuniform detJ.
+TEST(SAMParallel, PrecipDetJWeightedWaterBudgetDecompositionInvariant)
+{
+    constexpr int nx = 8;
+    constexpr int ny = 4;
+    constexpr int nz = 4;
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real dt = amrex::Real(1.0);
+
+    amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
+    amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                            {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    amrex::Array<int, AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(1, 1, 1)};
+    amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(amrex::IntVect(4, 2, 2));
+    amrex::DistributionMapping dm(ba);
+
+    amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
+    fill_precip_budget_conserved_state(cons, MoistureType::SAM, pres_mbar);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc = std::make_unique<amrex::MultiFab>(ba, dm, 1, 0);
+    fill_nonuniform_detj(*detJ_cc);
+
+    SolverChoice sc = make_sam_solver_choice(MoistureType::SAM);
+    SAM sam;
+    sam.Define(sc);
+    sam.Set_dzmin(geom.CellSize(2));
+    sam.Set_RealWidth(0);
+    sam.Init(cons, ba, geom, dt, z_phys_nd, detJ_cc);
+
+    const SAMBudget initial_budget = compute_sam_budget(geom, cons, sam, detJ_cc.get());
+
+    sam.Copy_State_to_Micro(cons);
+    sam.Compute_Coefficients();
+    sam.Precip(sc);
+    sam.Copy_Micro_to_State(cons);
+
+    const SAMBudget final_budget = compute_sam_budget(geom, cons, sam, detJ_cc.get());
+    const int num_terms = nx * ny * nz;
+    const int rank = amrex::ParallelDescriptor::MyProc();
+
+    EXPECT_NEAR(final_budget.total_water_mass,
+                initial_budget.total_water_mass,
+                mpi_reduction_tol(initial_budget.total_water_mass, num_terms))
+        << "rank=" << rank
+        << " initial_total_water_mass=" << initial_budget.total_water_mass
+        << " final_total_water_mass=" << final_budget.total_water_mass;
+    EXPECT_NEAR(final_budget.rain_accum_mass, amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " rain_accum_mass=" << final_budget.rain_accum_mass;
+    EXPECT_NEAR(final_budget.snow_accum_mass, amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " snow_accum_mass=" << final_budget.snow_accum_mass;
+    EXPECT_NEAR(final_budget.graupel_accum_mass, amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " graupel_accum_mass=" << final_budget.graupel_accum_mass;
 }

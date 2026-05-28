@@ -727,6 +727,119 @@ TEST(SAMScalar, SurfaceAccumulationMatchesPurePhaseBottomFlux)
 }
 
 // Motivation:
+// Away from the qp activation threshold, the density-corrected pure-phase SAM
+// precip flux has a closed-form derivative in both q and rho. This verifies
+// the documented rain, snow, and graupel derivative contracts directly.
+TEST(SAMScalar, PrecipFlux_PurePhaseDerivativeInPositiveDomain)
+{
+    const amrex::Real rho0 = amrex::Real(1.29);
+    const amrex::Real vrain = amrex::Real(2.0);
+    const amrex::Real vsnow = amrex::Real(3.0);
+    const amrex::Real vgrau = amrex::Real(4.0);
+
+    struct PurePhaseCase {
+        const char* label;
+        amrex::Real tabs;
+        amrex::Real qp;
+        amrex::Real rho;
+        amrex::Real omp;
+        amrex::Real omg;
+        amrex::Real exponent;
+    };
+
+    const std::array<PurePhaseCase, 3> cases = {{
+        {"rain", amrex::Real(285.0), amrex::Real(1.0e-3), amrex::Real(1.0), amrex::Real(1.0), amrex::Real(0.0), crain},
+        {"snow", amrex::Real(260.0), amrex::Real(1.2e-3), amrex::Real(0.85), amrex::Real(0.0), amrex::Real(0.0), csnow},
+        {"graupel", amrex::Real(245.0), amrex::Real(1.4e-3), amrex::Real(0.95), amrex::Real(0.0), amrex::Real(1.0), cgrau}
+    }};
+
+    for (const PurePhaseCase& test_case : cases) {
+        SCOPED_TRACE(test_case.label);
+        auto flux = [&](const amrex::Real qp, const amrex::Real rho) {
+            SAMPrecipFaceState face_state{};
+            face_state.rho_avg = rho;
+            face_state.tabs_avg = test_case.tabs;
+            face_state.qp_avg = qp;
+            face_state.omp = test_case.omp;
+            face_state.omg = test_case.omg;
+            face_state.qrr = face_state.omp * qp;
+            face_state.qss = (one - face_state.omp) * (one - face_state.omg) * qp;
+            face_state.qgg = (one - face_state.omp) * face_state.omg * qp;
+            const amrex::Real precip_flux =
+                sam_precip_flux_from_face_state(face_state, vrain, vsnow, vgrau);
+            return sam_precip_flux_density_corrected(precip_flux, rho0, rho);
+        };
+
+        const amrex::Real base_flux = flux(test_case.qp, test_case.rho);
+        const amrex::Real h_q = std::min(derivative_step(test_case.qp), amrex::Real(0.25) * test_case.qp);
+        const amrex::Real h_rho = std::min(derivative_step(test_case.rho), amrex::Real(0.25) * test_case.rho);
+        const amrex::Real dF_dq = central_difference([&](const amrex::Real qp) {
+            return flux(qp, test_case.rho);
+        }, test_case.qp, h_q);
+        const amrex::Real dF_drho = central_difference([&](const amrex::Real rho) {
+            return flux(test_case.qp, rho);
+        }, test_case.rho, h_rho);
+
+        const amrex::Real expected_dF_dq = (one + test_case.exponent) * base_flux / test_case.qp;
+        const amrex::Real expected_dF_drho = (test_case.exponent + myhalf) * base_flux / test_case.rho;
+
+        EXPECT_NEAR(dF_dq, expected_dF_dq, amrex::Real(2.0) * finite_difference_tol(expected_dF_dq, h_q));
+        EXPECT_NEAR(dF_drho, expected_dF_drho, finite_difference_tol(expected_dF_drho, h_rho));
+    }
+}
+
+// Motivation:
+// In the positive-domain pure-phase regime, the density-corrected SAM precip
+// flux should increase monotonically with both q and rho.
+TEST(SAMScalar, PrecipFlux_MonotoneInQpAndDensity)
+{
+    const amrex::Real rho0 = amrex::Real(1.29);
+    const amrex::Real vrain = amrex::Real(2.0);
+    const amrex::Real vsnow = amrex::Real(3.0);
+    const amrex::Real vgrau = amrex::Real(4.0);
+
+    struct PurePhaseCase {
+        const char* label;
+        amrex::Real tabs;
+        amrex::Real qp;
+        amrex::Real rho;
+        amrex::Real omp;
+        amrex::Real omg;
+    };
+
+    const std::array<PurePhaseCase, 3> cases = {{
+        {"rain", amrex::Real(285.0), amrex::Real(1.0e-3), amrex::Real(1.0), amrex::Real(1.0), amrex::Real(0.0)},
+        {"snow", amrex::Real(260.0), amrex::Real(1.2e-3), amrex::Real(0.85), amrex::Real(0.0), amrex::Real(0.0)},
+        {"graupel", amrex::Real(245.0), amrex::Real(1.4e-3), amrex::Real(0.95), amrex::Real(0.0), amrex::Real(1.0)}
+    }};
+
+    for (const PurePhaseCase& test_case : cases) {
+        SCOPED_TRACE(test_case.label);
+        auto flux = [&](const amrex::Real qp, const amrex::Real rho) {
+            SAMPrecipFaceState face_state{};
+            face_state.rho_avg = rho;
+            face_state.tabs_avg = test_case.tabs;
+            face_state.qp_avg = qp;
+            face_state.omp = test_case.omp;
+            face_state.omg = test_case.omg;
+            face_state.qrr = face_state.omp * qp;
+            face_state.qss = (one - face_state.omp) * (one - face_state.omg) * qp;
+            face_state.qgg = (one - face_state.omp) * face_state.omg * qp;
+            const amrex::Real precip_flux =
+                sam_precip_flux_from_face_state(face_state, vrain, vsnow, vgrau);
+            return sam_precip_flux_density_corrected(precip_flux, rho0, rho);
+        };
+
+        const amrex::Real base_flux = flux(test_case.qp, test_case.rho);
+        const amrex::Real larger_q_flux = flux(amrex::Real(1.5) * test_case.qp, test_case.rho);
+        const amrex::Real larger_rho_flux = flux(test_case.qp, amrex::Real(1.2) * test_case.rho);
+
+        EXPECT_GT(larger_q_flux, base_flux - backend_math_abs_tol(base_flux));
+        EXPECT_GT(larger_rho_flux, base_flux - backend_math_abs_tol(base_flux));
+    }
+}
+
+// Motivation:
 // The current sedimentation substep helper is documented as a reduced-flux
 // ceil rule rather than a fall-speed CFL. This test characterizes that legacy
 // reduced-flux behavior explicitly.
