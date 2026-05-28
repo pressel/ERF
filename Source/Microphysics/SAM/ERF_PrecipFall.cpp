@@ -99,6 +99,9 @@ SAM::PrecipFall (const SolverChoice& sc)
                                  + ma_fz_arr[box_no](i,j,k,2) };
                          });
     max_reduced_flux = get<0>(max);
+    // ParReduce over a MultiFab gives the local rank maximum here. PrecipFall
+    // needs one global substep count across ranks, including ranks that own no
+    // active tiles for this reduction, so keep the explicit MPI max reduction.
     ParallelDescriptor::ReduceRealMax(max_reduced_flux);
     max_reduced_flux += std::numeric_limits<Real>::epsilon();
     n_substep = sam_substep_count_from_reduced_flux(max_reduced_flux, dtn, m_dzmin);

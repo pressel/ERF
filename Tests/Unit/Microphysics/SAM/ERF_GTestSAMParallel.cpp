@@ -735,10 +735,11 @@ TEST(SAMParallel, CopyMicroToStateFillBoundaryParallel)
 }
 
 // Motivation:
-// PrecipFall should preserve the global precip mass budget once bottom surface
-// accumulation is converted back to mass. CTest runs this same test under 1,
-// 2, and 4 ranks, so passing all entries provides the intended rank-count
-// invariance check for the public PrecipFall path.
+// In a one-level column, equal top and bottom component face fluxes leave the
+// in-column precip mass unchanged while the bottom diagnostic accumulation is
+// updated from the limited bottom component flux. This MPI test checks
+// rank-invariant public-path accumulation wiring. The closed multi-level
+// column budget is tested in the SAM physical-property tests.
 TEST(SAMParallel, PrecipFallGlobalMassAndSurfaceAccumulation)
 {
     constexpr int nx = 8;
@@ -881,6 +882,13 @@ TEST(SAMParallel, PrecipFallGlobalMassAndSurfaceAccumulation)
 // this same contract under 1, 2, and 4 ranks should preserve the global total
 // water budget and leave the surface accumulation reservoirs untouched,
 // independent of box ownership and reduction order.
+//
+// This public-path MPI test intentionally checks total water and zero surface
+// accumulation only. A latent-proxy closure check for
+// Copy_State_to_Micro -> Compute_Coefficients -> Precip -> Copy_Micro_to_State
+// is a separate thermodynamic roundtrip follow-up because this path includes
+// EOS reconstruction, pressure conversion, clipping, and plane-averaged
+// coefficient rows around the scalar source helper.
 TEST(SAMParallel, PrecipGlobalWaterBudgetDecompositionInvariant)
 {
     constexpr int nx = 8;
