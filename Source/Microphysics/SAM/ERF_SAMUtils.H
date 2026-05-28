@@ -171,15 +171,6 @@ amrex::Real sam_theta_from_stored_mbar_converted_to_pa (const amrex::Real tabs,
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-amrex::Real sam_theta_from_stored_pressure_as_pa (const amrex::Real tabs,
-                                                  const amrex::Real stored_pres,
-                                                  const amrex::Real rdOcp) noexcept
-{
-    // This SAM path passes the stored pressure value as though it were already Pa.
-    return getThgivenTandP(tabs, stored_pres, rdOcp);
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 SAMPrimitiveCell sam_cons_to_primitive (const amrex::Real rho,
                                         const amrex::Real rho_theta,
                                         const amrex::Real rho_qv,

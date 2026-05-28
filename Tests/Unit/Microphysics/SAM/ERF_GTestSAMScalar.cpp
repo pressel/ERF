@@ -39,8 +39,7 @@ TEST(SAMScalar, PressureRoundtrip)
 }
 
 // Motivation:
-// The mbar-converting theta helper must match direct EOS usage with 100*p_mbar,
-// and the raw-Pa helper must only match when the input is already Pa.
+// The mbar-converting theta helper must match direct EOS usage with 100*p_mbar.
 TEST(SAMScalar, ThetaPressureUnitHelpers)
 {
     const amrex::Real tabs = amrex::Real(289.5);
@@ -50,9 +49,6 @@ TEST(SAMScalar, ThetaPressureUnitHelpers)
 
     expect_near_roundoff(
         sam_theta_from_stored_mbar_converted_to_pa(tabs, pres_mbar, kRdOcp),
-        expected_theta);
-    expect_near_roundoff(
-        sam_theta_from_stored_pressure_as_pa(tabs, pres_pa, kRdOcp),
         expected_theta);
 }
 
@@ -67,7 +63,7 @@ TEST(SAMScalar, CloudThetaUsesMbarConversion)
     const amrex::Real expected_theta =
         getThgivenTandP(tabs, sam_mbar_to_pa(pres_mbar), kRdOcp);
     const amrex::Real wrong_theta =
-        sam_theta_from_stored_pressure_as_pa(tabs, pres_mbar, kRdOcp);
+        getThgivenTandP(tabs, pres_mbar, kRdOcp);
     const amrex::Real converted_theta =
         sam_theta_from_stored_mbar_converted_to_pa(tabs, pres_mbar, kRdOcp);
 
