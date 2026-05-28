@@ -157,9 +157,9 @@ TEST(SatAdjKesslerComparison, SmallCloudEvaporationAsymptoticallyConsistent)
 }
 
 // Motivation: Kessler_NoRain is only a first-order approximation to SatAdj.
-// At finite-amplitude condensation or evaporation, the two updates should show
-// a measurable state gap so future tests do not accidentally tighten this into
-// a false exact-equality contract.
+// At finite amplitude the two updates should conserve total nonprecipitating
+// water individually, but should show a measurable state gap so future tests do
+// not accidentally tighten this into a false exact-equality contract.
 TEST(SatAdjKesslerComparison, FiniteAdjustmentDifferencesAreDocumented)
 {
     struct Case {
@@ -193,9 +193,20 @@ TEST(SatAdjKesslerComparison, FiniteAdjustmentDifferencesAreDocumented)
         const amrex::Real theta_gap = amrex::Math::abs(satadj_state.theta - kessler_result.state.theta);
         const amrex::Real tabs_gap = amrex::Math::abs(satadj_state.tabs - kessler_result.state.tabs);
 
-        EXPECT_NEAR(satadj_state.qv + satadj_state.qc,
-                    kessler_result.state.qv + kessler_result.state.qc,
-                    asymptotic_mix_tol(test_case.initial.qv + test_case.initial.qc));
+        const amrex::Real qt_initial = test_case.initial.qv + test_case.initial.qc;
+        const amrex::Real qt_satadj = satadj_state.qv + satadj_state.qc;
+        const amrex::Real qt_kessler = kessler_result.state.qv + kessler_result.state.qc;
+
+        EXPECT_NEAR(qt_satadj, qt_initial, asymptotic_mix_tol(qt_initial))
+            << "case=" << test_case.name
+            << " qt_initial=" << qt_initial
+            << " qt_satadj=" << qt_satadj;
+
+        EXPECT_NEAR(qt_kessler, qt_initial, asymptotic_mix_tol(qt_initial))
+            << "case=" << test_case.name
+            << " qt_initial=" << qt_initial
+            << " qt_kessler=" << qt_kessler;
+
         EXPECT_TRUE(std::max(qv_gap, qc_gap) > kFiniteGapMixMin
                     || std::max(theta_gap, tabs_gap) > kFiniteGapThermoMin)
             << "qv_gap=" << qv_gap
@@ -207,9 +218,9 @@ TEST(SatAdjKesslerComparison, FiniteAdjustmentDifferencesAreDocumented)
 
 // Motivation: The asymptotic tests show that Kessler_NoRain approaches SatAdj
 // for small adjustments, while the finite-amplitude test documents
-// non-equivalence. This characterization records the size of finite gaps so we
-// can judge whether the difference is physically small or large relative to
-// the phase-change scale.
+// non-equivalence. This characterization bounds the finite gaps relative to the
+// phase-change scale so the difference can be interpreted physically without
+// turning the schemes into a false equality contract.
 TEST(SatAdjKesslerComparison, FiniteAdjustmentGapMagnitudesAreCharacterized)
 {
     struct Case {
@@ -264,12 +275,48 @@ TEST(SatAdjKesslerComparison, FiniteAdjustmentGapMagnitudesAreCharacterized)
                      + " water_norm=" + std::to_string(static_cast<double>(water_norm))
                      + " thermo_norm=" + std::to_string(static_cast<double>(thermo_norm)));
 
-        EXPECT_TRUE(std::isfinite(qv_gap) && std::isfinite(qc_gap) && std::isfinite(theta_gap) && std::isfinite(tabs_gap));
-        EXPECT_TRUE(std::isfinite(water_norm) && std::isfinite(thermo_norm));
+        EXPECT_TRUE(std::isfinite(qv_gap) && std::isfinite(qc_gap)
+                    && std::isfinite(theta_gap) && std::isfinite(tabs_gap))
+            << "case=" << c.name
+            << " qv_gap=" << qv_gap << " qc_gap=" << qc_gap
+            << " theta_gap=" << theta_gap << " tabs_gap=" << tabs_gap;
+        EXPECT_TRUE(std::isfinite(water_norm) && std::isfinite(thermo_norm))
+            << "case=" << c.name
+            << " water_norm=" << water_norm << " thermo_norm=" << thermo_norm;
 
         // Loose sanity upper bounds to catch absurd regressions while avoiding
         // false failures in float/GPU builds.
-        EXPECT_LT(water_norm, amrex::Real(0.5)) << "water_norm=" << water_norm;
-        EXPECT_LT(thermo_norm, amrex::Real(0.5)) << "thermo_norm=" << thermo_norm;
+        constexpr amrex::Real kMaxNormalizedWaterGap = amrex::Real(0.5);
+        constexpr amrex::Real kMaxNormalizedThermoGap = amrex::Real(0.5);
+        EXPECT_LT(qv_gap / phase_change_scale, kMaxNormalizedWaterGap)
+            << "case=" << c.name
+            << " qv_gap=" << qv_gap
+            << " phase_change_scale=" << phase_change_scale
+            << " normalized_qv_gap=" << qv_gap / phase_change_scale
+            << " satadj_qv=" << satadj_state.qv
+            << " kessler_qv=" << kessler_result.state.qv;
+        EXPECT_LT(qc_gap / phase_change_scale, kMaxNormalizedWaterGap)
+            << "case=" << c.name
+            << " qc_gap=" << qc_gap
+            << " phase_change_scale=" << phase_change_scale
+            << " normalized_qc_gap=" << qc_gap / phase_change_scale
+            << " satadj_qc=" << satadj_state.qc
+            << " kessler_qc=" << kessler_result.state.qc;
+        if (latent_temp_scale > amrex::Real(0.0)) {
+            EXPECT_LT(theta_gap / latent_temp_scale, kMaxNormalizedThermoGap)
+                << "case=" << c.name
+                << " theta_gap=" << theta_gap
+                << " latent_temp_scale=" << latent_temp_scale
+                << " normalized_theta_gap=" << theta_gap / latent_temp_scale
+                << " satadj_theta=" << satadj_state.theta
+                << " kessler_theta=" << kessler_result.state.theta;
+            EXPECT_LT(tabs_gap / latent_temp_scale, kMaxNormalizedThermoGap)
+                << "case=" << c.name
+                << " tabs_gap=" << tabs_gap
+                << " latent_temp_scale=" << latent_temp_scale
+                << " normalized_tabs_gap=" << tabs_gap / latent_temp_scale
+                << " satadj_tabs=" << satadj_state.tabs
+                << " kessler_tabs=" << kessler_result.state.tabs;
+        }
     }
 }

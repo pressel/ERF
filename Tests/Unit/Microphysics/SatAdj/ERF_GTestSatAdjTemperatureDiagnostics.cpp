@@ -53,8 +53,9 @@ const char* diag_name[DIAG_NUM] = {
 
 // Motivation: The observed artifact appears in thermodynamic temperature but
 // not in theta. SatAdj writes conserved theta and moisture using the old
-// density, so this test separates theta, qv, pressure, and EOS-projected
-// temperature errors against the scalar fixed-pressure reference.
+// density, so this test separates rho, theta, qv, qc, pressure, EOS-projected
+// temperature, and fixed-pressure reconstructed temperature against the scalar
+// fixed-pressure reference.
 TEST(SatAdjTemperatureDiagnostics, PublicFlowMatchesScalarDiagnosticInputs)
 {
     const amrex::Geometry geom = make_geometry(23, 19, 5);
@@ -171,35 +172,30 @@ TEST(SatAdjTemperatureDiagnostics, PublicFlowMatchesScalarDiagnosticInputs)
         }
     }
 
-    const bool theta_matches = worst[DIAG_THETA].normalized_error <= amrex::Real(1.0);
-    const bool other_mismatch = (worst[DIAG_QV].normalized_error > amrex::Real(1.0) ||
-                                 worst[DIAG_PRESSURE].normalized_error > amrex::Real(1.0) ||
-                                 worst[DIAG_T_EOS].normalized_error > amrex::Real(1.0) ||
-                                 worst[DIAG_T_FIXED_P].normalized_error > amrex::Real(1.0));
-
-    if (theta_matches && other_mismatch) {
-        // Report the worst diagnostics to aid triage
-        for (int d = 0; d < DIAG_NUM; ++d) {
-            const auto &w = worst[d];
-            std::ostringstream os;
-            os << "worst_" << w.quantity
-               << " normalized_error=" << w.normalized_error
-               << " absolute_error=" << w.absolute_error
-               << " actual=" << w.actual
-               << " expected=" << w.expected
-               << " i=" << w.i << " j=" << w.j << " k=" << w.k
-               << " box_id=" << w.box_id;
-            ADD_FAILURE() << os.str();
-        }
+    for (int d = 0; d < DIAG_NUM; ++d) {
+        EXPECT_LE(worst[d].normalized_error, amrex::Real(1.0))
+            << "quantity=" << worst[d].quantity
+            << " normalized_error=" << worst[d].normalized_error
+            << " absolute_error=" << worst[d].absolute_error
+            << " actual=" << worst[d].actual
+            << " expected=" << worst[d].expected
+            << " i=" << worst[d].i
+            << " j=" << worst[d].j
+            << " k=" << worst[d].k
+            << " box_id=" << worst[d].box_id;
     }
-
-    EXPECT_FALSE(theta_matches && other_mismatch);
 }
 
-// Motivation: The plotted thermodynamic temperature should be the same EOS
-// projection tested in the SatAdj scalar-reference path. This guards against a
-// derived-variable path that uses stale qv, pressure, or theta data.
-TEST(SatAdjTemperatureDiagnostics, DerivedTemperatureMatchesEOSProjection)
+// Motivation: This helper is used by the SatAdj tests to represent the EOS
+// projection from conserved rho, rhoTheta, and rhoQv. It is a helper sanity
+// check, not yet a test of the production plotfile derived-variable path.
+//
+// No single reusable production derived-temperature helper was found in this
+// pass. The plotfile/derived-variable path (erf_dermoisttemp in
+// Source/ERF_Derive.cpp) calls getTgivenRandRTh directly inline. The
+// plotfile/derived-variable path should be audited separately before asserting
+// that plotted temperature uses this exact helper.
+TEST(SatAdjTemperatureDiagnostics, EOSProjectedTemperatureHelperMatchesDirectEOSCall)
 {
     const amrex::Geometry geom = make_geometry(4, 4, 2);
     const amrex::BoxArray ba = make_boxarray(geom.Domain(), amrex::IntVect(AMREX_D_DECL(4,4,2)));

@@ -365,10 +365,10 @@ TEST(SatAdjParallel, CopyMicroToStateFillBoundaryParallel)
 		<< " global_max_normalized_error=" << global_max_error;
 }
 
-// Motivation: The copy-only parallel ghost-fill test isolates staging. This
-// full-flow version keeps the SatAdj advance active and checks that the final
-// FillBoundary overwrites poisoned ghosts with the wrapped scalar-reference
-// adjusted valid state across rank and box boundaries.
+// Motivation: This extends the parallel copy-back ghost test to the full SatAdj
+// public flow. After distributed Advance, ghosts are poisoned before
+// Copy_Micro_to_State so the test directly verifies that final FillBoundary
+// overwrites stale data across rank and box boundaries.
 TEST(SatAdjParallel, FullPublicFlowFillBoundaryParallel)
 {
 	constexpr int nx = 16;

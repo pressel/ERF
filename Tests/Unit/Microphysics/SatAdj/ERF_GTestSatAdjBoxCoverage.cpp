@@ -480,10 +480,10 @@ TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterCopyBack)
         << " normalized_error=" << worst.normalized_error;
 }
 
-// Motivation: The copy-back ghost-fill test isolates staging only. This
-// variant keeps the full SatAdj public flow, poisons ghosts beforehand, and
-// checks that the final FillBoundary reflects the wrapped scalar-reference
-// adjusted valid cells rather than stale ghost contents.
+// Motivation: The copy-only ghost-fill test isolates staging. This full-flow
+// variant poisons ghosts after SatAdj Advance and before Copy_Micro_to_State,
+// checking that the final FillBoundary reflects adjusted valid cells rather
+// than stale ghost data.
 TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterFullPublicFlow)
 {
     const amrex::Geometry geom = make_geometry(23, 19, 5);
