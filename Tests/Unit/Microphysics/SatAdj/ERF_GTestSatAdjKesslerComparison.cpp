@@ -204,3 +204,72 @@ TEST(SatAdjKesslerComparison, FiniteAdjustmentDifferencesAreDocumented)
             << " tabs_gap=" << tabs_gap;
     }
 }
+
+// Motivation: The asymptotic tests show that Kessler_NoRain approaches SatAdj
+// for small adjustments, while the finite-amplitude test documents
+// non-equivalence. This characterization records the size of finite gaps so we
+// can judge whether the difference is physically small or large relative to
+// the phase-change scale.
+TEST(SatAdjKesslerComparison, FiniteAdjustmentGapMagnitudesAreCharacterized)
+{
+    struct Case {
+        std::string name;
+        CellState initial;
+    };
+
+    const amrex::Real tabs = amrex::Real(290.0);
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real qsat_initial = qsat(tabs, pres_mbar);
+    CellState evap_then_recond;
+    ASSERT_TRUE(find_evaporation_then_recondensation_state(evap_then_recond));
+
+    const std::array<Case, 3> cases = {{
+        {"finite-condensation",
+         make_cell_state(tabs, pres_mbar, qsat_initial + amrex::Real(8.0e-4), amrex::Real(4.0e-4))},
+        {"finite-cloudy-evaporation",
+         make_cell_state(tabs, pres_mbar, qsat_initial - amrex::Real(5.0e-4), amrex::Real(1.0e-3))},
+        {"finite-evaporation-then-recondensation",
+         evap_then_recond}
+    }};
+
+    for (const auto& c : cases) {
+        SCOPED_TRACE(c.name);
+        CellState satadj_state = c.initial;
+        adjust(satadj_state);
+        const KesslerNoRainCellResult kessler_result = apply_kessler_norain_scalar(c.initial);
+
+        const amrex::Real qv_gap = amrex::Math::abs(satadj_state.qv - kessler_result.state.qv);
+        const amrex::Real qc_gap = amrex::Math::abs(satadj_state.qc - kessler_result.state.qc);
+        const amrex::Real theta_gap = amrex::Math::abs(satadj_state.theta - kessler_result.state.theta);
+        const amrex::Real tabs_gap = amrex::Math::abs(satadj_state.tabs - kessler_result.state.tabs);
+
+        const amrex::Real phase_change_scale = std::max(
+            amrex::Math::abs(satadj_state.qc - c.initial.qc),
+            amrex::Math::abs(kessler_result.phase_change));
+
+        // latent-temperature scale = (L/cp) * phase_change_scale
+        const amrex::Real latent_temp_scale = kFacCond * phase_change_scale;
+
+        // Normalized gaps
+        const amrex::Real water_norm = phase_change_scale > amrex::Real(0.0) ?
+            std::max(qv_gap, qc_gap) / phase_change_scale : amrex::Real(0.0);
+        const amrex::Real thermo_norm = latent_temp_scale > amrex::Real(0.0) ?
+            std::max(theta_gap, tabs_gap) / latent_temp_scale : amrex::Real(0.0);
+
+        SCOPED_TRACE("qv_gap=" + std::to_string(static_cast<double>(qv_gap))
+                     + " qc_gap=" + std::to_string(static_cast<double>(qc_gap))
+                     + " theta_gap=" + std::to_string(static_cast<double>(theta_gap))
+                     + " tabs_gap=" + std::to_string(static_cast<double>(tabs_gap))
+                     + " phase_change_scale=" + std::to_string(static_cast<double>(phase_change_scale))
+                     + " water_norm=" + std::to_string(static_cast<double>(water_norm))
+                     + " thermo_norm=" + std::to_string(static_cast<double>(thermo_norm)));
+
+        EXPECT_TRUE(std::isfinite(qv_gap) && std::isfinite(qc_gap) && std::isfinite(theta_gap) && std::isfinite(tabs_gap));
+        EXPECT_TRUE(std::isfinite(water_norm) && std::isfinite(thermo_norm));
+
+        // Loose sanity upper bounds to catch absurd regressions while avoiding
+        // false failures in float/GPU builds.
+        EXPECT_LT(water_norm, amrex::Real(0.5)) << "water_norm=" << water_norm;
+        EXPECT_LT(thermo_norm, amrex::Real(0.5)) << "thermo_norm=" << thermo_norm;
+    }
+}

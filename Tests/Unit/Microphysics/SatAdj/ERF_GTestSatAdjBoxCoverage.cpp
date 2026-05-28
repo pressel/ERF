@@ -493,17 +493,29 @@ TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterFullPublicFlow)
     amrex::MultiFab cons(ba, dm, RhoQ2_comp + 1, 2);
     fill_satadj_active_conserved_state(cons);
 
-    poison_ghost_cells(cons,
-                       {Rho_comp, RhoTheta_comp, RhoQ1_comp, RhoQ2_comp},
-                       amrex::Real(-999.0));
-
     CellState evap_then_recond;
     ASSERT_TRUE(find_evaporation_then_recondensation_state(evap_then_recond));
 
     SatAdj satadj;
     SolverChoice sc = make_solver_choice(false);
     satadj.Define(sc);
-    run_satadj_public_flow(satadj, sc, geom, cons);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc;
+    // Explicit public-flow split: Init, Copy_State_to_Micro, Advance,
+    // poison ghosts, Copy_Micro_to_State. Poisoning after Advance isolates
+    // FillBoundary as the sole mechanism restoring valid wrapped values.
+    run_and_sync([&]() {
+        satadj.Init(cons, cons.boxArray(), geom, amrex::Real(1.0), z_phys_nd, detJ_cc);
+        satadj.Copy_State_to_Micro(cons);
+        satadj.Advance(amrex::Real(1.0), sc);
+    });
+
+    poison_ghost_cells(cons,
+                       {Rho_comp, RhoTheta_comp, RhoQ1_comp, RhoQ2_comp},
+                       amrex::Real(-999.0));
+
+    run_and_sync([&]() { satadj.Copy_Micro_to_State(cons); });
 
     const amrex::MultiFab after_host = make_host_mirror(cons);
     const amrex::Box& domain = geom.Domain();
