@@ -1013,6 +1013,236 @@ TEST(SAMParallel, PrecipDetJWeightedWaterBudgetDecompositionInvariant)
 }
 
 // Motivation:
+// The public SAM Precip path should conserve the intended constant-pressure
+// latent proxy when evaluated with the initial pressure snapshot held fixed
+// across the local microphysics source update. The EOS-projected proxy from
+// conserved rho and rho*theta is diagnostic only here.
+TEST(SAMParallel, PrecipConstantPressureLatentProxyBudgetDecompositionInvariant)
+{
+    constexpr int nx = 8;
+    constexpr int ny = 4;
+    constexpr int nz = 4;
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real dt = amrex::Real(0.1);
+
+    amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
+    amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                            {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    amrex::Array<int, AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(1, 1, 1)};
+    amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
+
+    amrex::BoxArray ba(domain);
+    const amrex::IntVect max_size(4, 2, 2);
+    ba.maxSize(max_size);
+    amrex::DistributionMapping dm(ba);
+
+    amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
+    fill_precip_budget_conserved_state(cons, MoistureType::SAM, pres_mbar);
+    amrex::MultiFab pressure0_mbar(ba, dm, 1, 0);
+    fill_pressure_snapshot_from_cons(cons, pressure0_mbar);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc;
+
+    SolverChoice sc = make_sam_solver_choice(MoistureType::SAM);
+    SAM sam;
+    sam.Define(sc);
+    sam.Set_dzmin(geom.CellSize(2));
+    sam.Set_RealWidth(0);
+    sam.Init(cons, ba, geom, dt, z_phys_nd, detJ_cc);
+
+    const SAMPressureSnapshotBudget initial_budget =
+        compute_sam_pressure_snapshot_budget(geom, cons, pressure0_mbar);
+
+    sam.Copy_State_to_Micro(cons);
+    sam.Compute_Coefficients();
+    sam.Precip(sc);
+    sam.Copy_Micro_to_State(cons);
+
+    const SAMPressureSnapshotBudget final_budget =
+        compute_sam_pressure_snapshot_budget(geom, cons, pressure0_mbar);
+    const int num_terms = nx * ny * nz;
+    const int rank = amrex::ParallelDescriptor::MyProc();
+    const amrex::Real constant_pressure_residual =
+        final_budget.latent_proxy_mass_constant_pressure -
+        initial_budget.latent_proxy_mass_constant_pressure;
+    const amrex::Real eos_projected_residual =
+        final_budget.latent_proxy_mass_eos_projected -
+        initial_budget.latent_proxy_mass_eos_projected;
+    const amrex::Real total_water_residual =
+        final_budget.total_water_mass - initial_budget.total_water_mass;
+
+    EXPECT_NEAR(final_budget.total_water_mass,
+                initial_budget.total_water_mass,
+                mpi_reduction_tol(initial_budget.total_water_mass, num_terms))
+        << "initial_total_water_mass=" << initial_budget.total_water_mass
+        << " final_total_water_mass=" << final_budget.total_water_mass
+        << " initial_constant_pressure_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_constant_pressure
+        << " final_constant_pressure_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_constant_pressure
+        << " constant_pressure_residual=" << constant_pressure_residual
+        << " initial_eos_projected_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_eos_projected
+        << " final_eos_projected_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_eos_projected
+        << " eos_projected_residual=" << eos_projected_residual
+        << " min_pressure0_mbar=" << initial_budget.min_pressure0_mbar
+        << " max_pressure0_mbar=" << initial_budget.max_pressure0_mbar
+        << " dt=" << dt
+        << " rank=" << rank
+        << " box_decomposition=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")";
+    EXPECT_NEAR(final_budget.latent_proxy_mass_constant_pressure,
+                initial_budget.latent_proxy_mass_constant_pressure,
+                mpi_reduction_tol(initial_budget.latent_proxy_mass_constant_pressure, num_terms))
+        << "initial_total_water_mass=" << initial_budget.total_water_mass
+        << " final_total_water_mass=" << final_budget.total_water_mass
+        << " total_water_residual=" << total_water_residual
+        << " initial_constant_pressure_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_constant_pressure
+        << " final_constant_pressure_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_constant_pressure
+        << " constant_pressure_residual=" << constant_pressure_residual
+        << " initial_eos_projected_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_eos_projected
+        << " final_eos_projected_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_eos_projected
+        << " eos_projected_residual=" << eos_projected_residual
+        << " min_pressure0_mbar=" << initial_budget.min_pressure0_mbar
+        << " max_pressure0_mbar=" << initial_budget.max_pressure0_mbar
+        << " dt=" << dt
+        << " rank=" << rank
+        << " box_decomposition=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")";
+    EXPECT_NEAR(sum_multifab_scalar(*sam.Qmoist_Ptr(0)), amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank;
+    EXPECT_NEAR(sum_multifab_scalar(*sam.Qmoist_Ptr(1)), amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank;
+    EXPECT_NEAR(sum_multifab_scalar(*sam.Qmoist_Ptr(2)), amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank;
+}
+
+// Motivation:
+// The same public Precip constant-pressure latent-proxy contract should remain
+// decomposition-invariant when budgets are checked in terrain-like coordinates
+// with a nonuniform detJ.
+TEST(SAMParallel, PrecipDetJWeightedConstantPressureLatentProxyBudgetDecompositionInvariant)
+{
+    constexpr int nx = 8;
+    constexpr int ny = 4;
+    constexpr int nz = 4;
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real dt = amrex::Real(1.0);
+
+    amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
+    amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                            {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    amrex::Array<int, AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(1, 1, 1)};
+    amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
+
+    amrex::BoxArray ba(domain);
+    const amrex::IntVect max_size(4, 2, 2);
+    ba.maxSize(max_size);
+    amrex::DistributionMapping dm(ba);
+
+    amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
+    fill_precip_budget_conserved_state(cons, MoistureType::SAM, pres_mbar);
+    amrex::MultiFab pressure0_mbar(ba, dm, 1, 0);
+    fill_pressure_snapshot_from_cons(cons, pressure0_mbar);
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc = std::make_unique<amrex::MultiFab>(ba, dm, 1, 0);
+    fill_nonuniform_detj(*detJ_cc);
+
+    SolverChoice sc = make_sam_solver_choice(MoistureType::SAM);
+    SAM sam;
+    sam.Define(sc);
+    sam.Set_dzmin(geom.CellSize(2));
+    sam.Set_RealWidth(0);
+    sam.Init(cons, ba, geom, dt, z_phys_nd, detJ_cc);
+
+    const SAMPressureSnapshotBudget initial_budget =
+        compute_sam_pressure_snapshot_budget(geom, cons, pressure0_mbar, detJ_cc.get());
+
+    sam.Copy_State_to_Micro(cons);
+    sam.Compute_Coefficients();
+    sam.Precip(sc);
+    sam.Copy_Micro_to_State(cons);
+
+    const SAMPressureSnapshotBudget final_budget =
+        compute_sam_pressure_snapshot_budget(geom, cons, pressure0_mbar, detJ_cc.get());
+    const int num_terms = nx * ny * nz;
+    const int rank = amrex::ParallelDescriptor::MyProc();
+    const amrex::Real constant_pressure_residual =
+        final_budget.latent_proxy_mass_constant_pressure -
+        initial_budget.latent_proxy_mass_constant_pressure;
+    const amrex::Real eos_projected_residual =
+        final_budget.latent_proxy_mass_eos_projected -
+        initial_budget.latent_proxy_mass_eos_projected;
+    const amrex::Real total_water_residual =
+        final_budget.total_water_mass - initial_budget.total_water_mass;
+    const amrex::Real detj_min = detJ_cc->min(0);
+    const amrex::Real detj_max = detJ_cc->max(0);
+
+    EXPECT_NEAR(final_budget.total_water_mass,
+                initial_budget.total_water_mass,
+                mpi_reduction_tol(initial_budget.total_water_mass, num_terms))
+        << "initial_total_water_mass=" << initial_budget.total_water_mass
+        << " final_total_water_mass=" << final_budget.total_water_mass
+        << " initial_constant_pressure_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_constant_pressure
+        << " final_constant_pressure_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_constant_pressure
+        << " constant_pressure_residual=" << constant_pressure_residual
+        << " initial_eos_projected_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_eos_projected
+        << " final_eos_projected_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_eos_projected
+        << " eos_projected_residual=" << eos_projected_residual
+        << " min_pressure0_mbar=" << initial_budget.min_pressure0_mbar
+        << " max_pressure0_mbar=" << initial_budget.max_pressure0_mbar
+        << " dt=" << dt
+        << " rank=" << rank
+        << " box_decomposition=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+        << " detJ_min=" << detj_min
+        << " detJ_max=" << detj_max;
+    EXPECT_NEAR(final_budget.latent_proxy_mass_constant_pressure,
+                initial_budget.latent_proxy_mass_constant_pressure,
+                mpi_reduction_tol(initial_budget.latent_proxy_mass_constant_pressure, num_terms))
+        << "initial_total_water_mass=" << initial_budget.total_water_mass
+        << " final_total_water_mass=" << final_budget.total_water_mass
+        << " total_water_residual=" << total_water_residual
+        << " initial_constant_pressure_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_constant_pressure
+        << " final_constant_pressure_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_constant_pressure
+        << " constant_pressure_residual=" << constant_pressure_residual
+        << " initial_eos_projected_latent_proxy_mass="
+        << initial_budget.latent_proxy_mass_eos_projected
+        << " final_eos_projected_latent_proxy_mass="
+        << final_budget.latent_proxy_mass_eos_projected
+        << " eos_projected_residual=" << eos_projected_residual
+        << " min_pressure0_mbar=" << initial_budget.min_pressure0_mbar
+        << " max_pressure0_mbar=" << initial_budget.max_pressure0_mbar
+        << " dt=" << dt
+        << " rank=" << rank
+        << " box_decomposition=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+        << " detJ_min=" << detj_min
+        << " detJ_max=" << detj_max;
+    EXPECT_NEAR(sum_multifab_scalar(*sam.Qmoist_Ptr(0)), amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " detJ_min=" << detj_min
+        << " detJ_max=" << detj_max;
+    EXPECT_NEAR(sum_multifab_scalar(*sam.Qmoist_Ptr(1)), amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " detJ_min=" << detj_min
+        << " detJ_max=" << detj_max;
+    EXPECT_NEAR(sum_multifab_scalar(*sam.Qmoist_Ptr(2)), amrex::Real(0.0), exact_zero_tol())
+        << "rank=" << rank
+        << " detJ_min=" << detj_min
+        << " detJ_max=" << detj_max;
+}
+
+// Motivation:
 // The public PrecipFall path should conserve rain, snow, and graupel budgets
 // independently under multiple x-y decompositions and MPI rank counts, while
 // keeping each test box unsplit in z.

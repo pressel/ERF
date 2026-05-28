@@ -51,6 +51,14 @@ struct SAMBudget {
     amrex::Real graupel_accum_mass{amrex::Real(0.0)};
 };
 
+struct SAMPressureSnapshotBudget {
+    amrex::Real total_water_mass{amrex::Real(0.0)};
+    amrex::Real latent_proxy_mass_constant_pressure{amrex::Real(0.0)};
+    amrex::Real latent_proxy_mass_eos_projected{amrex::Real(0.0)};
+    amrex::Real min_pressure0_mbar{std::numeric_limits<amrex::Real>::max()};
+    amrex::Real max_pressure0_mbar{std::numeric_limits<amrex::Real>::lowest()};
+};
+
 // Provenance: exact-zero branches only accumulate machine roundoff.
 inline amrex::Real exact_zero_or_near_zero_tol ()
 {
@@ -218,6 +226,163 @@ amrex::Real sam_latent_proxy (const SAMCellState& s,
                               amrex::Real fac_fus) noexcept
 {
     return s.tabs + fac_cond * s.qv - fac_fus * (s.qci + s.qps + s.qpg);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real sam_latent_proxy_constant_pressure (const amrex::Real theta,
+                                                const amrex::Real pressure_mbar,
+                                                const amrex::Real qv,
+                                                const amrex::Real qci,
+                                                const amrex::Real qps,
+                                                const amrex::Real qpg,
+                                                const amrex::Real rdOcp,
+                                                const amrex::Real fac_cond,
+                                                const amrex::Real fac_fus) noexcept
+{
+    const amrex::Real tabs = getTgivenPandTh(sam_mbar_to_pa(pressure_mbar), theta, rdOcp);
+    return tabs + fac_cond * qv - fac_fus * (qci + qps + qpg);
+}
+
+inline void fill_pressure_snapshot_from_cons (const amrex::MultiFab& cons,
+                                             amrex::MultiFab& pressure0_mbar)
+{
+    auto cons_arrays = cons.const_arrays();
+    auto pressure_arrays = pressure0_mbar.arrays();
+    amrex::ParallelFor(
+        pressure0_mbar,
+        amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept {
+            const auto& arr = cons_arrays[box_no];
+            pressure_arrays[box_no](i,j,k) =
+                sam_cons_to_primitive(arr(i,j,k,Rho_comp),
+                                      arr(i,j,k,RhoTheta_comp),
+                                      arr(i,j,k,RhoQ1_comp),
+                                      arr(i,j,k,RhoQ2_comp),
+                                      arr(i,j,k,RhoQ3_comp),
+                                      arr(i,j,k,RhoQ4_comp),
+                                      arr(i,j,k,RhoQ5_comp),
+                                      arr(i,j,k,RhoQ6_comp)).pres_mbar;
+        });
+    amrex::Gpu::streamSynchronize();
+}
+
+inline SAMPressureSnapshotBudget compute_sam_pressure_snapshot_budget (
+    const amrex::Geometry& geom,
+    const amrex::MultiFab& cons,
+    const amrex::MultiFab& pressure0_mbar,
+    const amrex::MultiFab* detJ_cc = nullptr)
+{
+    const amrex::Real cell_volume = geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
+    auto cons_arrays = cons.const_arrays();
+    auto pressure_arrays = pressure0_mbar.const_arrays();
+
+    amrex::Real total_water_mass = amrex::Real(0.0);
+    amrex::Real latent_proxy_mass_constant_pressure = amrex::Real(0.0);
+    amrex::Real latent_proxy_mass_eos_projected = amrex::Real(0.0);
+    amrex::Real min_pressure0_mbar = std::numeric_limits<amrex::Real>::max();
+    amrex::Real max_pressure0_mbar = std::numeric_limits<amrex::Real>::lowest();
+
+    if (detJ_cc != nullptr) {
+        auto detj_arrays = detJ_cc->const_arrays();
+        amrex::GpuTuple<amrex::Real, amrex::Real, amrex::Real, amrex::Real, amrex::Real> reduced = amrex::ParReduce(
+            amrex::TypeList<amrex::ReduceOpSum,
+                            amrex::ReduceOpSum,
+                            amrex::ReduceOpSum,
+                            amrex::ReduceOpMin,
+                            amrex::ReduceOpMax>{},
+            amrex::TypeList<amrex::Real, amrex::Real, amrex::Real, amrex::Real, amrex::Real>{},
+            cons, amrex::IntVect(0),
+            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
+                -> amrex::GpuTuple<amrex::Real, amrex::Real, amrex::Real, amrex::Real, amrex::Real> {
+                const auto& arr = cons_arrays[box_no];
+                const SAMPrimitiveCell primitive =
+                    sam_cons_to_primitive(arr(i,j,k,Rho_comp),
+                                          arr(i,j,k,RhoTheta_comp),
+                                          arr(i,j,k,RhoQ1_comp),
+                                          arr(i,j,k,RhoQ2_comp),
+                                          arr(i,j,k,RhoQ3_comp),
+                                          arr(i,j,k,RhoQ4_comp),
+                                          arr(i,j,k,RhoQ5_comp),
+                                          arr(i,j,k,RhoQ6_comp));
+                const amrex::Real pressure0 = pressure_arrays[box_no](i,j,k);
+                const amrex::Real weight = cell_volume * detj_arrays[box_no](i,j,k) * primitive.rho;
+                return {
+                    weight * sam_total_water(primitive),
+                    weight * sam_latent_proxy_constant_pressure(primitive.theta,
+                                                                pressure0,
+                                                                primitive.qv,
+                                                                primitive.qci,
+                                                                primitive.qps,
+                                                                primitive.qpg,
+                                                                kRdOcp,
+                                                                kFacCond,
+                                                                kFacFus),
+                    weight * sam_latent_proxy(primitive, kFacCond, kFacFus),
+                    pressure0,
+                    pressure0};
+            });
+        total_water_mass = amrex::get<0>(reduced);
+        latent_proxy_mass_constant_pressure = amrex::get<1>(reduced);
+        latent_proxy_mass_eos_projected = amrex::get<2>(reduced);
+        min_pressure0_mbar = amrex::get<3>(reduced);
+        max_pressure0_mbar = amrex::get<4>(reduced);
+    } else {
+        amrex::GpuTuple<amrex::Real, amrex::Real, amrex::Real, amrex::Real, amrex::Real> reduced = amrex::ParReduce(
+            amrex::TypeList<amrex::ReduceOpSum,
+                            amrex::ReduceOpSum,
+                            amrex::ReduceOpSum,
+                            amrex::ReduceOpMin,
+                            amrex::ReduceOpMax>{},
+            amrex::TypeList<amrex::Real, amrex::Real, amrex::Real, amrex::Real, amrex::Real>{},
+            cons, amrex::IntVect(0),
+            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
+                -> amrex::GpuTuple<amrex::Real, amrex::Real, amrex::Real, amrex::Real, amrex::Real> {
+                const auto& arr = cons_arrays[box_no];
+                const SAMPrimitiveCell primitive =
+                    sam_cons_to_primitive(arr(i,j,k,Rho_comp),
+                                          arr(i,j,k,RhoTheta_comp),
+                                          arr(i,j,k,RhoQ1_comp),
+                                          arr(i,j,k,RhoQ2_comp),
+                                          arr(i,j,k,RhoQ3_comp),
+                                          arr(i,j,k,RhoQ4_comp),
+                                          arr(i,j,k,RhoQ5_comp),
+                                          arr(i,j,k,RhoQ6_comp));
+                const amrex::Real pressure0 = pressure_arrays[box_no](i,j,k);
+                const amrex::Real weight = cell_volume * primitive.rho;
+                return {
+                    weight * sam_total_water(primitive),
+                    weight * sam_latent_proxy_constant_pressure(primitive.theta,
+                                                                pressure0,
+                                                                primitive.qv,
+                                                                primitive.qci,
+                                                                primitive.qps,
+                                                                primitive.qpg,
+                                                                kRdOcp,
+                                                                kFacCond,
+                                                                kFacFus),
+                    weight * sam_latent_proxy(primitive, kFacCond, kFacFus),
+                    pressure0,
+                    pressure0};
+            });
+        total_water_mass = amrex::get<0>(reduced);
+        latent_proxy_mass_constant_pressure = amrex::get<1>(reduced);
+        latent_proxy_mass_eos_projected = amrex::get<2>(reduced);
+        min_pressure0_mbar = amrex::get<3>(reduced);
+        max_pressure0_mbar = amrex::get<4>(reduced);
+    }
+
+    amrex::ParallelDescriptor::ReduceRealSum(total_water_mass);
+    amrex::ParallelDescriptor::ReduceRealSum(latent_proxy_mass_constant_pressure);
+    amrex::ParallelDescriptor::ReduceRealSum(latent_proxy_mass_eos_projected);
+    amrex::ParallelDescriptor::ReduceRealMin(min_pressure0_mbar);
+    amrex::ParallelDescriptor::ReduceRealMax(max_pressure0_mbar);
+
+    return SAMPressureSnapshotBudget{
+        total_water_mass,
+        latent_proxy_mass_constant_pressure,
+        latent_proxy_mass_eos_projected,
+        min_pressure0_mbar,
+        max_pressure0_mbar};
 }
 
 inline amrex::Real sum_multifab_scalar (const amrex::MultiFab& mf)
