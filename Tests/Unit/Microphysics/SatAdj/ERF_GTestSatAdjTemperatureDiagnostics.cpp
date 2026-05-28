@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <ERF_Derive.H>
 #include "ERF_GTestSatAdjCommon.H"
 
 using namespace satadj_test;
@@ -186,15 +187,53 @@ TEST(SatAdjTemperatureDiagnostics, PublicFlowMatchesScalarDiagnosticInputs)
     }
 }
 
+// Motivation: The observed signal appears in thermodynamic temperature but not
+// theta. The production moist-temperature derived path should use the same EOS
+// projection from conserved rho, rhoTheta, and rhoQv that the SatAdj diagnostic
+// tests use. This directly guards the plotfile/derived-variable contract.
+TEST(SatAdjTemperatureDiagnostics, ProductionMoistDerivedTemperatureMatchesEOSProjection)
+{
+    const amrex::Geometry geom = make_geometry(4, 4, 2);
+    const amrex::BoxArray ba = make_boxarray(geom.Domain(), amrex::IntVect(AMREX_D_DECL(4, 4, 2)));
+    const amrex::DistributionMapping dm(ba);
+    amrex::MultiFab cons(ba, dm, RhoQ2_comp + 1, 0);
+    fill_conserved_state_portable(cons);
+
+    for (amrex::MFIter mfi(cons); mfi.isValid(); ++mfi) {
+        const amrex::Box bx = mfi.validbox();
+        amrex::FArrayBox derfab(bx, 1);
+        amrex::FArrayBox zfab(bx, 1);  // unused by erf_dermoisttemp
+        derived::erf_dermoisttemp(bx, derfab, 0, 1, cons[mfi], zfab, geom,
+                                  amrex::Real(0.0), nullptr, 0);
+        amrex::Gpu::streamSynchronize();
+
+        const auto der = derfab.const_array();
+        const auto dat = cons[mfi].const_array();
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    const amrex::Real rho = dat(i, j, k, Rho_comp);
+                    const amrex::Real rhotheta = dat(i, j, k, RhoTheta_comp);
+                    const amrex::Real qv = dat(i, j, k, RhoQ1_comp) / rho;
+                    const amrex::Real expected = getTgivenRandRTh(rho, rhotheta, qv);
+                    const amrex::Real actual = der(i, j, k);
+                    EXPECT_NEAR(actual, expected,
+                                scaled_tol(expected, amrex::Real(10.0) * kThermoTolFactor))
+                        << "i=" << i << " j=" << j << " k=" << k
+                        << " rho=" << rho
+                        << " rhotheta=" << rhotheta
+                        << " qv=" << qv;
+                }
+            }
+        }
+    }
+}
+
 // Motivation: This helper is used by the SatAdj tests to represent the EOS
 // projection from conserved rho, rhoTheta, and rhoQv. It is a helper sanity
-// check, not yet a test of the production plotfile derived-variable path.
-//
-// No single reusable production derived-temperature helper was found in this
-// pass. The plotfile/derived-variable path (erf_dermoisttemp in
-// Source/ERF_Derive.cpp) calls getTgivenRandRTh directly inline. The
-// plotfile/derived-variable path should be audited separately before asserting
-// that plotted temperature uses this exact helper.
+// check, not the production plotfile derived-variable path.
+// See ProductionMoistDerivedTemperatureMatchesEOSProjection for the production
+// derived-path contract.
 TEST(SatAdjTemperatureDiagnostics, EOSProjectedTemperatureHelperMatchesDirectEOSCall)
 {
     const amrex::Geometry geom = make_geometry(4, 4, 2);

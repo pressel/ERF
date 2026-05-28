@@ -258,6 +258,13 @@ TEST(SatAdjKesslerComparison, FiniteAdjustmentGapMagnitudesAreCharacterized)
             amrex::Math::abs(satadj_state.qc - c.initial.qc),
             amrex::Math::abs(kessler_result.phase_change));
 
+        // Guard: finite cases must produce a nonzero phase-change scale so the
+        // normalized-gap divisions below are well-defined.
+        ASSERT_GT(phase_change_scale, amrex::Real(0.0))
+            << "case=" << c.name
+            << " satadj_phase_change=" << satadj_state.qc - c.initial.qc
+            << " kessler_phase_change=" << kessler_result.phase_change;
+
         // latent-temperature scale = (L/cp) * phase_change_scale
         const amrex::Real latent_temp_scale = kFacCond * phase_change_scale;
 
