@@ -105,6 +105,12 @@ struct ActiveCellCounts {
     long unexpected_unchanged{0};
 };
 
+enum class SatAdjActiveGeneratorRegime {
+    SupersaturatedCloud = 0,
+    CloudyRelaxation,
+    EvaporationThenRecondensation
+};
+
 enum StateDiffComp {
     StateDiffRho = 0,
     StateDiffRhoTheta,
@@ -327,9 +333,10 @@ CellState make_satadj_active_cell_state (const int i,
                                          const int k,
                                          const CellState& evap_then_recond)
 {
-    const int selector = (i + 2 * j + 3 * k) % 3;
+    const SatAdjActiveGeneratorRegime regime =
+        static_cast<SatAdjActiveGeneratorRegime>((i + 2 * j + 3 * k) % 3);
 
-    if (selector == 0) {
+    if (regime == SatAdjActiveGeneratorRegime::SupersaturatedCloud) {
         const amrex::Real tabs = amrex::Real(289.0) + amrex::Real(0.15) * k;
         const amrex::Real pres_mbar = amrex::Real(910.0) - amrex::Real(2.0) * j;
         return make_cell_state(tabs,
@@ -338,7 +345,7 @@ CellState make_satadj_active_cell_state (const int i,
                                amrex::Real(4.0e-4) + amrex::Real(1.0e-5) * (j + k));
     }
 
-    if (selector == 1) {
+    if (regime == SatAdjActiveGeneratorRegime::CloudyRelaxation) {
         const amrex::Real tabs = amrex::Real(287.5) + amrex::Real(0.1) * i;
         const amrex::Real pres_mbar = amrex::Real(885.0) + amrex::Real(1.5) * k;
         return make_cell_state(tabs,
@@ -351,6 +358,15 @@ CellState make_satadj_active_cell_state (const int i,
                            evap_then_recond.pres_mbar,
                            evap_then_recond.qv + amrex::Real(2.0e-5) * i,
                            evap_then_recond.qc + amrex::Real(1.0e-5) * (j + k));
+}
+
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+SatAdjActiveGeneratorRegime satadj_active_generator_regime (const int i,
+                                                            const int j,
+                                                            const int k)
+{
+    return static_cast<SatAdjActiveGeneratorRegime>((i + 2 * j + 3 * k) % 3);
 }
 
 AMREX_GPU_HOST_DEVICE
@@ -454,6 +470,20 @@ inline ConservedState scalar_reference_from_initial_conserved (const amrex::Real
                           rho * reference_state.theta,
                           rho * reference_state.qv,
                           rho * reference_state.qc};
+}
+
+AMREX_GPU_HOST_DEVICE
+AMREX_FORCE_INLINE
+amrex::Real conserved_component (const ConservedState& conserved,
+                                 const int component)
+{
+    switch (component) {
+    case Rho_comp: return conserved.rho;
+    case RhoTheta_comp: return conserved.rhotheta;
+    case RhoQ1_comp: return conserved.rhoqv;
+    case RhoQ2_comp: return conserved.rhoqc;
+    default: return amrex::Real(0.0);
+    }
 }
 
 // The plotted or diagnosed temperature downstream of SatAdj may be

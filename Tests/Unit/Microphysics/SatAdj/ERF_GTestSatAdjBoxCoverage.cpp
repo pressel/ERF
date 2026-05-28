@@ -140,6 +140,22 @@ amrex::Real expected_conserved_component (const int component,
     }
 }
 
+amrex::Real expected_full_flow_component (const int component,
+                                          const int i,
+                                          const int j,
+                                          const int k,
+                                          const CellState& evap_then_recond)
+{
+    const CellState initial_state = make_satadj_active_cell_state(i, j, k, evap_then_recond);
+    const ConservedState initial_conserved = make_conserved_state(initial_state);
+    const ConservedState reference = scalar_reference_from_initial_conserved(
+        initial_conserved.rho,
+        initial_conserved.rhotheta,
+        initial_conserved.rhoqv,
+        initial_conserved.rhoqc);
+    return conserved_component(reference, component);
+}
+
 } // namespace
 
 // Motivation: Current SatAdj advances over each MFIter tilebox with no
@@ -462,6 +478,152 @@ TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterCopyBack)
         << " expected=" << worst.expected_value
         << " absolute_error=" << worst.absolute_error
         << " normalized_error=" << worst.normalized_error;
+}
+
+// Motivation: The copy-back ghost-fill test isolates staging only. This
+// variant keeps the full SatAdj public flow, poisons ghosts beforehand, and
+// checks that the final FillBoundary reflects the wrapped scalar-reference
+// adjusted valid cells rather than stale ghost contents.
+TEST(SatAdjBoxCoverage, PeriodicGhostFillAfterFullPublicFlow)
+{
+    const amrex::Geometry geom = make_geometry(23, 19, 5);
+    const LayoutCase layout{"maxsize-6x6x2", false, amrex::IntVect(AMREX_D_DECL(6, 6, 2))};
+    const amrex::BoxArray ba = make_layout_boxarray(geom.Domain(), layout);
+    const amrex::DistributionMapping dm(ba);
+    amrex::MultiFab cons(ba, dm, RhoQ2_comp + 1, 2);
+    fill_satadj_active_conserved_state(cons);
+
+    poison_ghost_cells(cons,
+                       {Rho_comp, RhoTheta_comp, RhoQ1_comp, RhoQ2_comp},
+                       amrex::Real(-999.0));
+
+    CellState evap_then_recond;
+    ASSERT_TRUE(find_evaporation_then_recondensation_state(evap_then_recond));
+
+    SatAdj satadj;
+    SolverChoice sc = make_solver_choice(false);
+    satadj.Define(sc);
+    run_satadj_public_flow(satadj, sc, geom, cons);
+
+    const amrex::MultiFab after_host = make_host_mirror(cons);
+    const amrex::Box& domain = geom.Domain();
+    LocatedError worst{};
+    long checked_ghosts = 0;
+
+    for (amrex::MFIter mfi(after_host); mfi.isValid(); ++mfi) {
+        const amrex::Box& fab_box = mfi.fabbox();
+        const amrex::Box& valid_box = mfi.validbox();
+        const auto after_arr = after_host.const_array(mfi);
+
+        for (int k = fab_box.smallEnd(2); k <= fab_box.bigEnd(2); ++k) {
+            for (int j = fab_box.smallEnd(1); j <= fab_box.bigEnd(1); ++j) {
+                for (int i = fab_box.smallEnd(0); i <= fab_box.bigEnd(0); ++i) {
+                    const amrex::IntVect iv(AMREX_D_DECL(i, j, k));
+                    if (valid_box.contains(iv)) {
+                        continue;
+                    }
+
+                    ++checked_ghosts;
+                    const int wrapped_i = wrap_index(i, domain.smallEnd(0), domain.bigEnd(0));
+                    const int wrapped_j = wrap_index(j, domain.smallEnd(1), domain.bigEnd(1));
+                    const int wrapped_k = wrap_index(k, domain.smallEnd(2), domain.bigEnd(2));
+
+                    for (const int comp : {Rho_comp, RhoTheta_comp, RhoQ1_comp, RhoQ2_comp}) {
+                        const amrex::Real actual = after_arr(i,j,k,comp);
+                        const amrex::Real expected = expected_full_flow_component(comp,
+                                                                                  wrapped_i,
+                                                                                  wrapped_j,
+                                                                                  wrapped_k,
+                                                                                  evap_then_recond);
+                        const amrex::Real absolute_error = amrex::Math::abs(actual - expected);
+                        const amrex::Real normalized_error = absolute_error
+                            / scaled_tol(expected, amrex::Real(10.0) * kStateTolFactor);
+                        if (normalized_error > worst.normalized_error) {
+                            worst = LocatedError{normalized_error,
+                                                 absolute_error,
+                                                 actual,
+                                                 expected,
+                                                 amrex::Real(0.0),
+                                                 amrex::Real(0.0),
+                                                 i,
+                                                 j,
+                                                 k,
+                                                 comp,
+                                                 mfi.index()};
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    EXPECT_GT(checked_ghosts, 0);
+    EXPECT_LE(worst.normalized_error, amrex::Real(1.0))
+        << "layout=" << layout.name
+        << " max_size=" << max_size_string(layout)
+        << " component=" << component_name(worst.component)
+        << " ghost_i=" << worst.i
+        << " ghost_j=" << worst.j
+        << " ghost_k=" << worst.k
+        << " box_id=" << worst.box_id
+        << " actual=" << worst.actual_value
+        << " expected=" << worst.expected_value
+        << " absolute_error=" << worst.absolute_error
+        << " normalized_error=" << worst.normalized_error;
+}
+
+// Motivation: The box/decomposition tests assume the active-state generator
+// covers all intended SatAdj paths. This sanity check guards the generator
+// itself so later layout failures are not misdiagnosed when one regime drops
+// out of the initialized state mix.
+TEST(SatAdjBoxCoverage, ActiveStateGeneratorCoversExpectedRegimes)
+{
+    const amrex::Geometry geom = make_geometry(23, 19, 5);
+
+    CellState evap_then_recond;
+    ASSERT_TRUE(find_evaporation_then_recondensation_state(evap_then_recond));
+
+    long supersaturated_cloud = 0;
+    long cloudy_relaxation = 0;
+    long evap_then_recond_count = 0;
+    long final_qc_positive = 0;
+    long final_qc_near_zero = 0;
+
+    const amrex::Box& domain = geom.Domain();
+    for (int k = domain.smallEnd(2); k <= domain.bigEnd(2); ++k) {
+        for (int j = domain.smallEnd(1); j <= domain.bigEnd(1); ++j) {
+            for (int i = domain.smallEnd(0); i <= domain.bigEnd(0); ++i) {
+                switch (satadj_active_generator_regime(i, j, k)) {
+                case SatAdjActiveGeneratorRegime::SupersaturatedCloud:
+                    ++supersaturated_cloud;
+                    break;
+                case SatAdjActiveGeneratorRegime::CloudyRelaxation:
+                    ++cloudy_relaxation;
+                    break;
+                case SatAdjActiveGeneratorRegime::EvaporationThenRecondensation:
+                    ++evap_then_recond_count;
+                    break;
+                }
+
+                CellState state = make_satadj_active_cell_state(i, j, k, evap_then_recond);
+                adjust(state);
+                if (state.qc > kQcCoveragePositiveMin) {
+                    ++final_qc_positive;
+                }
+                if (amrex::Math::abs(state.qc) <= kQcCoverageNearZeroMax) {
+                    ++final_qc_near_zero;
+                }
+            }
+        }
+    }
+
+    EXPECT_GT(supersaturated_cloud, 0);
+    EXPECT_GT(cloudy_relaxation, 0);
+    EXPECT_GT(evap_then_recond_count, 0);
+    EXPECT_GT(final_qc_positive, 0)
+        << "All generated active states evaporated completely; decomposition tests would lose retained-cloud coverage.";
+    EXPECT_GT(final_qc_near_zero, 0)
+        << "No generated active state evaporated cloud water to near zero; decomposition tests would lose full-evaporation coverage.";
 }
 
 // Motivation: SatAdj and Kessler_NoRain use different adjustment formulas, but
