@@ -545,6 +545,91 @@ TEST(SAMPhysicalProperties, PrecipSources_AllSpeciesNonzeroAllSourceTermsActive)
 }
 
 // Motivation:
+// In a nonlimited mixed-phase cell where all source terms are active, the
+// diagnostic autoconversion and accretion tendencies should match the closed-
+// form formulas exactly, while the composed update still preserves the core
+// physical invariants.
+TEST(SAMPhysicalProperties, PrecipSources_AllSpeciesNonzeroExpectedDiagnostics)
+{
+    const amrex::Real tabs = mixed_phase_tabs();
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real qsat = mixed_qsat_for_state(kSAMWithIceMode, tabs, pres_mbar);
+    const SAMCellState before = make_cell_state(
+        tabs, pres_mbar,
+        amrex::Real(0.5) * qsat,
+        qcw0 + amrex::Real(8.0e-4),
+        qci0 + amrex::Real(7.0e-4),
+        amrex::Real(4.0e-4),
+        amrex::Real(5.0e-4),
+        amrex::Real(6.0e-4));
+    const SAMCoefficientRow coeffs = make_coeffs();
+    const SAMPrecipConfig config = make_precip_config(kSAMWithIceMode);
+
+    const amrex::Real expected_omp = std::max(amrex::Real(0.0),
+                                              std::min(amrex::Real(1.0), (tabs - tprmin) * a_pr));
+    const amrex::Real expected_omg = std::max(amrex::Real(0.0),
+                                              std::min(amrex::Real(1.0), (tabs - tgrmin) * a_gr));
+    const amrex::Real expected_dqca = config.dtn * alphaelq * (before.qcl - qcw0);
+    const amrex::Real expected_dqia = config.dtn * betaelq * coeffs.coefice * (before.qci - qci0);
+    const amrex::Real expected_dprc = config.dtn * coeffs.accrrc * before.qcl * std::pow(before.qpr, config.powr1);
+    const amrex::Real expected_dpsc = config.dtn * coeffs.accrsc * before.qcl * std::pow(before.qps, config.pows1);
+    const amrex::Real expected_dpgc = config.dtn * coeffs.accrgc * before.qcl * std::pow(before.qpg, config.powg1);
+    const amrex::Real expected_dpsi = config.dtn * coeffs.accrsi * before.qci * std::pow(before.qps, config.pows1);
+    const amrex::Real expected_dpgi = config.dtn * coeffs.accrgi * before.qci * std::pow(before.qpg, config.powg1);
+    const amrex::Real expected_liquid_total = expected_dqca + expected_dprc + expected_dpsc + expected_dpgc;
+    const amrex::Real expected_ice_total = expected_dqia + expected_dpsi + expected_dpgi;
+    const amrex::Real expected_dqpr = (expected_dqca + expected_dqia) * expected_omp + expected_dprc;
+    const amrex::Real expected_dqps = (expected_dqca + expected_dqia) * (one - expected_omp) * (one - expected_omg)
+        + expected_dpsc + expected_dpsi;
+    const amrex::Real expected_dqpg = (expected_dqca + expected_dqia) * (one - expected_omp) * expected_omg
+        + expected_dpgc + expected_dpgi;
+
+    ASSERT_LT(expected_liquid_total, before.qcl);
+    ASSERT_LT(expected_ice_total, before.qci);
+
+    SAMPrecipCellDiagnostics diagnostics;
+    const SAMCellState after = sam_precip_cell_update(before, coeffs, config, &diagnostics);
+
+    EXPECT_NEAR(diagnostics.omp, expected_omp, roundoff_tol(expected_omp));
+    EXPECT_NEAR(diagnostics.omg, expected_omg, roundoff_tol(expected_omg));
+
+    EXPECT_NEAR(diagnostics.autoconversion.dqca, expected_dqca, roundoff_tol(expected_dqca));
+    EXPECT_NEAR(diagnostics.autoconversion.dqia, expected_dqia, roundoff_tol(expected_dqia));
+    EXPECT_NEAR(diagnostics.accretion.dprc, expected_dprc, pow_sqrt_tol(expected_dprc));
+    EXPECT_NEAR(diagnostics.accretion.dpsc, expected_dpsc, pow_sqrt_tol(expected_dpsc));
+    EXPECT_NEAR(diagnostics.accretion.dpgc, expected_dpgc, pow_sqrt_tol(expected_dpgc));
+    EXPECT_NEAR(diagnostics.accretion.dpsi, expected_dpsi, pow_sqrt_tol(expected_dpsi));
+    EXPECT_NEAR(diagnostics.accretion.dpgi, expected_dpgi, pow_sqrt_tol(expected_dpgi));
+
+    EXPECT_NEAR(diagnostics.limited_sources.dqca, expected_dqca, roundoff_tol(expected_dqca));
+    EXPECT_NEAR(diagnostics.limited_sources.dqia, expected_dqia, roundoff_tol(expected_dqia));
+    EXPECT_NEAR(diagnostics.limited_sources.dprc, expected_dprc, pow_sqrt_tol(expected_dprc));
+    EXPECT_NEAR(diagnostics.limited_sources.dpsc, expected_dpsc, pow_sqrt_tol(expected_dpsc));
+    EXPECT_NEAR(diagnostics.limited_sources.dpgc, expected_dpgc, pow_sqrt_tol(expected_dpgc));
+    EXPECT_NEAR(diagnostics.limited_sources.dpsi, expected_dpsi, pow_sqrt_tol(expected_dpsi));
+    EXPECT_NEAR(diagnostics.limited_sources.dpgi, expected_dpgi, pow_sqrt_tol(expected_dpgi));
+    EXPECT_NEAR(diagnostics.limited_sources.dqc, expected_liquid_total, pow_sqrt_tol(expected_liquid_total));
+    EXPECT_NEAR(diagnostics.limited_sources.dqi, expected_ice_total, pow_sqrt_tol(expected_ice_total));
+
+    EXPECT_NEAR(diagnostics.partitioned_sources.dqpr, expected_dqpr, pow_sqrt_tol(expected_dqpr));
+    EXPECT_NEAR(diagnostics.partitioned_sources.dqps, expected_dqps, pow_sqrt_tol(expected_dqps));
+    EXPECT_NEAR(diagnostics.partitioned_sources.dqpg, expected_dqpg, pow_sqrt_tol(expected_dqpg));
+    EXPECT_NEAR(diagnostics.partitioned_sources.dqpr
+                    + diagnostics.partitioned_sources.dqps
+                    + diagnostics.partitioned_sources.dqpg,
+                diagnostics.limited_sources.dqc + diagnostics.limited_sources.dqi,
+                property_accumulation_tol(5, diagnostics.limited_sources.dqc + diagnostics.limited_sources.dqi));
+
+    expect_nonnegative_species(after);
+    EXPECT_NEAR(sam_total_water(after),
+                sam_total_water(before),
+                formula_abs_tol(sam_total_water(before)));
+    EXPECT_NEAR(sam_latent_proxy(after, kFacCond, kFacFus),
+                sam_latent_proxy(before, kFacCond, kFacFus),
+                formula_abs_tol(sam_latent_proxy(before, kFacCond, kFacFus)));
+}
+
+// Motivation:
 // Local SAM precipitation sources exchange water among qv, qcl, qci, qpr,
 // qps, and qpg only. They should conserve total water across representative
 // warm, cold, mixed, limiter-active, no-precip, and no-ice cases.

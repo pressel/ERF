@@ -21,6 +21,32 @@ void expect_near_pow_sqrt (const amrex::Real actual,
     EXPECT_NEAR(actual, expected, pow_sqrt_tol(expected));
 }
 
+amrex::Real independent_accretion_rate (const amrex::Real dtn,
+                                        const amrex::Real coeff,
+                                        const amrex::Real donor,
+                                        const amrex::Real collector,
+                                        const amrex::Real exponent)
+{
+    return dtn * coeff * donor * std::pow(collector, exponent);
+}
+
+amrex::Real independent_evaporation_rate (const amrex::Real q,
+                                          const amrex::Real coeff_sqrt,
+                                          const amrex::Real coeff_pow,
+                                          const amrex::Real exponent)
+{
+    return coeff_sqrt * std::sqrt(q) + coeff_pow * std::pow(q, exponent);
+}
+
+amrex::Real independent_component_flux (const amrex::Real rho0,
+                                        const amrex::Real rho,
+                                        const amrex::Real q_component,
+                                        const amrex::Real velocity,
+                                        const amrex::Real exponent)
+{
+    return velocity * std::pow(rho * q_component, one + exponent) * std::sqrt(rho0 / rho);
+}
+
 } // namespace
 
 // Motivation:
@@ -391,6 +417,185 @@ TEST(SAMScalar, AccretionActivationThresholds)
 }
 
 // Motivation:
+// In the all-active mixed-phase branch, each accretion tendency should match
+// its direct closed-form formula independently of any other production helper.
+TEST(SAMScalar, AccretionRatesMatchIndependentFormulas)
+{
+    const amrex::Real dtn = amrex::Real(1.25);
+    const amrex::Real qcc = amrex::Real(7.0e-4);
+    const amrex::Real qii = amrex::Real(5.0e-4);
+    const amrex::Real qpr = amrex::Real(4.0e-4);
+    const amrex::Real qps = amrex::Real(5.0e-4);
+    const amrex::Real qpg = amrex::Real(6.0e-4);
+    const amrex::Real powr1 = (three + b_rain) / amrex::Real(4.0);
+    const amrex::Real pows1 = (three + b_snow) / amrex::Real(4.0);
+    const amrex::Real powg1 = (three + b_grau) / amrex::Real(4.0);
+    const amrex::Real omp = amrex::Real(0.4);
+    const amrex::Real omg = amrex::Real(0.3);
+    const amrex::Real accrrc = amrex::Real(2.0);
+    const amrex::Real accrsc = amrex::Real(2.2);
+    const amrex::Real accrsi = amrex::Real(2.4);
+    const amrex::Real accrgc = amrex::Real(2.6);
+    const amrex::Real accrgi = amrex::Real(2.8);
+
+    const SAMPrecipSources rates = sam_accretion_rates(
+        dtn, qcc, qii, qpr, qps, qpg,
+        powr1, pows1, powg1,
+        omp, omg,
+        accrrc, accrsc, accrsi, accrgc, accrgi);
+
+    const amrex::Real expected_dprc = independent_accretion_rate(dtn, accrrc, qcc, qpr, powr1);
+    const amrex::Real expected_dpsc = independent_accretion_rate(dtn, accrsc, qcc, qps, pows1);
+    const amrex::Real expected_dpgc = independent_accretion_rate(dtn, accrgc, qcc, qpg, powg1);
+    const amrex::Real expected_dpsi = independent_accretion_rate(dtn, accrsi, qii, qps, pows1);
+    const amrex::Real expected_dpgi = independent_accretion_rate(dtn, accrgi, qii, qpg, powg1);
+
+    expect_near_pow_sqrt(rates.dprc, expected_dprc);
+    expect_near_pow_sqrt(rates.dpsc, expected_dpsc);
+    expect_near_pow_sqrt(rates.dpgc, expected_dpgc);
+    expect_near_pow_sqrt(rates.dpsi, expected_dpsi);
+    expect_near_pow_sqrt(rates.dpgi, expected_dpgi);
+}
+
+// Motivation:
+// The symbolic accretion audit reduced each source to a donor-linear and
+// collector power-law form, so scaling ratios should match those elasticities
+// directly in the positive all-active domain.
+TEST(SAMScalar, AccretionRatesHaveExpectedElasticities)
+{
+    const amrex::Real dtn = amrex::Real(1.0);
+    const amrex::Real qcc = amrex::Real(6.0e-4);
+    const amrex::Real qii = amrex::Real(4.5e-4);
+    const amrex::Real qpr = amrex::Real(5.0e-4);
+    const amrex::Real qps = amrex::Real(6.0e-4);
+    const amrex::Real qpg = amrex::Real(7.0e-4);
+    const amrex::Real powr1 = (three + b_rain) / amrex::Real(4.0);
+    const amrex::Real pows1 = (three + b_snow) / amrex::Real(4.0);
+    const amrex::Real powg1 = (three + b_grau) / amrex::Real(4.0);
+    const amrex::Real donor_scale = amrex::Real(1.7);
+    const amrex::Real collector_scale = amrex::Real(1.4);
+
+    const auto rates_for = [&](const amrex::Real qcc_local,
+                               const amrex::Real qii_local,
+                               const amrex::Real qpr_local,
+                               const amrex::Real qps_local,
+                               const amrex::Real qpg_local) {
+        return sam_accretion_rates(
+            dtn, qcc_local, qii_local, qpr_local, qps_local, qpg_local,
+            powr1, pows1, powg1,
+            amrex::Real(0.45), amrex::Real(0.35),
+            amrex::Real(2.0), amrex::Real(2.1), amrex::Real(2.2), amrex::Real(2.3), amrex::Real(2.4));
+    };
+
+    const SAMPrecipSources base = rates_for(qcc, qii, qpr, qps, qpg);
+    const SAMPrecipSources donor_scaled_liquid = rates_for(donor_scale * qcc, qii, qpr, qps, qpg);
+    const SAMPrecipSources donor_scaled_ice = rates_for(qcc, donor_scale * qii, qpr, qps, qpg);
+    const SAMPrecipSources collector_scaled_rain = rates_for(qcc, qii, collector_scale * qpr, qps, qpg);
+    const SAMPrecipSources collector_scaled_snow = rates_for(qcc, qii, qpr, collector_scale * qps, qpg);
+    const SAMPrecipSources collector_scaled_graupel = rates_for(qcc, qii, qpr, qps, collector_scale * qpg);
+
+    EXPECT_NEAR(donor_scaled_liquid.dprc / base.dprc,
+                donor_scale,
+                pow_sqrt_tol(donor_scale));
+    EXPECT_NEAR(donor_scaled_liquid.dpsc / base.dpsc,
+                donor_scale,
+                pow_sqrt_tol(donor_scale));
+    EXPECT_NEAR(donor_scaled_liquid.dpgc / base.dpgc,
+                donor_scale,
+                pow_sqrt_tol(donor_scale));
+    EXPECT_NEAR(donor_scaled_ice.dpsi / base.dpsi,
+                donor_scale,
+                pow_sqrt_tol(donor_scale));
+    EXPECT_NEAR(donor_scaled_ice.dpgi / base.dpgi,
+                donor_scale,
+                pow_sqrt_tol(donor_scale));
+
+    EXPECT_NEAR(collector_scaled_rain.dprc / base.dprc,
+                std::pow(collector_scale, powr1),
+                pow_sqrt_tol(std::pow(collector_scale, powr1)));
+    EXPECT_NEAR(collector_scaled_snow.dpsc / base.dpsc,
+                std::pow(collector_scale, pows1),
+                pow_sqrt_tol(std::pow(collector_scale, pows1)));
+    EXPECT_NEAR(collector_scaled_snow.dpsi / base.dpsi,
+                std::pow(collector_scale, pows1),
+                pow_sqrt_tol(std::pow(collector_scale, pows1)));
+    EXPECT_NEAR(collector_scaled_graupel.dpgc / base.dpgc,
+                std::pow(collector_scale, powg1),
+                pow_sqrt_tol(std::pow(collector_scale, powg1)));
+    EXPECT_NEAR(collector_scaled_graupel.dpgi / base.dpgi,
+                std::pow(collector_scale, powg1),
+                pow_sqrt_tol(std::pow(collector_scale, powg1)));
+}
+
+// Motivation:
+// This is an implementation-specific empirical threshold contract for the
+// current strict SAM selector inequalities in sam_accretion_rates.
+TEST(SAMScalar, AccretionSelectorBoundaries)
+{
+    const amrex::Real delta = amrex::Real(1.0e-6);
+    const auto rates_for = [&](const amrex::Real omp,
+                               const amrex::Real omg) {
+        return sam_accretion_rates(
+            amrex::Real(1.0),
+            amrex::Real(8.0e-4), amrex::Real(5.0e-4),
+            amrex::Real(6.0e-4), amrex::Real(7.0e-4), amrex::Real(8.0e-4),
+            one, one, one,
+            omp, omg,
+            amrex::Real(2.0), amrex::Real(2.1), amrex::Real(2.2), amrex::Real(2.3), amrex::Real(2.4));
+    };
+
+    const SAMPrecipSources rain_below = rates_for(kPhaseActivationLow - delta, amrex::Real(0.5));
+    const SAMPrecipSources rain_equal = rates_for(kPhaseActivationLow, amrex::Real(0.5));
+    const SAMPrecipSources rain_above = rates_for(kPhaseActivationLow + delta, amrex::Real(0.5));
+    EXPECT_NEAR(rain_below.dprc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(rain_equal.dprc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_GT(rain_above.dprc, amrex::Real(0.0));
+
+    const SAMPrecipSources snow_omp_below = rates_for(kPhaseActivationHigh - delta, amrex::Real(0.5));
+    const SAMPrecipSources snow_omp_equal = rates_for(kPhaseActivationHigh, amrex::Real(0.5));
+    const SAMPrecipSources snow_omp_above = rates_for(kPhaseActivationHigh + delta, amrex::Real(0.5));
+    EXPECT_GT(snow_omp_below.dpsc, amrex::Real(0.0));
+    EXPECT_GT(snow_omp_below.dpsi, amrex::Real(0.0));
+    EXPECT_NEAR(snow_omp_equal.dpsc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(snow_omp_equal.dpsi, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(snow_omp_above.dpsc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(snow_omp_above.dpsi, amrex::Real(0.0), exact_zero_tol());
+
+    const SAMPrecipSources snow_omg_below = rates_for(amrex::Real(0.5), kPhaseActivationHigh - delta);
+    const SAMPrecipSources snow_omg_equal = rates_for(amrex::Real(0.5), kPhaseActivationHigh);
+    const SAMPrecipSources snow_omg_above = rates_for(amrex::Real(0.5), kPhaseActivationHigh + delta);
+    EXPECT_GT(snow_omg_below.dpsc, amrex::Real(0.0));
+    EXPECT_GT(snow_omg_below.dpsi, amrex::Real(0.0));
+    EXPECT_NEAR(snow_omg_equal.dpsc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(snow_omg_equal.dpsi, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(snow_omg_above.dpsc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(snow_omg_above.dpsi, amrex::Real(0.0), exact_zero_tol());
+
+    const SAMPrecipSources graupel_omp_below = rates_for(kPhaseActivationHigh - delta,
+                                                          kPhaseActivationLow + delta);
+    const SAMPrecipSources graupel_omp_equal = rates_for(kPhaseActivationHigh,
+                                                          kPhaseActivationLow + delta);
+    const SAMPrecipSources graupel_omp_above = rates_for(kPhaseActivationHigh + delta,
+                                                          kPhaseActivationLow + delta);
+    EXPECT_GT(graupel_omp_below.dpgc, amrex::Real(0.0));
+    EXPECT_GT(graupel_omp_below.dpgi, amrex::Real(0.0));
+    EXPECT_NEAR(graupel_omp_equal.dpgc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(graupel_omp_equal.dpgi, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(graupel_omp_above.dpgc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(graupel_omp_above.dpgi, amrex::Real(0.0), exact_zero_tol());
+
+    const SAMPrecipSources graupel_omg_below = rates_for(amrex::Real(0.5), kPhaseActivationLow - delta);
+    const SAMPrecipSources graupel_omg_equal = rates_for(amrex::Real(0.5), kPhaseActivationLow);
+    const SAMPrecipSources graupel_omg_above = rates_for(amrex::Real(0.5), kPhaseActivationLow + delta);
+    EXPECT_NEAR(graupel_omg_below.dpgc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(graupel_omg_below.dpgi, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(graupel_omg_equal.dpgc, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(graupel_omg_equal.dpgi, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_GT(graupel_omg_above.dpgc, amrex::Real(0.0));
+    EXPECT_GT(graupel_omg_above.dpgi, amrex::Real(0.0));
+}
+
+// Motivation:
 // The cloud-sink limiter must not remove more cloud liquid or ice than is
 // available in the donor cell.
 TEST(SAMScalar, CloudSinkLimiterCapsSinks)
@@ -412,6 +617,107 @@ TEST(SAMScalar, CloudSinkLimiterCapsSinks)
     EXPECT_LE(limited.dqi, qci + flux_conservation_tol(qci));
     EXPECT_NEAR(limited.dqc, qcl, flux_conservation_tol(qcl));
     EXPECT_NEAR(limited.dqi, qci, flux_conservation_tol(qci));
+}
+
+// Motivation:
+// When the cloud-sink limiter is active, all liquid sinks share one scale
+// factor, all ice sinks share another, and the epsilon denominator leaves only
+// the documented epsilon-scale residual to the available cloud mass.
+TEST(SAMScalar, CloudSinkLimiterPreservesProportionsWhenActive)
+{
+    SAMPrecipSources sources{};
+    sources.dqca = amrex::Real(4.0e-4);
+    sources.dprc = amrex::Real(5.0e-4);
+    sources.dpsc = amrex::Real(6.0e-4);
+    sources.dpgc = amrex::Real(7.0e-4);
+    sources.dqia = amrex::Real(3.0e-4);
+    sources.dpsi = amrex::Real(4.0e-4);
+    sources.dpgi = amrex::Real(5.0e-4);
+
+    const amrex::Real qcl = amrex::Real(8.0e-4);
+    const amrex::Real qci = amrex::Real(5.0e-4);
+    const amrex::Real eps = std::numeric_limits<amrex::Real>::epsilon();
+    const amrex::Real raw_liquid_total = sources.dqca + sources.dprc + sources.dpsc + sources.dpgc;
+    const amrex::Real raw_ice_total = sources.dqia + sources.dpsi + sources.dpgi;
+    const amrex::Real expected_scalec = qcl / (raw_liquid_total + eps);
+    const amrex::Real expected_scalei = qci / (raw_ice_total + eps);
+
+    const SAMPrecipSources limited = sam_rescale_cloud_sinks(qcl, qci, eps, sources);
+
+    expect_near_roundoff(limited.dqca, sources.dqca * expected_scalec);
+    expect_near_roundoff(limited.dprc, sources.dprc * expected_scalec);
+    expect_near_roundoff(limited.dpsc, sources.dpsc * expected_scalec);
+    expect_near_roundoff(limited.dpgc, sources.dpgc * expected_scalec);
+    expect_near_roundoff(limited.dqia, sources.dqia * expected_scalei);
+    expect_near_roundoff(limited.dpsi, sources.dpsi * expected_scalei);
+    expect_near_roundoff(limited.dpgi, sources.dpgi * expected_scalei);
+
+    EXPECT_NEAR(limited.dqca / limited.dprc,
+                sources.dqca / sources.dprc,
+                formula_abs_tol(sources.dqca / sources.dprc));
+    EXPECT_NEAR(limited.dpsc / limited.dpgc,
+                sources.dpsc / sources.dpgc,
+                formula_abs_tol(sources.dpsc / sources.dpgc));
+    EXPECT_NEAR(limited.dqia / limited.dpsi,
+                sources.dqia / sources.dpsi,
+                formula_abs_tol(sources.dqia / sources.dpsi));
+
+    const amrex::Real expected_liquid_total = raw_liquid_total * expected_scalec;
+    const amrex::Real expected_ice_total = raw_ice_total * expected_scalei;
+    expect_near_roundoff(limited.dqc, expected_liquid_total);
+    expect_near_roundoff(limited.dqi, expected_ice_total);
+
+    const amrex::Real expected_liquid_residual = qcl - expected_liquid_total;
+    const amrex::Real expected_ice_residual = qci - expected_ice_total;
+    EXPECT_NEAR(qcl - limited.dqc,
+                expected_liquid_residual,
+                roundoff_tol(expected_liquid_residual));
+    EXPECT_NEAR(qci - limited.dqi,
+                expected_ice_residual,
+                roundoff_tol(expected_ice_residual));
+}
+
+// Motivation:
+// When the limiter is inactive, the implementation should preserve the raw
+// cloud sinks up to the intentional epsilon-denominator perturbation.
+TEST(SAMScalar, CloudSinkLimiterIdentityWhenInactive)
+{
+    SAMPrecipSources sources{};
+    sources.dqca = amrex::Real(2.0e-4);
+    sources.dprc = amrex::Real(3.0e-4);
+    sources.dpsc = amrex::Real(4.0e-4);
+    sources.dpgc = amrex::Real(5.0e-4);
+    sources.dqia = amrex::Real(1.5e-4);
+    sources.dpsi = amrex::Real(2.5e-4);
+    sources.dpgi = amrex::Real(3.5e-4);
+
+    const amrex::Real eps = std::numeric_limits<amrex::Real>::epsilon();
+    const amrex::Real raw_liquid_total = sources.dqca + sources.dprc + sources.dpsc + sources.dpgc;
+    const amrex::Real raw_ice_total = sources.dqia + sources.dpsi + sources.dpgi;
+    const amrex::Real scalec = raw_liquid_total / (raw_liquid_total + eps);
+    const amrex::Real scalei = raw_ice_total / (raw_ice_total + eps);
+
+    const SAMPrecipSources limited = sam_rescale_cloud_sinks(
+        amrex::Real(5.0) * raw_liquid_total,
+        amrex::Real(5.0) * raw_ice_total,
+        eps,
+        sources);
+
+    expect_near_roundoff(limited.dqca, sources.dqca * scalec);
+    expect_near_roundoff(limited.dprc, sources.dprc * scalec);
+    expect_near_roundoff(limited.dpsc, sources.dpsc * scalec);
+    expect_near_roundoff(limited.dpgc, sources.dpgc * scalec);
+    expect_near_roundoff(limited.dqia, sources.dqia * scalei);
+    expect_near_roundoff(limited.dpsi, sources.dpsi * scalei);
+    expect_near_roundoff(limited.dpgi, sources.dpgi * scalei);
+
+    EXPECT_NEAR(limited.dqca, sources.dqca, roundoff_tol(sources.dqca));
+    EXPECT_NEAR(limited.dprc, sources.dprc, roundoff_tol(sources.dprc));
+    EXPECT_NEAR(limited.dpsc, sources.dpsc, roundoff_tol(sources.dpsc));
+    EXPECT_NEAR(limited.dpgc, sources.dpgc, roundoff_tol(sources.dpgc));
+    EXPECT_NEAR(limited.dqia, sources.dqia, roundoff_tol(sources.dqia));
+    EXPECT_NEAR(limited.dpsi, sources.dpsi, roundoff_tol(sources.dpsi));
+    EXPECT_NEAR(limited.dpgi, sources.dpgi, roundoff_tol(sources.dpgi));
 }
 
 // Motivation:
@@ -479,6 +785,124 @@ TEST(SAMScalar, PrecipEvaporationLimiterCapsSpecies)
     EXPECT_NEAR(limited.dqpg, amrex::Real(6.0e-4), roundoff_tol(amrex::Real(6.0e-4)));
     EXPECT_NEAR(limited.dqp, limited.dqpr + limited.dqps + limited.dqpg,
                 flux_conservation_tol(limited.dqp));
+}
+
+// Motivation:
+// The scalar evaporation helper uses sqrt(q) plus a power-law term for each
+// precip species; this test locks that exact formula rather than a linear-q
+// approximation.
+TEST(SAMScalar, PrecipEvaporationRatesMatchIndependentFormulas)
+{
+    const amrex::Real qpr = amrex::Real(4.0e-4);
+    const amrex::Real qps = amrex::Real(5.0e-4);
+    const amrex::Real qpg = amrex::Real(6.0e-4);
+    const amrex::Real powr2 = (amrex::Real(5.0) + b_rain) / amrex::Real(8.0);
+    const amrex::Real pows2 = (amrex::Real(5.0) + b_snow) / amrex::Real(8.0);
+    const amrex::Real powg2 = (amrex::Real(5.0) + b_grau) / amrex::Real(8.0);
+    const amrex::Real evapr1 = amrex::Real(1.3);
+    const amrex::Real evapr2 = amrex::Real(1.7);
+    const amrex::Real evaps1 = amrex::Real(1.4);
+    const amrex::Real evaps2 = amrex::Real(1.8);
+    const amrex::Real evapg1 = amrex::Real(1.5);
+    const amrex::Real evapg2 = amrex::Real(1.9);
+
+    const SAMPrecipSources rates = sam_precip_evaporation_rates(
+        qpr, qps, qpg,
+        powr2, pows2, powg2,
+        evapr1, evapr2,
+        evaps1, evaps2,
+        evapg1, evapg2);
+
+    const amrex::Real expected_dqpr = independent_evaporation_rate(qpr, evapr1, evapr2, powr2);
+    const amrex::Real expected_dqps = independent_evaporation_rate(qps, evaps1, evaps2, pows2);
+    const amrex::Real expected_dqpg = independent_evaporation_rate(qpg, evapg1, evapg2, powg2);
+
+    expect_near_pow_sqrt(rates.dqpr, expected_dqpr);
+    expect_near_pow_sqrt(rates.dqps, expected_dqps);
+    expect_near_pow_sqrt(rates.dqpg, expected_dqpg);
+}
+
+// Motivation:
+// The symbolic evaporation audit reduced each rate derivative to
+// 0.5*a/sqrt(q) + p*b*q^(p-1) in the strictly positive domain.
+TEST(SAMScalar, PrecipEvaporationRateDerivativesMatchAnalyticFormulas)
+{
+    const amrex::Real qpr = amrex::Real(4.0e-4);
+    const amrex::Real qps = amrex::Real(5.0e-4);
+    const amrex::Real qpg = amrex::Real(6.0e-4);
+    const amrex::Real powr2 = (amrex::Real(5.0) + b_rain) / amrex::Real(8.0);
+    const amrex::Real pows2 = (amrex::Real(5.0) + b_snow) / amrex::Real(8.0);
+    const amrex::Real powg2 = (amrex::Real(5.0) + b_grau) / amrex::Real(8.0);
+    const amrex::Real evapr1 = amrex::Real(1.3);
+    const amrex::Real evapr2 = amrex::Real(1.7);
+    const amrex::Real evaps1 = amrex::Real(1.4);
+    const amrex::Real evaps2 = amrex::Real(1.8);
+    const amrex::Real evapg1 = amrex::Real(1.5);
+    const amrex::Real evapg2 = amrex::Real(1.9);
+
+    auto rain_rate = [&](const amrex::Real q) {
+        return sam_precip_evaporation_rates(
+            q, qps, qpg,
+            powr2, pows2, powg2,
+            evapr1, evapr2,
+            evaps1, evaps2,
+            evapg1, evapg2).dqpr;
+    };
+    auto snow_rate = [&](const amrex::Real q) {
+        return sam_precip_evaporation_rates(
+            qpr, q, qpg,
+            powr2, pows2, powg2,
+            evapr1, evapr2,
+            evaps1, evaps2,
+            evapg1, evapg2).dqps;
+    };
+    auto graupel_rate = [&](const amrex::Real q) {
+        return sam_precip_evaporation_rates(
+            qpr, qps, q,
+            powr2, pows2, powg2,
+            evapr1, evapr2,
+            evaps1, evaps2,
+            evapg1, evapg2).dqpg;
+    };
+
+    const amrex::Real h_rain = std::min(derivative_step(qpr), amrex::Real(0.25) * qpr);
+    const amrex::Real h_snow = std::min(derivative_step(qps), amrex::Real(0.25) * qps);
+    const amrex::Real h_graupel = std::min(derivative_step(qpg), amrex::Real(0.25) * qpg);
+
+    const amrex::Real d_rain = central_difference(rain_rate, qpr, h_rain);
+    const amrex::Real d_snow = central_difference(snow_rate, qps, h_snow);
+    const amrex::Real d_graupel = central_difference(graupel_rate, qpg, h_graupel);
+
+    const amrex::Real expected_d_rain = amrex::Real(0.5) * evapr1 / std::sqrt(qpr)
+        + powr2 * evapr2 * std::pow(qpr, powr2 - one);
+    const amrex::Real expected_d_snow = amrex::Real(0.5) * evaps1 / std::sqrt(qps)
+        + pows2 * evaps2 * std::pow(qps, pows2 - one);
+    const amrex::Real expected_d_graupel = amrex::Real(0.5) * evapg1 / std::sqrt(qpg)
+        + powg2 * evapg2 * std::pow(qpg, powg2 - one);
+
+    const auto derivative_tol = [](const amrex::Real q,
+                                   const amrex::Real coeff_sqrt,
+                                   const amrex::Real coeff_pow,
+                                   const amrex::Real exponent,
+                                   const amrex::Real expected_derivative,
+                                   const amrex::Real h) {
+        const amrex::Real q_min = q - h;
+        const amrex::Real third_derivative_bound =
+            std::abs(coeff_sqrt) * amrex::Real(3.0)
+                / (amrex::Real(8.0) * std::pow(q_min, amrex::Real(2.5)))
+            + std::abs(coeff_pow * exponent * (exponent - one) * (exponent - amrex::Real(2.0))
+                       * std::pow(q_min, exponent - amrex::Real(3.0)));
+        const amrex::Real truncation_bound = third_derivative_bound * h * h / amrex::Real(6.0);
+        return std::max(amrex::Real(2.0) * finite_difference_tol(expected_derivative, h),
+                        amrex::Real(2.0) * truncation_bound);
+    };
+
+    EXPECT_NEAR(d_rain, expected_d_rain,
+                derivative_tol(qpr, evapr1, evapr2, powr2, expected_d_rain, h_rain));
+    EXPECT_NEAR(d_snow, expected_d_snow,
+                derivative_tol(qps, evaps1, evaps2, pows2, expected_d_snow, h_snow));
+    EXPECT_NEAR(d_graupel, expected_d_graupel,
+                derivative_tol(qpg, evapg1, evapg2, powg2, expected_d_graupel, h_graupel));
 }
 
 // Motivation:
@@ -823,6 +1247,139 @@ TEST(SAMScalar, PrecipComponentFlux_MonotoneInComponentMass)
     EXPECT_GT(rain_fluxes.rain, base_fluxes.rain);
     EXPECT_GT(snow_fluxes.snow, base_fluxes.snow);
     EXPECT_GT(graupel_fluxes.graupel, base_fluxes.graupel);
+}
+
+// Motivation:
+// Component-wise conservative PrecipFall currently activates for any positive
+// qpr, qps, or qpg, with no tiny-precip threshold on the component path.
+TEST(SAMScalar, PrecipComponentFluxTinyPositiveContract)
+{
+    const amrex::Real tiny = amrex::Real(1.0e-12);
+    const amrex::Real vrain = amrex::Real(2.0);
+    const amrex::Real vsnow = amrex::Real(3.0);
+    const amrex::Real vgrau = amrex::Real(4.0);
+
+    const SAMPrecipFluxComponents zero_fluxes = sam_precip_component_fluxes_from_face_state(
+        {amrex::Real(1.0), amrex::Real(270.0), amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0)},
+        vrain, vsnow, vgrau);
+    EXPECT_NEAR(zero_fluxes.rain, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(zero_fluxes.snow, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_NEAR(zero_fluxes.graupel, amrex::Real(0.0), exact_zero_tol());
+
+    const SAMPrecipFluxComponents rain_fluxes = sam_precip_component_fluxes_from_face_state(
+        {amrex::Real(1.0), amrex::Real(270.0), tiny, amrex::Real(0.0), amrex::Real(0.0)},
+        vrain, vsnow, vgrau);
+    const SAMPrecipFluxComponents snow_fluxes = sam_precip_component_fluxes_from_face_state(
+        {amrex::Real(1.0), amrex::Real(270.0), amrex::Real(0.0), tiny, amrex::Real(0.0)},
+        vrain, vsnow, vgrau);
+    const SAMPrecipFluxComponents graupel_fluxes = sam_precip_component_fluxes_from_face_state(
+        {amrex::Real(1.0), amrex::Real(270.0), amrex::Real(0.0), amrex::Real(0.0), tiny},
+        vrain, vsnow, vgrau);
+
+    EXPECT_GT(rain_fluxes.rain, amrex::Real(0.0));
+    EXPECT_GT(snow_fluxes.snow, amrex::Real(0.0));
+    EXPECT_GT(graupel_fluxes.graupel, amrex::Real(0.0));
+}
+
+// Motivation:
+// Away from zero, each density-corrected component flux has the closed-form
+// derivative F = v*(rho*q)^(1+c)*sqrt(rho0/rho), with dF/dq = (1+c)F/q and
+// dF/drho = (c+1/2)F/rho.
+TEST(SAMScalar, PrecipComponentFluxDerivativeInPositiveDomain)
+{
+    const amrex::Real rho0 = amrex::Real(1.29);
+    const amrex::Real rho = amrex::Real(0.97);
+
+    struct ComponentCase {
+        const char* label;
+        amrex::Real q;
+        amrex::Real velocity;
+        amrex::Real exponent;
+        int species;
+    };
+
+    const std::array<ComponentCase, 3> cases = {{
+        {"rain", amrex::Real(4.0e-4), amrex::Real(2.0), crain, 0},
+        {"snow", amrex::Real(5.0e-4), amrex::Real(3.0), csnow, 1},
+        {"graupel", amrex::Real(6.0e-4), amrex::Real(4.0), cgrau, 2}
+    }};
+
+    const auto q_derivative_tol = [](const amrex::Real expected_flux,
+                                     const amrex::Real q,
+                                     const amrex::Real exponent,
+                                     const amrex::Real expected_derivative,
+                                     const amrex::Real h) {
+        const amrex::Real third_derivative_bound =
+            std::abs(expected_flux * (one + exponent) * exponent * (exponent - one)
+                     / std::pow(q, amrex::Real(3.0)));
+        const amrex::Real truncation_bound = third_derivative_bound * h * h / amrex::Real(6.0);
+        return std::max(amrex::Real(2.0) * finite_difference_tol(expected_derivative, h),
+                        amrex::Real(2.0) * truncation_bound);
+    };
+
+    const auto rho_derivative_tol = [](const amrex::Real expected_flux,
+                                       const amrex::Real rho_local,
+                                       const amrex::Real exponent,
+                                       const amrex::Real expected_derivative,
+                                       const amrex::Real h) {
+        const amrex::Real rho_power = exponent + myhalf;
+        const amrex::Real third_derivative_bound =
+            std::abs(expected_flux * rho_power * (rho_power - one) * (rho_power - amrex::Real(2.0))
+                     / std::pow(rho_local, amrex::Real(3.0)));
+        const amrex::Real truncation_bound = third_derivative_bound * h * h / amrex::Real(6.0);
+        return std::max(amrex::Real(2.0) * finite_difference_tol(expected_derivative, h),
+                        amrex::Real(2.0) * truncation_bound);
+    };
+
+    for (const ComponentCase& test_case : cases) {
+        SCOPED_TRACE(test_case.label);
+        auto flux = [&](const amrex::Real q_component,
+                        const amrex::Real rho_component) {
+            SAMPrecipComponentFaceState face_state{};
+            face_state.rho_avg = rho_component;
+            face_state.tabs_avg = amrex::Real(265.0);
+            face_state.qpr_avg = (test_case.species == 0) ? q_component : amrex::Real(0.0);
+            face_state.qps_avg = (test_case.species == 1) ? q_component : amrex::Real(0.0);
+            face_state.qpg_avg = (test_case.species == 2) ? q_component : amrex::Real(0.0);
+
+            const SAMPrecipFluxComponents raw_fluxes =
+                sam_precip_component_fluxes_from_face_state(face_state,
+                                                            amrex::Real(2.0),
+                                                            amrex::Real(3.0),
+                                                            amrex::Real(4.0));
+            const SAMPrecipFluxComponents corrected_fluxes =
+                sam_precip_flux_components_density_corrected(raw_fluxes, rho0, rho_component);
+            if (test_case.species == 0) {
+                return corrected_fluxes.rain;
+            }
+            if (test_case.species == 1) {
+                return corrected_fluxes.snow;
+            }
+            return corrected_fluxes.graupel;
+        };
+
+        const amrex::Real base_flux = flux(test_case.q, rho);
+        const amrex::Real expected_flux = independent_component_flux(
+            rho0, rho, test_case.q, test_case.velocity, test_case.exponent);
+        expect_near_pow_sqrt(base_flux, expected_flux);
+
+        const amrex::Real h_q = std::min(derivative_step(test_case.q), amrex::Real(0.25) * test_case.q);
+        const amrex::Real h_rho = std::min(derivative_step(rho), amrex::Real(0.25) * rho);
+        const amrex::Real dF_dq = central_difference([&](const amrex::Real q_component) {
+            return flux(q_component, rho);
+        }, test_case.q, h_q);
+        const amrex::Real dF_drho = central_difference([&](const amrex::Real rho_component) {
+            return flux(test_case.q, rho_component);
+        }, rho, h_rho);
+
+        const amrex::Real expected_dF_dq = (one + test_case.exponent) * expected_flux / test_case.q;
+        const amrex::Real expected_dF_drho = (test_case.exponent + myhalf) * expected_flux / rho;
+
+        EXPECT_NEAR(dF_dq, expected_dF_dq,
+                    q_derivative_tol(expected_flux, test_case.q, test_case.exponent, expected_dF_dq, h_q));
+        EXPECT_NEAR(dF_drho, expected_dF_drho,
+                    rho_derivative_tol(expected_flux, rho, test_case.exponent, expected_dF_drho, h_rho));
+    }
 }
 
 // Motivation:
