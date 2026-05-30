@@ -216,14 +216,6 @@ amrex::Real mixed_phase_tabs_value () noexcept
     return amrex::Real(0.5) * (lower + upper);
 }
 
-amrex::Real mixed_phase_tabs ()
-{
-    const amrex::Real lower = std::max(tprmin, tgrmin) + amrex::Real(1.0e-3);
-    const amrex::Real upper = std::min(tprmax, tgrmax) - amrex::Real(1.0e-3);
-    EXPECT_LT(lower, upper);
-    return mixed_phase_tabs_value();
-}
-
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real mixed_qsat_for_state (const MoistureType moisture_type,
                                   const amrex::Real tabs,
