@@ -153,8 +153,22 @@ public:
     int
     Qstate_Moist_Size () override { return SAM::n_qstate_moist_size; }
 
+    int
+    Qstate_Moist_NumConc_Size () override { return SAM::n_qstate_moist_numconc_size; }
+
     void
-    Set_RealWidth (const int real_width) override { m_real_width = real_width; }
+    Qmoist_Restart_Vars (const SolverChoice& /*a_sc*/,
+                         std::vector<int>& a_idx,
+                         std::vector<std::string>& a_names) const override
+    {
+        a_idx.clear();
+        a_names.clear();
+
+        // NOTE: These are the indices to access into qmoist (not mic_fab_vars)
+        a_idx.push_back(0); a_names.push_back("RainAccum");
+        a_idx.push_back(1); a_names.push_back("SnowAccum");
+        a_idx.push_back(2); a_names.push_back("GraupAccum");
+    }
 
     AMREX_GPU_HOST_DEVICE
     AMREX_FORCE_INLINE
@@ -271,26 +285,15 @@ public:
         return tabs;
     }
 
-    void
-    Qmoist_Restart_Vars (const SolverChoice& /*a_sc*/,
-                         std::vector<int>& a_idx,
-                         std::vector<std::string>& a_names) const override
-    {
-        a_idx.clear();
-        a_names.clear();
-
-        // NOTE: These are the indices to access into qmoist (not mic_fab_vars)
-        a_idx.push_back(0); a_names.push_back("RainAccum");
-        a_idx.push_back(1); a_names.push_back("SnowAccum");
-        a_idx.push_back(2); a_names.push_back("GraupAccum");
-    }
-
 private:
     // Number of qmoist variables (rain_accum, snow_accum, graup_accum)
     int m_qmoist_size = 3;
 
     // Number of qstate variables
     int n_qstate_moist_size = 6;
+
+    // Number of qstate variables that are number concentrations
+    int n_qstate_moist_numconc_size = 0;
 
     // CFL MAX for vertical advection
     static constexpr amrex::Real CFL_MAX = myhalf;
@@ -300,9 +303,6 @@ private:
 
     // geometry
     amrex::Geometry m_geom;
-
-    // Nudging + set width
-    int m_real_width{0};
 
     // timestep
     amrex::Real dt;
