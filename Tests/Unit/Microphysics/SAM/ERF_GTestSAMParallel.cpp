@@ -208,17 +208,26 @@ void poison_ghost_cells (amrex::MultiFab& cons,
     amrex::Gpu::streamSynchronize();
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real mixed_phase_tabs_value () noexcept
+{
+    const amrex::Real lower = amrex::max(tprmin, tgrmin) + amrex::Real(1.0e-3);
+    const amrex::Real upper = amrex::min(tprmax, tgrmax) - amrex::Real(1.0e-3);
+    return amrex::Real(0.5) * (lower + upper);
+}
+
 amrex::Real mixed_phase_tabs ()
 {
     const amrex::Real lower = std::max(tprmin, tgrmin) + amrex::Real(1.0e-3);
     const amrex::Real upper = std::min(tprmax, tgrmax) - amrex::Real(1.0e-3);
     EXPECT_LT(lower, upper);
-    return amrex::Real(0.5) * (lower + upper);
+    return mixed_phase_tabs_value();
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real mixed_qsat_for_state (const MoistureType moisture_type,
                                   const amrex::Real tabs,
-                                  const amrex::Real pres_mbar)
+                                  const amrex::Real pres_mbar) noexcept
 {
     amrex::Real qsatw;
     amrex::Real qsati;
@@ -229,11 +238,12 @@ amrex::Real mixed_qsat_for_state (const MoistureType moisture_type,
     return sam_mixed_qsat(omn, qsatw, qsati);
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 SAMCellState make_precip_budget_state (const int i,
                                        const int j,
                                        const int k,
                                        const MoistureType moisture_type,
-                                       const amrex::Real pres_mbar)
+                                       const amrex::Real pres_mbar) noexcept
 {
     const int pattern = (i + 2 * j + 3 * k) % 4;
 
@@ -253,7 +263,7 @@ SAMCellState make_precip_budget_state (const int i,
         qpr = amrex::Real(3.0e-4);
         break;
     case 1:
-        tabs = mixed_phase_tabs();
+        tabs = mixed_phase_tabs_value();
         vapor_fraction = amrex::Real(0.6);
         qcl = qcw0 + amrex::Real(8.0e-4);
         qci = qci0 + amrex::Real(7.0e-4);
@@ -279,7 +289,7 @@ SAMCellState make_precip_budget_state (const int i,
         qci = amrex::Real(0.0);
         qps = amrex::Real(0.0);
         qpg = amrex::Real(0.0);
-        tabs = std::max(tbgmax + amrex::Real(1.0), tabs);
+        tabs = amrex::max(tbgmax + amrex::Real(1.0), tabs);
     }
 
     const amrex::Real qv = vapor_fraction * mixed_qsat_for_state(moisture_type, tabs, pres_mbar);
@@ -407,11 +417,12 @@ void fill_precipfall_conserved_state (amrex::MultiFab& cons,
     amrex::Gpu::streamSynchronize();
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 SAMCellState make_precipfall_component_budget_state (const int i,
                                                      const int j,
                                                      const int k,
                                                      const int nz,
-                                                     const amrex::Real pres_mbar)
+                                                     const amrex::Real pres_mbar) noexcept
 {
     const bool is_top = (k == nz - 1);
     const int phase_index = (i + j + k) % 3;

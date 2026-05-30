@@ -958,10 +958,8 @@ SAMSurfaceAccumulation sam_surface_accumulation (const SAMPrecipFaceState& face_
                                                  const amrex::Real vgrau,
                                                  const amrex::Real dtn) noexcept
 {
-    SAMSurfaceAccumulation result{};
     const SAMPrecipFluxComponents face_fluxes =
         sam_precip_flux_components_from_face_state(face_state, vrain, vsnow, vgrau);
-    const amrex::Real density_correction = std::sqrt(rho_0 / face_state.rho_avg);
 
     return sam_surface_accumulation_from_component_fluxes(
         sam_precip_flux_components_density_corrected(face_fluxes, rho_0, face_state.rho_avg),

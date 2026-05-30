@@ -143,7 +143,8 @@ amrex::Real kernel_mixed_qsat_for_state (const int sam_mode,
     return sam_mixed_qsat(omn, qsatw, qsati);
 }
 
-SAMCellState make_precip_kernel_state (const SAMPrecipKernelCase& test_case)
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMCellState make_precip_kernel_state (const SAMPrecipKernelCase& test_case) noexcept
 {
     SAMCellState state{};
     state.tabs = test_case.tabs;
@@ -162,7 +163,8 @@ SAMCellState make_precip_kernel_state (const SAMPrecipKernelCase& test_case)
     return state;
 }
 
-SAMPrecipConfig make_precip_kernel_config (const SAMPrecipKernelCase& test_case)
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMPrecipConfig make_precip_kernel_config (const SAMPrecipKernelCase& test_case) noexcept
 {
     return {
         test_case.mode,
@@ -181,7 +183,8 @@ SAMPrecipConfig make_precip_kernel_config (const SAMPrecipKernelCase& test_case)
         (amrex::Real(5.0) + b_grau) / amrex::Real(8.0)};
 }
 
-SAMCoefficientRow make_precip_kernel_coeffs (const amrex::Real scale)
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+SAMCoefficientRow make_precip_kernel_coeffs (const amrex::Real scale) noexcept
 {
     return {
         amrex::Real(2.0) * scale,

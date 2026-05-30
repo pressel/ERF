@@ -37,9 +37,10 @@ amrex::Real mixed_phase_tabs ()
     return amrex::Real(0.5) * (lower + upper);
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real mixed_qsat_for_state (const int sam_mode,
                                   const amrex::Real tabs,
-                                  const amrex::Real pres_mbar)
+                                  const amrex::Real pres_mbar) noexcept
 {
     amrex::Real qsatw;
     amrex::Real qsati;
@@ -49,6 +50,7 @@ amrex::Real mixed_qsat_for_state (const int sam_mode,
     return sam_mixed_qsat(omn, qsatw, qsati);
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 SAMCellState make_cell_state (const amrex::Real tabs,
                               const amrex::Real pres_mbar,
                               const amrex::Real qv,
@@ -56,7 +58,7 @@ SAMCellState make_cell_state (const amrex::Real tabs,
                               const amrex::Real qci,
                               const amrex::Real qpr,
                               const amrex::Real qps,
-                              const amrex::Real qpg)
+                              const amrex::Real qpg) noexcept
 {
     SAMCellState state{};
     state.tabs = tabs;
@@ -186,7 +188,6 @@ PrecipFallRunDiagnostics compute_precipfall_run_diagnostics (const amrex::Geomet
                                                              const amrex::MultiFab* detJ_cc = nullptr)
 {
     const amrex::Real rho0 = amrex::Real(1.29);
-    const amrex::Real coef_full = dt / geom.CellSize(2);
     const auto terminal_velocities = precipfall_terminal_velocities();
 
     PrecipFallRunDiagnostics diagnostics{};
@@ -431,6 +432,38 @@ void fill_precipfall_mixed_component_state (amrex::MultiFab& cons,
             arr(i,j,k,RhoKE_comp) = amrex::Real(0.0);
             arr(i,j,k,RhoScalar_comp) = amrex::Real(0.0);
             sam_primitive_to_cons(state, arr, i, j, k);
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+}
+
+void fill_single_cell_from_sam_state (amrex::MultiFab& cons,
+                                      const SAMCellState& state)
+{
+    cons.setVal(amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        auto arr = cons.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            arr(i,j,k,Rho_comp) = state.rho;
+            arr(i,j,k,RhoKE_comp) = amrex::Real(0.0);
+            arr(i,j,k,RhoScalar_comp) = amrex::Real(0.0);
+            sam_primitive_to_cons(state, arr, i, j, k);
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+}
+
+void fill_precipfall_detj (amrex::MultiFab& detJ_cc)
+{
+    for (amrex::MFIter mfi(detJ_cc, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        auto detj = detJ_cc.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            detj(i,j,k) = amrex::Real(0.8) + amrex::Real(0.05) * i + amrex::Real(0.03) * j + amrex::Real(0.07) * k;
         });
     }
 
@@ -801,18 +834,7 @@ TEST(SAMPhysicalProperties, PublicPrecipConstantPressureLatentProxySingleCell)
     amrex::BoxArray ba(domain);
     amrex::DistributionMapping dm(ba);
     amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
-    cons.setVal(amrex::Real(0.0));
-    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.validbox();
-        auto arr = cons.array(mfi);
-        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            arr(i,j,k,Rho_comp) = state.rho;
-            arr(i,j,k,RhoKE_comp) = amrex::Real(0.0);
-            arr(i,j,k,RhoScalar_comp) = amrex::Real(0.0);
-            sam_primitive_to_cons(state, arr, i, j, k);
-        });
-    }
-    amrex::Gpu::streamSynchronize();
+    fill_single_cell_from_sam_state(cons, state);
 
     amrex::MultiFab pressure0_mbar(ba, dm, 1, 0);
     fill_pressure_snapshot_from_cons(cons, pressure0_mbar);
@@ -1090,14 +1112,7 @@ TEST(SAMPhysicalProperties, PrecipFall_DetJWeightedComponentBudgetsClose)
     amrex::MultiFab cons(ba, dm, RhoQ6_comp + 1, 0);
     fill_precipfall_mixed_component_state(cons, pres_mbar);
     amrex::MultiFab detJ_cc(ba, dm, 1, 0);
-    for (amrex::MFIter mfi(detJ_cc, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.validbox();
-        auto detj = detJ_cc.array(mfi);
-        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            detj(i,j,k) = amrex::Real(0.8) + amrex::Real(0.05) * i + amrex::Real(0.03) * j + amrex::Real(0.07) * k;
-        });
-    }
-    amrex::Gpu::streamSynchronize();
+    fill_precipfall_detj(detJ_cc);
 
     const PrecipFallBudgetSummary summary =
         run_precipfall_budget_case(geom, cons, MoistureType::SAM, dt, &detJ_cc);
