@@ -42,8 +42,7 @@ void launch_morrison_helper_kernel (const int ncases,
         morrison_apply_warm_small_ice_melt_to_rain(state, kLatentFusion, kCpm);
         const MorrisonDistributionParameters distribution = morrison_exponential_distribution_parameters(
             cases_ptr[idx].distribution_mass, cases_ptr[idx].distribution_number,
-            cases_ptr[idx].coefficient, cases_ptr[idx].lambda_min, cases_ptr[idx].lambda_max,
-            amrex::Real(3.0));
+            cases_ptr[idx].coefficient, cases_ptr[idx].lambda_min, cases_ptr[idx].lambda_max);
 
         outputs_ptr[idx] = KernelOutputs{state, effective_radii, cleanup, distribution};
     });
@@ -93,7 +92,7 @@ KernelOutputs host_reference (const KernelCase& test_case)
     morrison_apply_warm_small_ice_melt_to_rain(state, kLatentFusion, kCpm);
     const MorrisonDistributionParameters distribution = morrison_exponential_distribution_parameters(
         test_case.distribution_mass, test_case.distribution_number, test_case.coefficient,
-        test_case.lambda_min, test_case.lambda_max, amrex::Real(3.0));
+        test_case.lambda_min, test_case.lambda_max);
     return KernelOutputs{state, effective_radii, cleanup, distribution};
 }
 

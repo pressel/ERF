@@ -107,7 +107,12 @@ TEST(MorrisonScalar, SubsaturationCleanup_ConservesWaterAndCoolsByLatentCoeffici
         kCpm * (state.temperature - temperature_before)
       + liquid_removed * kLatentVaporization
       + ice_removed * kLatentSublimation;
-        EXPECT_NEAR(latent_residual, amrex::Real(0.0), latent_proxy_tol(6, temperature_before, kCpm));
+        const amrex::Real latent_energy_scale = liquid_removed * kLatentVaporization
+                                                                                    + ice_removed * kLatentSublimation;
+        const amrex::Real reconstructed_temperature_energy_scale = kCpm *
+            std::max(std::abs(state.temperature), std::abs(temperature_before));
+        EXPECT_NEAR(latent_residual, amrex::Real(0.0),
+                    latent_proxy_tol(6, latent_energy_scale, reconstructed_temperature_energy_scale));
 }
 
 // Motivation: Both saturation-ratio tests use strict less-than. Exactly at the
@@ -159,7 +164,10 @@ TEST(MorrisonScalar, WarmSmallIceMelt_TransfersMassNumberAndAppliesFusionCooling
     expect_near_formula(state.ng, amrex::Real(0.0));
     const amrex::Real latent_residual = kCpm * (state.temperature - temperature_before)
                                       + melted_mass * kLatentFusion;
-    EXPECT_NEAR(latent_residual, amrex::Real(0.0), latent_proxy_tol(3, temperature_before, kCpm));
+    const amrex::Real reconstructed_temperature_energy_scale = kCpm *
+        std::max(std::abs(state.temperature), std::abs(temperature_before));
+    EXPECT_NEAR(latent_residual, amrex::Real(0.0),
+                latent_proxy_tol(3, melted_mass * kLatentFusion, reconstructed_temperature_energy_scale));
 
     MorrisonCellState equality = make_state(amrex::Real(1.0e-2), amrex::Real(0.0), amrex::Real(0.0),
                                             amrex::Real(2.0e-4), morrison_warm_small_ice_melt_threshold,
@@ -170,6 +178,82 @@ TEST(MorrisonScalar, WarmSmallIceMelt_TransfersMassNumberAndAppliesFusionCooling
     expect_near_formula(equality.qs, morrison_warm_small_ice_melt_threshold);
     expect_near_formula(equality.qg, morrison_warm_small_ice_melt_threshold);
     expect_near_formula(equality.nr, amrex::Real(100.0));
+}
+
+// Motivation: Morrison autoconversion is a double-moment source: it transfers
+// cloud mass to rain while limiting cloud and rain number tendencies. This
+// protects the production threshold and the two number-limit branches.
+TEST(MorrisonScalar, WarmRainAutoconversion_ThresholdFormulaAndNumberLimits)
+{
+    const amrex::Real qc = amrex::Real(1.2e-6);
+    const amrex::Real nc = amrex::Real(1.0e8);
+    const amrex::Real rho = amrex::Real(1.1);
+    const amrex::Real dt = amrex::Real(2.0);
+    const MorrisonAutoconversionRates inactive = morrison_compute_warm_rain_autoconversion(
+        morrison_autoconversion_cloud_water_threshold * amrex::Real(0.5), nc, rho, dt, kCons29);
+    EXPECT_EQ(inactive.active, 0);
+    EXPECT_NEAR(inactive.prc + inactive.nprc + inactive.nprc1, amrex::Real(0.0), exact_zero_tol());
+
+    const MorrisonAutoconversionRates rates = morrison_compute_warm_rain_autoconversion(qc, nc, rho, dt, kCons29);
+    const amrex::Real expected_prc = amrex::Real(1350.0) * std::pow(qc, amrex::Real(2.47)) *
+        std::pow(nc / amrex::Real(1.0e6) * rho, -amrex::Real(1.79));
+    EXPECT_EQ(rates.active, 1);
+    EXPECT_NEAR(rates.prc, expected_prc, backend_math_abs_tol(expected_prc));
+    EXPECT_NEAR(rates.nprc, expected_prc / (qc / nc), backend_math_abs_tol(expected_prc / (qc / nc)));
+    EXPECT_NEAR(rates.nprc1, expected_prc / kCons29, backend_math_abs_tol(expected_prc / kCons29));
+    EXPECT_EQ(rates.nprc_limited, 0);
+    EXPECT_EQ(rates.nprc1_limited, 0);
+
+    const MorrisonAutoconversionRates limited = morrison_compute_warm_rain_autoconversion(
+        amrex::Real(2.0e-3), amrex::Real(1.0e6), rho, amrex::Real(1000.0), kCons29);
+    EXPECT_EQ(limited.nprc_limited, 1);
+    EXPECT_EQ(limited.nprc1_limited, 1);
+    EXPECT_NEAR(limited.nprc, amrex::Real(1.0e3), backend_math_abs_tol(amrex::Real(1.0e3)));
+    EXPECT_NEAR(limited.nprc1, limited.nprc, backend_math_abs_tol(limited.nprc));
+}
+
+// Motivation: Cloud-rain accretion is another cloud-to-rain local transfer.
+// The scalar helper protects the strict production thresholds and exact formula.
+TEST(MorrisonScalar, CloudRainAccretion_ThresholdAndFormula)
+{
+    const amrex::Real qc = amrex::Real(1.0e-4);
+    const amrex::Real qr = amrex::Real(2.0e-4);
+    const amrex::Real nc = amrex::Real(8.0e7);
+    const MorrisonAccretionRates inactive = morrison_compute_cloud_rain_accretion(
+        morrison_cloud_rain_accretion_threshold * amrex::Real(0.5), qr, nc);
+    EXPECT_EQ(inactive.active, 0);
+    EXPECT_NEAR(inactive.pra + inactive.npra, amrex::Real(0.0), exact_zero_tol());
+
+    const MorrisonAccretionRates rates = morrison_compute_cloud_rain_accretion(qc, qr, nc);
+    const amrex::Real expected_pra = amrex::Real(67.0) * std::pow(qc * qr, amrex::Real(1.15));
+    EXPECT_EQ(rates.active, 1);
+    EXPECT_NEAR(rates.pra, expected_pra, backend_math_abs_tol(expected_pra));
+    EXPECT_NEAR(rates.npra, expected_pra / (qc / nc), backend_math_abs_tol(expected_pra / (qc / nc)));
+}
+
+// Motivation: Warm-branch QC conservation scales autoconversion and accretion
+// together when requested cloud-water sinks exceed available cloud water.
+TEST(MorrisonScalar, CloudWaterSinkLimiter_ScalesRainSourcesTogether)
+{
+    const amrex::Real qc = amrex::Real(3.0e-4);
+    const amrex::Real dt = amrex::Real(10.0);
+    amrex::Real prc = amrex::Real(7.0e-5);
+    amrex::Real pra = amrex::Real(5.0e-5);
+    const MorrisonCloudWaterLimiterDiagnostics diagnostics =
+        morrison_apply_cloud_water_sink_limiter(qc, dt, kQSmall, prc, pra);
+    const amrex::Real expected_ratio = qc / ((amrex::Real(7.0e-5) + amrex::Real(5.0e-5)) * dt);
+    EXPECT_EQ(diagnostics.limited, 1);
+    EXPECT_NEAR(diagnostics.ratio, expected_ratio, formula_abs_tol(expected_ratio));
+    EXPECT_NEAR(prc, amrex::Real(7.0e-5) * expected_ratio, formula_abs_tol(prc));
+    EXPECT_NEAR(pra, amrex::Real(5.0e-5) * expected_ratio, formula_abs_tol(pra));
+    EXPECT_LE((prc + pra) * dt, qc + property_tol(2, qc));
+
+    prc = amrex::Real(1.0e-7);
+    pra = amrex::Real(1.0e-7);
+    const MorrisonCloudWaterLimiterDiagnostics no_limit =
+        morrison_apply_cloud_water_sink_limiter(qc, dt, kQSmall, prc, pra);
+    EXPECT_EQ(no_limit.limited, 0);
+    EXPECT_NEAR(no_limit.ratio, amrex::Real(1.0), exact_zero_tol());
 }
 
 // Motivation: Rain, snow, and graupel exponential PSD helpers enforce lambda
@@ -194,14 +278,14 @@ TEST(MorrisonScalar, ExponentialDistribution_EnforcesSlopeBoundsAndMassNumberCon
         const amrex::Real in_range_lambda = amrex::Real(0.5) * (species.lambda_min + species.lambda_max);
         const amrex::Real in_range_number = number_for_lambda(mass, species.coefficient, in_range_lambda);
         const MorrisonDistributionParameters in_range = morrison_exponential_distribution_parameters(
-            mass, in_range_number, species.coefficient, species.lambda_min, species.lambda_max, amrex::Real(3.0));
+            mass, in_range_number, species.coefficient, species.lambda_min, species.lambda_max);
         expect_distribution_matches(in_range, in_range_lambda, in_range_number, in_range_number * in_range_lambda);
         EXPECT_EQ(in_range.limited_to_min, 0);
         EXPECT_EQ(in_range.limited_to_max, 0);
 
         const MorrisonDistributionParameters lower = morrison_exponential_distribution_parameters(
             mass, number_for_lambda(mass, species.coefficient, species.lambda_min * amrex::Real(0.25)),
-            species.coefficient, species.lambda_min, species.lambda_max, amrex::Real(3.0));
+            species.coefficient, species.lambda_min, species.lambda_max);
         expect_distribution_matches(lower, species.lambda_min,
                                     expected_adjusted_number(mass, species.coefficient, species.lambda_min),
                                     expected_intercept(mass, species.coefficient, species.lambda_min));
@@ -210,7 +294,7 @@ TEST(MorrisonScalar, ExponentialDistribution_EnforcesSlopeBoundsAndMassNumberCon
 
         const MorrisonDistributionParameters upper = morrison_exponential_distribution_parameters(
             mass, number_for_lambda(mass, species.coefficient, species.lambda_max * amrex::Real(4.0)),
-            species.coefficient, species.lambda_min, species.lambda_max, amrex::Real(3.0));
+            species.coefficient, species.lambda_min, species.lambda_max);
         expect_distribution_matches(upper, species.lambda_max,
                                     expected_adjusted_number(mass, species.coefficient, species.lambda_max),
                                     expected_intercept(mass, species.coefficient, species.lambda_max));

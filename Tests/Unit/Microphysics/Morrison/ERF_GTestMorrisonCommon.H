@@ -15,33 +15,37 @@
 
 namespace morrison_test {
 
-// Morrison unit-test contract, first testability slice
-// ----------------------------------------------------
-// These tests cover scalar helpers extracted from local Morrison source blocks
-// that were already device-reachable in Morrison::Advance. They protect
-// threshold equality, qsmall mass-number cleanup, warm tiny-ice melt semantics,
-// latent-heating signs, exponential PSD slope bounds, and host/device parity.
-// Broader source-term, sedimentation, public-path, and MPI contracts are
-// documented as known gaps in the Morrison README.
-
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_qsmall initialization.
 constexpr amrex::Real kQSmall = amrex::Real(1.0e-14);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_pi initialization.
 constexpr amrex::Real kPi = amrex::Real(3.1415926535897932384626434);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_rhow initialization.
 constexpr amrex::Real kRhoWater = amrex::Real(997.0);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_rhosn initialization.
 constexpr amrex::Real kRhoSnow = amrex::Real(100.0);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_rhog graupel initialization when m_ihail == 0.
 constexpr amrex::Real kRhoGraupel = amrex::Real(400.0);
 constexpr amrex::Real kRainCoefficient = kPi * kRhoWater;
 constexpr amrex::Real kSnowCoefficient = kPi * kRhoSnow;
 constexpr amrex::Real kGraupelCoefficient = kPi * kRhoGraupel;
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_lamminr and m_lammaxr initialization.
 constexpr amrex::Real kLamMinRain = amrex::Real(1.0) / amrex::Real(2800.0e-6);
 constexpr amrex::Real kLamMaxRain = amrex::Real(1.0) / amrex::Real(20.0e-6);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_lammins and m_lammaxs initialization.
 constexpr amrex::Real kLamMinSnow = amrex::Real(1.0) / amrex::Real(2000.0e-6);
 constexpr amrex::Real kLamMaxSnow = amrex::Real(1.0) / amrex::Real(10.0e-6);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_lamming and m_lammaxg initialization.
 constexpr amrex::Real kLamMinGraupel = amrex::Real(1.0) / amrex::Real(2000.0e-6);
 constexpr amrex::Real kLamMaxGraupel = amrex::Real(1.0) / amrex::Real(20.0e-6);
+// Mirrors Morrison C++ path latent heat magnitudes used by helper-level latent residual tests.
 constexpr amrex::Real kLatentVaporization = amrex::Real(2.5e6);
 constexpr amrex::Real kLatentSublimation = amrex::Real(2.834e6);
 constexpr amrex::Real kLatentFusion = kLatentSublimation - kLatentVaporization;
+// Mirrors Morrison helper-level moist heat capacity scale for isolated residual tests.
 constexpr amrex::Real kCpm = amrex::Real(1007.0);
+// MUST MATCH Source/Microphysics/Morrison/ERF_AdvanceMorrison.cpp: m_cons29 initialization.
+constexpr amrex::Real kCons29 = amrex::Real(4.0) / amrex::Real(3.0) * kPi * kRhoWater *
+                                amrex::Real(25.0e-6) * amrex::Real(25.0e-6) * amrex::Real(25.0e-6);
 
 inline amrex::Real formula_abs_tol (const amrex::Real expected)
 {
@@ -87,12 +91,10 @@ inline amrex::Real property_tol (const int num_terms,
 }
 
 inline amrex::Real latent_proxy_tol (const int num_terms,
-                                     const amrex::Real temperature_scale,
-                                     const amrex::Real cpm)
+                                     const amrex::Real latent_energy_scale,
+                                     const amrex::Real reconstructed_temperature_energy_scale)
 {
-    // Provenance: latent tests reconstruct cpm * dT from the difference of two
-    // O(temperature_scale) temperatures after an O(1e-5 K) update.
-    return property_tol(num_terms, temperature_scale * cpm);
+    return property_tol(num_terms, std::max(latent_energy_scale, reconstructed_temperature_energy_scale));
 }
 
 inline void sync ()

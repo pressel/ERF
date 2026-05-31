@@ -1,6 +1,7 @@
 #ifndef ERF_MORRISON_UTILS_H_
 #define ERF_MORRISON_UTILS_H_
 
+#include <algorithm>
 #include <cmath>
 
 #include <AMReX_GpuQualifiers.H>
@@ -21,15 +22,6 @@ struct MorrisonCellState {
     amrex::Real nr;
     amrex::Real ns;
     amrex::Real ng;
-};
-
-struct MorrisonConfig {
-    amrex::Real dt;
-    amrex::Real qsmall;
-    bool no_ice;
-    bool use_graupel;
-    bool use_number_concentrations;
-    bool enable_sedimentation;
 };
 
 struct MorrisonEffectiveRadii {
@@ -57,9 +49,44 @@ struct MorrisonDistributionParameters {
     int limited_to_max;
 };
 
+struct MorrisonAutoconversionRates {
+    amrex::Real prc;
+    amrex::Real nprc;
+    amrex::Real nprc1;
+    int active;
+    int nprc_limited;
+    int nprc1_limited;
+};
+
+struct MorrisonAccretionRates {
+    amrex::Real pra;
+    amrex::Real npra;
+    int active;
+};
+
+struct MorrisonCloudWaterLimiterDiagnostics {
+    amrex::Real ratio;
+    int limited;
+};
+
+struct MorrisonSedimentationBudget {
+    amrex::Real flux_divergence;
+    amrex::Real mixing_ratio_tendency;
+    amrex::Real density_content_delta;
+};
+
+struct MorrisonSurfacePrecipitationIncrement {
+    amrex::Real precipitation;
+    amrex::Real snow;
+    amrex::Real snow_plus_ice;
+    amrex::Real graupel;
+};
+
 static constexpr amrex::Real morrison_subsaturation_ratio_threshold = amrex::Real(0.9);
 static constexpr amrex::Real morrison_subsaturation_cleanup_threshold = amrex::Real(1.0e-8);
 static constexpr amrex::Real morrison_warm_small_ice_melt_threshold = amrex::Real(1.0e-6);
+static constexpr amrex::Real morrison_autoconversion_cloud_water_threshold = amrex::Real(1.0e-6);
+static constexpr amrex::Real morrison_cloud_rain_accretion_threshold = amrex::Real(1.0e-8);
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real morrison_total_water_full (const MorrisonCellState& state) noexcept
@@ -183,18 +210,123 @@ void morrison_apply_warm_small_ice_melt_to_rain (
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+MorrisonAutoconversionRates morrison_compute_warm_rain_autoconversion (
+    const amrex::Real qc,
+    const amrex::Real nc,
+    const amrex::Real rho,
+    const amrex::Real dt,
+    const amrex::Real cons29) noexcept
+{
+    MorrisonAutoconversionRates rates{amrex::Real(0), amrex::Real(0), amrex::Real(0), 0, 0, 0};
+
+    if (qc >= morrison_autoconversion_cloud_water_threshold) {
+        rates.active = 1;
+        rates.prc = amrex::Real(1350.0) * std::pow(qc, amrex::Real(2.47)) *
+            std::pow(nc / amrex::Real(1.0e6) * rho, -amrex::Real(1.79));
+        rates.nprc1 = rates.prc / cons29;
+        rates.nprc = rates.prc / (qc / nc);
+
+        const amrex::Real nprc_limit = nc / dt;
+        if (rates.nprc > nprc_limit) {
+            rates.nprc_limited = 1;
+        }
+        rates.nprc = std::min(rates.nprc, nprc_limit);
+
+        if (rates.nprc1 > rates.nprc) {
+            rates.nprc1_limited = 1;
+        }
+        rates.nprc1 = std::min(rates.nprc1, rates.nprc);
+    }
+
+    return rates;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+MorrisonAccretionRates morrison_compute_cloud_rain_accretion (
+    const amrex::Real qc,
+    const amrex::Real qr,
+    const amrex::Real nc) noexcept
+{
+    MorrisonAccretionRates rates{amrex::Real(0), amrex::Real(0), 0};
+
+    if (qr >= morrison_cloud_rain_accretion_threshold && qc >= morrison_cloud_rain_accretion_threshold) {
+        rates.active = 1;
+        rates.pra = amrex::Real(67.0) * std::pow(qc * qr, amrex::Real(1.15));
+        rates.npra = rates.pra / (qc / nc);
+    }
+
+    return rates;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+MorrisonCloudWaterLimiterDiagnostics morrison_apply_cloud_water_sink_limiter (
+    const amrex::Real qc,
+    const amrex::Real dt,
+    const amrex::Real qsmall,
+    amrex::Real& prc,
+    amrex::Real& pra) noexcept
+{
+    MorrisonCloudWaterLimiterDiagnostics diagnostics{amrex::Real(1), 0};
+    const amrex::Real requested_cloud_water = (prc + pra) * dt;
+
+    if (requested_cloud_water > qc && qc >= qsmall) {
+        diagnostics.limited = 1;
+        diagnostics.ratio = qc / requested_cloud_water;
+        prc = prc * diagnostics.ratio;
+        pra = pra * diagnostics.ratio;
+    }
+
+    return diagnostics;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+MorrisonSedimentationBudget morrison_sedimentation_budget (
+    const amrex::Real fallout_from_above,
+    const amrex::Real fallout_to_below,
+    const amrex::Real dz,
+    const amrex::Real rho,
+    const amrex::Real dt,
+    const int nstep) noexcept
+{
+    const amrex::Real flux_divergence = (fallout_from_above - fallout_to_below) / dz;
+    const amrex::Real step_scale = amrex::Real(1) / static_cast<amrex::Real>(nstep);
+    return MorrisonSedimentationBudget{flux_divergence,
+                                       flux_divergence * step_scale / rho,
+                                       flux_divergence * dt * step_scale};
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+MorrisonSurfacePrecipitationIncrement morrison_surface_precipitation_increment (
+    const amrex::Real fallout_rain,
+    const amrex::Real fallout_cloud_water,
+    const amrex::Real fallout_snow,
+    const amrex::Real fallout_cloud_ice,
+    const amrex::Real fallout_graupel,
+    const amrex::Real dt,
+    const int nstep) noexcept
+{
+    const amrex::Real step_dt = dt / static_cast<amrex::Real>(nstep);
+    return MorrisonSurfacePrecipitationIncrement{
+        (fallout_rain + fallout_cloud_water + fallout_snow + fallout_cloud_ice + fallout_graupel) * step_dt,
+        (fallout_snow + fallout_cloud_ice + fallout_graupel) * step_dt,
+        (fallout_cloud_ice + fallout_snow) * step_dt,
+        fallout_graupel * step_dt};
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 MorrisonDistributionParameters morrison_exponential_distribution_parameters (
     const amrex::Real mass,
     const amrex::Real number,
     const amrex::Real coefficient,
     const amrex::Real lambda_min,
-    const amrex::Real lambda_max,
-    const amrex::Real shape_exponent) noexcept
+    const amrex::Real lambda_max) noexcept
 {
     MorrisonDistributionParameters params{amrex::Real(0), amrex::Real(0), number, 0, 0, 0};
 
     params.active = 1;
-    params.lambda = std::pow(coefficient * number / mass, amrex::Real(1) / shape_exponent);
+    // This helper is intentionally limited to Morrison rain/snow/graupel exponential
+    // distributions, where mass = coefficient * number / lambda^3.
+    params.lambda = std::pow(coefficient * number / mass, amrex::Real(1) / amrex::Real(3));
     params.intercept = number * params.lambda;
 
     // MUST MATCH: current Morrison slope clamp and number readjustment policy.

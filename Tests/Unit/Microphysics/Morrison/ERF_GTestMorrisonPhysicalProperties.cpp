@@ -21,6 +21,23 @@ TEST(MorrisonPhysicalProperties, TotalWaterDefinitionsSeparateFullAndNoIceModes)
     EXPECT_NEAR(morrison_total_water_no_ice(state), amrex::Real(1.04e-2), formula_abs_tol(amrex::Real(1.04e-2)));
 }
 
+// Motivation: Autoconversion and accretion are local cloud-to-rain transfers.
+// The extracted helper contract is that the mass tendencies are exactly paired:
+// cloud water lost by these terms appears as rain before other processes act.
+TEST(MorrisonPhysicalProperties, WarmRainSourcesConserveLocalLiquidMass)
+{
+    const MorrisonAutoconversionRates autoconversion = morrison_compute_warm_rain_autoconversion(
+        amrex::Real(1.0e-4), amrex::Real(8.0e7), amrex::Real(1.1), amrex::Real(1.0), kCons29);
+    const MorrisonAccretionRates accretion = morrison_compute_cloud_rain_accretion(
+        amrex::Real(1.0e-4), amrex::Real(2.0e-4), amrex::Real(8.0e7));
+
+    const amrex::Real qc_tendency = -autoconversion.prc - accretion.pra;
+    const amrex::Real qr_tendency = autoconversion.prc + accretion.pra;
+    EXPECT_NEAR(qc_tendency + qr_tendency, amrex::Real(0.0), exact_zero_tol());
+    EXPECT_LE(qc_tendency, amrex::Real(0.0));
+    EXPECT_GE(qr_tendency, amrex::Real(0.0));
+}
+
 // Motivation: qsmall cleanup is a mass-number consistency limiter. Whenever a
 // mass species is removed, the corresponding number concentration must be
 // removed too; species at or above threshold must remain untouched.
@@ -99,10 +116,10 @@ TEST(MorrisonPhysicalProperties, ExponentialDistributionMaintainsMassNumberRelat
     const amrex::Real mass = amrex::Real(2.0e-4);
     const MorrisonDistributionParameters rain_min = morrison_exponential_distribution_parameters(
         mass, number_for_lambda(mass, kRainCoefficient, kLamMinRain * amrex::Real(0.5)),
-        kRainCoefficient, kLamMinRain, kLamMaxRain, amrex::Real(3.0));
+        kRainCoefficient, kLamMinRain, kLamMaxRain);
     const MorrisonDistributionParameters rain_max = morrison_exponential_distribution_parameters(
         mass, number_for_lambda(mass, kRainCoefficient, kLamMaxRain * amrex::Real(2.0)),
-        kRainCoefficient, kLamMinRain, kLamMaxRain, amrex::Real(3.0));
+        kRainCoefficient, kLamMinRain, kLamMaxRain);
 
     for (const MorrisonDistributionParameters& params : {rain_min, rain_max}) {
         SCOPED_TRACE("lambda=" + std::to_string(static_cast<double>(params.lambda)));
@@ -114,4 +131,61 @@ TEST(MorrisonPhysicalProperties, ExponentialDistributionMaintainsMassNumberRelat
         EXPECT_GE(params.number, -exact_zero_tol());
         EXPECT_GE(params.intercept, -exact_zero_tol());
     }
+}
+
+// Motivation: Sedimentation is conservative inside a column: summing density
+// content changes over all levels leaves only the boundary fluxes. Morrison's
+// top boundary has zero incoming flux, so the column loss equals bottom fallout.
+TEST(MorrisonPhysicalProperties, SedimentationBudgetTelescopesToBottomFallout)
+{
+    const std::array<amrex::Real, 3> fallout_to_below = {{amrex::Real(2.0e-5),
+                                                          amrex::Real(4.0e-5),
+                                                          amrex::Real(7.0e-5)}};
+    const amrex::Real dz = amrex::Real(80.0);
+    const amrex::Real rho = amrex::Real(1.0);
+    const amrex::Real dt = amrex::Real(2.5);
+    const int nstep = 2;
+
+    amrex::Real column_integrated_density_content_delta = amrex::Real(0);
+    for (int k = static_cast<int>(fallout_to_below.size()) - 1; k >= 0; --k) {
+        const amrex::Real fallout_from_above = (k + 1 < static_cast<int>(fallout_to_below.size()))
+            ? fallout_to_below[static_cast<std::size_t>(k + 1)] : amrex::Real(0);
+        const MorrisonSedimentationBudget budget = morrison_sedimentation_budget(
+            fallout_from_above, fallout_to_below[static_cast<std::size_t>(k)], dz, rho, dt, nstep);
+        column_integrated_density_content_delta += budget.density_content_delta * dz;
+        EXPECT_NEAR(budget.mixing_ratio_tendency * rho * dt,
+                    budget.density_content_delta,
+                    backend_math_abs_tol(budget.density_content_delta));
+    }
+
+    const amrex::Real expected_column_loss = -fallout_to_below[0] * dt / static_cast<amrex::Real>(nstep);
+    EXPECT_NEAR(column_integrated_density_content_delta, expected_column_loss,
+                property_tol(static_cast<int>(fallout_to_below.size()), expected_column_loss));
+}
+
+// Motivation: Surface accumulators must use the same bottom fallout fluxes as
+// sedimentation. This protects the rain/snow/graupel partitioning formulas.
+TEST(MorrisonPhysicalProperties, SurfacePrecipitationIncrementUsesBottomFluxPartition)
+{
+    const amrex::Real rain = amrex::Real(3.0e-5);
+    const amrex::Real cloud_water = amrex::Real(2.0e-6);
+    const amrex::Real snow = amrex::Real(4.0e-6);
+    const amrex::Real cloud_ice = amrex::Real(5.0e-6);
+    const amrex::Real graupel = amrex::Real(6.0e-6);
+    const amrex::Real dt = amrex::Real(5.0);
+    const int nstep = 4;
+    const amrex::Real step_dt = dt / static_cast<amrex::Real>(nstep);
+
+    const MorrisonSurfacePrecipitationIncrement increment = morrison_surface_precipitation_increment(
+        rain, cloud_water, snow, cloud_ice, graupel, dt, nstep);
+
+    EXPECT_NEAR(increment.precipitation, (rain + cloud_water + snow + cloud_ice + graupel) * step_dt,
+                formula_abs_tol(increment.precipitation));
+    EXPECT_NEAR(increment.snow, (snow + cloud_ice + graupel) * step_dt,
+                formula_abs_tol(increment.snow));
+    EXPECT_NEAR(increment.snow_plus_ice, (cloud_ice + snow) * step_dt,
+                formula_abs_tol(increment.snow_plus_ice));
+    EXPECT_NEAR(increment.graupel, graupel * step_dt, formula_abs_tol(increment.graupel));
+    EXPECT_LE(increment.snow_plus_ice, increment.snow + property_tol(2, increment.snow));
+    EXPECT_LE(increment.graupel, increment.snow + property_tol(2, increment.snow));
 }

@@ -1034,7 +1034,7 @@ namespace MORRInd {
                 if (morr_arr(i,j,k,MORRInd::qr3d) >= m_qsmall) {
                   const MorrisonDistributionParameters rain_distribution = morrison_exponential_distribution_parameters(
                     morr_arr(i,j,k,MORRInd::qr3d), morr_arr(i,j,k,MORRInd::nr3d), m_pi * m_rhow,
-                    m_lamminr, m_lammaxr, three);
+                    m_lamminr, m_lammaxr);
                   morr_arr(i,j,k,MORRInd::lamr) = rain_distribution.lambda;
                   morr_arr(i,j,k,MORRInd::n0r) = rain_distribution.intercept;
                   morr_arr(i,j,k,MORRInd::nr3d) = rain_distribution.number;
@@ -1083,7 +1083,7 @@ namespace MORRInd {
                 if (morr_arr(i,j,k,MORRInd::qni3d) >= m_qsmall) {
                   const MorrisonDistributionParameters snow_distribution = morrison_exponential_distribution_parameters(
                     morr_arr(i,j,k,MORRInd::qni3d), morr_arr(i,j,k,MORRInd::ns3d), m_cons1,
-                    m_lammins, m_lammaxs, ds0);
+                    m_lammins, m_lammaxs);
                   morr_arr(i,j,k,MORRInd::lams) = snow_distribution.lambda;
                   morr_arr(i,j,k,MORRInd::n0s) = snow_distribution.intercept;
                   morr_arr(i,j,k,MORRInd::ns3d) = snow_distribution.number;
@@ -1093,7 +1093,7 @@ namespace MORRInd {
                 if (morr_arr(i,j,k,MORRInd::qg3d) >= m_qsmall) {
                   const MorrisonDistributionParameters graupel_distribution = morrison_exponential_distribution_parameters(
                     morr_arr(i,j,k,MORRInd::qg3d), morr_arr(i,j,k,MORRInd::ng3d), m_cons2,
-                    m_lamming, m_lammaxg, dg0);
+                    m_lamming, m_lammaxg);
                   morr_arr(i,j,k,MORRInd::lamg) = graupel_distribution.lambda;
                   morr_arr(i,j,k,MORRInd::n0g) = graupel_distribution.intercept;
                   morr_arr(i,j,k,MORRInd::ng3d) = graupel_distribution.number;
@@ -1133,21 +1133,12 @@ namespace MORRInd {
 
                 // USE MINIMUM VALUE OF Real(1.E-6) TO PREVENT FLOATING POINT ERROR
 
-                if (morr_arr(i,j,k,MORRInd::qc3d) >= Real(1.0e-6)) {
-                  // HM ADD 12/13/06, REPLACE WITH NEWER FORMULA
-                  // FROM KHAIROUTDINOV AND KOGAN 2000, MWR
-                  prc = Real(1350.0) * std::pow(morr_arr(i,j,k,MORRInd::qc3d), Real(2.47)) *
-                    std::pow((morr_arr(i,j,k,MORRInd::nc3d)/Real(1.0e6)*morr_arr(i,j,k,MORRInd::rho)), -Real(1.79));
-
-                  // note: nprc1 is change in Nr,
-                  // nprc is change in Nc
-                  nprc1 = prc / m_cons29;
-                  nprc = prc / (morr_arr(i,j,k,MORRInd::qc3d) / morr_arr(i,j,k,MORRInd::nc3d));
-
-                  // hm bug fix 3/20/12
-                  nprc = std::min(nprc, morr_arr(i,j,k,MORRInd::nc3d) / dt);
-                  nprc1 = std::min(nprc1, nprc);
-                }
+                const MorrisonAutoconversionRates autoconversion = morrison_compute_warm_rain_autoconversion(
+                  morr_arr(i,j,k,MORRInd::qc3d), morr_arr(i,j,k,MORRInd::nc3d),
+                  morr_arr(i,j,k,MORRInd::rho), dt, m_cons29);
+                prc = autoconversion.prc;
+                nprc = autoconversion.nprc;
+                nprc1 = autoconversion.nprc1;
 
                 // HM ADD 12/13/06, COLLECTION OF SNOW BY RAIN ABOVE FREEZING
                 // FORMULA FROM IKAWA AND SAITO (1991)
@@ -1221,13 +1212,11 @@ namespace MORRInd {
                 // CONTINUOUS COLLECTION EQUATION WITH
                 // GRAVITATIONAL COLLECTION KERNEL, DROPLET FALL SPEED NEGLECTED
 
-                if (morr_arr(i,j,k,MORRInd::qr3d) >= Real(1.0e-8) && morr_arr(i,j,k,MORRInd::qc3d) >= Real(1.0e-8)) {
-                  // 12/13/06 HM ADD, REPLACE WITH NEWER FORMULA FROM
-                  // KHAIROUTDINOV AND KOGAN 2000, MWR
-                  dum = morr_arr(i,j,k,MORRInd::qc3d) * morr_arr(i,j,k,MORRInd::qr3d);
-                  pra = Real(67.0) * std::pow(dum, Real(1.15));
-                  npra = pra / (morr_arr(i,j,k,MORRInd::qc3d) / morr_arr(i,j,k,MORRInd::nc3d));
-                }
+                const MorrisonAccretionRates accretion = morrison_compute_cloud_rain_accretion(
+                  morr_arr(i,j,k,MORRInd::qc3d), morr_arr(i,j,k,MORRInd::qr3d),
+                  morr_arr(i,j,k,MORRInd::nc3d));
+                pra = accretion.pra;
+                npra = accretion.npra;
 
                 // SELF-COLLECTION OF RAIN DROPS
                 // FROM BEHENG(1994)
@@ -1330,13 +1319,8 @@ namespace MORRInd {
                 pracg = Real(0);
                 pracs = Real(0);
                 // CONSERVATION OF QC
-                dum = (prc + pra) * dt;
-
-                if (dum > morr_arr(i,j,k,MORRInd::qc3d) && morr_arr(i,j,k,MORRInd::qc3d) >= m_qsmall) {
-                  ratio = morr_arr(i,j,k,MORRInd::qc3d) / dum;
-                  prc = prc * ratio;
-                  pra = pra * ratio;
-                }
+                morrison_apply_cloud_water_sink_limiter(
+                  morr_arr(i,j,k,MORRInd::qc3d), dt, m_qsmall, prc, pra);
 
                 // CONSERVATION OF SNOW
                 dum = (-psmlt - evpms + pracs) * dt;
@@ -1699,21 +1683,12 @@ namespace MORRInd {
                 // AS A GAMMA DISTRIBUTION
 
                 // USE MINIMUM VALUE OF Real(1.E-6) TO PREVENT FLOATING POINT ERROR
-                if (morr_arr(i,j,k,MORRInd::qc3d) >= Real(1.0e-6)) {
-                  // hm add 12/13/06, replace with newer formula
-                  // from khairoutdinov and kogan 2000, mwr
-                  prc = Real(1350.0) * std::pow(morr_arr(i,j,k,MORRInd::qc3d), Real(2.47)) *
-                    std::pow((morr_arr(i,j,k,MORRInd::nc3d) / Real(1.0e6) * morr_arr(i,j,k,MORRInd::rho)), -Real(1.79));
-
-                  // note: nprc1 is change in nr,
-                  // nprc is change in nc
-                  nprc1 = prc / m_cons29;
-                  nprc = prc / (morr_arr(i,j,k,MORRInd::qc3d) / morr_arr(i,j,k,MORRInd::nc3d));
-
-                  // hm bug fix 3/20/12
-                  nprc = std::min(nprc, morr_arr(i,j,k,MORRInd::nc3d) / dt);
-                  nprc1 = std::min(nprc1, nprc);
-                }
+                const MorrisonAutoconversionRates autoconversion = morrison_compute_warm_rain_autoconversion(
+                  morr_arr(i,j,k,MORRInd::qc3d), morr_arr(i,j,k,MORRInd::nc3d),
+                  morr_arr(i,j,k,MORRInd::rho), dt, m_cons29);
+                prc = autoconversion.prc;
+                nprc = autoconversion.nprc;
+                nprc1 = autoconversion.nprc1;
                 // SNOW AGGREGATION FROM PASSARELLI, 1978, USED BY REISNER, 1998
                 // THIS IS HARD-WIRED FOR BS = Real(0.4) FOR NOW
                 if (morr_arr(i,j,k,MORRInd::qni3d) >= Real(1.0e-8)) {
@@ -2005,13 +1980,11 @@ namespace MORRInd {
                 // ACCRETION OF CLOUD LIQUID WATER BY RAIN
                 // CONTINUOUS COLLECTION EQUATION WITH
                 // GRAVITATIONAL COLLECTION KERNEL, DROPLET FALL SPEED NEGLECTED
-                if (morr_arr(i,j,k,MORRInd::qr3d) >= Real(1.0e-8) && morr_arr(i,j,k,MORRInd::qc3d) >= Real(1.0e-8)) {
-                  // 12/13/06 hm add, replace with newer formula from
-                  // khairoutdinov and kogan 2000, mwr
-                  dum = morr_arr(i,j,k,MORRInd::qc3d) * morr_arr(i,j,k,MORRInd::qr3d);
-                  pra = Real(67.0) * std::pow(dum, Real(1.15));
-                  npra = pra / (morr_arr(i,j,k,MORRInd::qc3d) / morr_arr(i,j,k,MORRInd::nc3d));
-                }
+                const MorrisonAccretionRates accretion = morrison_compute_cloud_rain_accretion(
+                  morr_arr(i,j,k,MORRInd::qc3d), morr_arr(i,j,k,MORRInd::qr3d),
+                  morr_arr(i,j,k,MORRInd::nc3d));
+                pra = accretion.pra;
+                npra = accretion.npra;
 
                 // SELF-COLLECTION OF RAIN DROPS
                 // FROM BEHENG(1994)
@@ -2774,13 +2747,16 @@ namespace MORRInd {
               // Factor of 1000 converts from m to mm, but division by density
               // of liquid water cancels this factor of 1000
               int kts=klo;
-              morr_arr(i,j,klo,MORRInd::precrt) += (morr_arr(i,j,kts,MORRInd::faloutr) + morr_arr(i,j,kts,MORRInd::faloutc) + morr_arr(i,j,kts,MORRInd::falouts) +
-                         morr_arr(i,j,kts,MORRInd::falouti) + morr_arr(i,j,kts,MORRInd::faloutg)) * dt / nstep;
-              morr_arr(i,j,klo,MORRInd::snowrt) += (morr_arr(i,j,kts,MORRInd::falouts) + morr_arr(i,j,kts,MORRInd::falouti) + morr_arr(i,j,kts,MORRInd::faloutg)) * dt / nstep;
+              const MorrisonSurfacePrecipitationIncrement surface_precipitation = morrison_surface_precipitation_increment(
+                morr_arr(i,j,kts,MORRInd::faloutr), morr_arr(i,j,kts,MORRInd::faloutc),
+                morr_arr(i,j,kts,MORRInd::falouts), morr_arr(i,j,kts,MORRInd::falouti),
+                morr_arr(i,j,kts,MORRInd::faloutg), dt, nstep);
+              morr_arr(i,j,klo,MORRInd::precrt) += surface_precipitation.precipitation;
+              morr_arr(i,j,klo,MORRInd::snowrt) += surface_precipitation.snow;
 
               // Added 7/13/13
-              morr_arr(i,j,klo,MORRInd::snowprt) += (morr_arr(i,j,kts,MORRInd::falouti) + morr_arr(i,j,kts,MORRInd::falouts)) * dt / nstep;
-              morr_arr(i,j,klo,MORRInd::grplprt) += morr_arr(i,j,kts,MORRInd::faloutg) * dt / nstep;
+              morr_arr(i,j,klo,MORRInd::snowprt) += surface_precipitation.snow_plus_ice;
+              morr_arr(i,j,klo,MORRInd::grplprt) += surface_precipitation.graupel;
             }
 
             for(int k=klo; k<=khi; k++) {
