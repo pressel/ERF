@@ -18,6 +18,14 @@ SAM::PrecipFall (const SolverChoice& sc)
 {
     if (sam_is_no_precip(sc.moisture_type)) return;
 
+    // Conservative component-sedimentation contract: rain, snow, and graupel
+    // sediment with separate component fluxes. Each face flux is limited by
+    // the donor cell's available component mass, including detJ when present.
+    // The same limited bottom fluxes update surface accumulation and the
+    // in-column qpr/qps/qpg flux-divergence update. This closes component and
+    // total precipitation column budgets up to roundoff. Sedimentation does
+    // not update theta.
+
     Real rho_0 = Real(1.29);
 
     Real gamr3 = erf_gammafff(Real(4.0)+b_rain);

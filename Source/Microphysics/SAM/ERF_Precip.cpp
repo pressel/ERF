@@ -114,6 +114,8 @@ SAM::Precip (const SolverChoice& sc)
                 evapr1_t(k),
                 evapr2_t(k)};
 
+            // The scalar helper owns the local held-pressure source update;
+            // this public kernel handles state staging and coefficient lookup.
             state = sam_precip_cell_update(state, coeffs, precip_config);
 
             theta_array(i,j,k) = state.theta;
