@@ -338,10 +338,10 @@ void fill_nonuniform_detj (amrex::MultiFab& detJ_cc)
     amrex::Gpu::streamSynchronize();
 }
 
-struct IceFallSubstepReductionDiagnostics {
+struct IceFallFluxReductionDiagnostics {
     amrex::Real initial_qci_mass{amrex::Real(0.0)};
-    amrex::Real local_max_reduced_flux{amrex::Real(0.0)};
-    amrex::Real global_max_reduced_flux{amrex::Real(0.0)};
+    amrex::Real local_max_flux{amrex::Real(0.0)};
+    amrex::Real global_max_flux{amrex::Real(0.0)};
     int local_n_substep{0};
     int global_n_substep{0};
     int owned_box_count{0};
@@ -349,77 +349,117 @@ struct IceFallSubstepReductionDiagnostics {
 };
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-amrex::Real icefall_reduction_rho (const int i,
-                                   const int j,
-                                   const int k) noexcept
+SAMCellState make_icefall_reduction_state (const bool high_flux_region,
+                                          const int k,
+                                          const int k_hi) noexcept
 {
-    return amrex::Real(1.0) + amrex::Real(0.02) * i + amrex::Real(0.03) * j + amrex::Real(0.04) * k;
+    const amrex::Real tabs = amrex::Real(245.0);
+    const amrex::Real pres_mbar = amrex::Real(900.0);
+    const amrex::Real qv = amrex::Real(1.0e-2);
+    const amrex::Real qci_scale = amrex::Real(k_hi + 1 - k);
+
+    SAMCellState state{};
+    state.tabs = tabs;
+    state.pres_mbar = pres_mbar;
+    state.qv = qv;
+    state.qcl = zero;
+    state.qci = (high_flux_region ? amrex::Real(5.0e-4) : amrex::Real(5.0e-6)) * qci_scale;
+    state.qpr = zero;
+    state.qps = zero;
+    state.qpg = zero;
+    state.qn = state.qcl + state.qci;
+    state.qt = state.qv + state.qn;
+    state.qp = zero;
+    state.theta = sam_theta_from_stored_mbar_converted_to_pa(tabs, pres_mbar, kRdOcp);
+    state.rho = getRhogivenTandPress(tabs, sam_mbar_to_pa(pres_mbar), qv);
+    return state;
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-amrex::Real icefall_reduction_qci (const int i,
-                                   const int j,
-                                   const int k) noexcept
+amrex::Real icefall_mixing_ratio_from_conserved (const amrex::Real rho_qci,
+                                                 const amrex::Real rho) noexcept
 {
-    const amrex::Real stripe_boost = (i >= 6) ? amrex::Real(5.0e-3) : amrex::Real(0.0);
-    return amrex::Real(2.0e-4) + amrex::Real(5.0e-4) * i + amrex::Real(1.0e-4) * j +
-           amrex::Real(2.0e-4) * k + stripe_boost;
+    return rho_qci / rho;
 }
 
-void fill_icefall_reduction_state (amrex::MultiFab& rho,
-                                   amrex::MultiFab& qci)
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real icefall_face_flux (const amrex::Real rho_face,
+                               const amrex::Real qci_face) noexcept
 {
-    rho.setVal(amrex::Real(0.0));
-    qci.setVal(amrex::Real(0.0));
+    return rho_face * sam_cloud_ice_terminal_velocity(qci_face) * qci_face;
+}
 
-    for (amrex::MFIter mfi(rho, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+void fill_icefall_reduction_conserved_state (amrex::MultiFab& cons,
+                                             const amrex::Geometry& geom)
+{
+    const int k_hi = geom.Domain().bigEnd(2);
+    const int i_hi = geom.Domain().bigEnd(0);
+
+    cons.setVal(amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
         const amrex::Box& bx = mfi.validbox();
-        auto rho_arr = rho.array(mfi);
-        auto qci_arr = qci.array(mfi);
+        auto arr = cons.array(mfi);
         amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            rho_arr(i,j,k) = icefall_reduction_rho(i, j, k);
-            qci_arr(i,j,k) = icefall_reduction_qci(i, j, k);
+            const bool high_flux_region = (i >= i_hi - 1);
+            const SAMCellState state = make_icefall_reduction_state(high_flux_region, k, k_hi);
+
+            arr(i,j,k,Rho_comp) = state.rho;
+            arr(i,j,k,RhoTheta_comp) = state.rho * state.theta;
+            arr(i,j,k,RhoKE_comp) = zero;
+            arr(i,j,k,RhoScalar_comp) = zero;
+            sam_primitive_to_cons(state, arr, i, j, k);
         });
     }
 
     amrex::Gpu::streamSynchronize();
 }
 
-IceFallSubstepReductionDiagnostics compute_icefall_substep_reduction_diagnostics (
+IceFallFluxReductionDiagnostics compute_icefall_flux_reduction_diagnostics (
     const amrex::Geometry& geom,
-    const amrex::MultiFab& rho,
-    const amrex::MultiFab& qci,
+    const amrex::MultiFab& cons,
     const amrex::Real dt)
 {
-    IceFallSubstepReductionDiagnostics diagnostics{};
+    IceFallFluxReductionDiagnostics diagnostics{};
     const amrex::Box domain = geom.Domain();
     const int k_lo = domain.smallEnd(2);
     const int k_hi = domain.bigEnd(2);
+    const amrex::Real dz = geom.CellSize(2);
     const amrex::Real cell_volume = geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
 
+    diagnostics.initial_qci_mass = cons.sum(RhoQ3_comp) * cell_volume;
+
     amrex::MultiFab fz;
-    fz.define(amrex::convert(qci.boxArray(), amrex::IntVect(0, 0, 1)), qci.DistributionMap(), 1, 0);
+    const amrex::IntVect ng = cons.nGrowVect();
+    const amrex::BoxArray ba = cons.boxArray();
+    const amrex::DistributionMapping dm = cons.DistributionMap();
+    fz.define(amrex::convert(ba, amrex::IntVect(0, 0, 1)), dm, 1, ng);
     fz.setVal(amrex::Real(0.0));
 
     for (amrex::MFIter mfi(fz, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& box3d = mfi.tilebox();
-        auto qci_arr = qci.const_array(mfi);
-        auto rho_arr = rho.const_array(mfi);
-        auto fz_arr = fz.array(mfi);
+        auto cons_array = cons.const_array(mfi);
+        auto fz_array = fz.array(mfi);
 
-        amrex::ParallelFor(box3d, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            const amrex::Real rho_km1 = (k == k_lo) ? rho_arr(i,j,k) : rho_arr(i,j,k-1);
-            const amrex::Real rho_k = (k == k_hi + 1) ? rho_arr(i,j,k-1) : rho_arr(i,j,k);
-            const amrex::Real qci_km1 = (k == k_lo) ? qci_arr(i,j,k) : qci_arr(i,j,k-1);
-            const amrex::Real qci_k = (k == k_hi + 1) ? qci_arr(i,j,k-1) : qci_arr(i,j,k);
+        const auto& box3d = mfi.tilebox();
+
+        amrex::ParallelFor(box3d, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            const amrex::Real rho_km1 = (k == k_lo) ? cons_array(i,j,k,Rho_comp)
+                                                    : cons_array(i,j,k-1,Rho_comp);
+            const amrex::Real rho_k = (k == k_hi + 1) ? cons_array(i,j,k-1,Rho_comp)
+                                                      : cons_array(i,j,k,Rho_comp);
+            const amrex::Real qci_km1 = (k == k_lo)
+                ? icefall_mixing_ratio_from_conserved(cons_array(i,j,k,RhoQ3_comp), rho_km1)
+                : icefall_mixing_ratio_from_conserved(cons_array(i,j,k-1,RhoQ3_comp), rho_km1);
+            const amrex::Real qci_k = (k == k_hi + 1)
+                ? icefall_mixing_ratio_from_conserved(cons_array(i,j,k-1,RhoQ3_comp), rho_k)
+                : icefall_mixing_ratio_from_conserved(cons_array(i,j,k,RhoQ3_comp), rho_k);
             const SAMFaceState face_state = sam_face_average_state(k, k_lo, k_hi,
                                                                    rho_km1, rho_k,
                                                                    zero, zero,
                                                                    qci_km1, qci_k,
                                                                    zero, zero);
-            fz_arr(i,j,k) = face_state.rho_avg *
-                            sam_cloud_ice_terminal_velocity(face_state.qci_avg) *
-                            face_state.qci_avg;
+            fz_array(i,j,k) = icefall_face_flux(face_state.rho_avg, face_state.qci_avg);
         });
     }
 
@@ -434,34 +474,22 @@ IceFallSubstepReductionDiagnostics compute_icefall_substep_reduction_diagnostics
             return {fz_arrays[box_no](i,j,k)};
         });
 
-    diagnostics.local_max_reduced_flux = amrex::max(amrex::Real(0.0), amrex::get<0>(max_reduced_flux));
-    diagnostics.global_max_reduced_flux = diagnostics.local_max_reduced_flux;
-    amrex::ParallelDescriptor::ReduceRealMax(diagnostics.global_max_reduced_flux);
+    diagnostics.local_max_flux = amrex::max(amrex::Real(0.0), amrex::get<0>(max_reduced_flux));
+    diagnostics.global_max_flux = diagnostics.local_max_flux;
+    amrex::ParallelDescriptor::ReduceRealMax(diagnostics.global_max_flux);
 
     diagnostics.local_n_substep = sam_substep_count_from_reduced_flux(
-        diagnostics.local_max_reduced_flux + std::numeric_limits<amrex::Real>::epsilon(),
+        diagnostics.local_max_flux + std::numeric_limits<amrex::Real>::epsilon(),
         dt,
-        geom.CellSize(2));
+        dz);
     diagnostics.global_n_substep = sam_substep_count_from_reduced_flux(
-        diagnostics.global_max_reduced_flux + std::numeric_limits<amrex::Real>::epsilon(),
+        diagnostics.global_max_flux + std::numeric_limits<amrex::Real>::epsilon(),
         dt,
-        geom.CellSize(2));
-
-    const auto rho_arrays = rho.const_arrays();
-    const auto qci_arrays = qci.const_arrays();
-    const amrex::GpuTuple<amrex::Real> qci_mass = amrex::ParReduce(
-        amrex::TypeList<amrex::ReduceOpSum>{},
-        amrex::TypeList<amrex::Real>{},
-        qci, amrex::IntVect(0),
-        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real> {
-            return {cell_volume * rho_arrays[box_no](i,j,k) * qci_arrays[box_no](i,j,k)};
-        });
-    diagnostics.initial_qci_mass = amrex::get<0>(qci_mass);
-    amrex::ParallelDescriptor::ReduceRealSum(diagnostics.initial_qci_mass);
+        dz);
 
     std::ostringstream box_stream;
     bool first_box = true;
-    for (amrex::MFIter mfi(qci); mfi.isValid(); ++mfi) {
+    for (amrex::MFIter mfi(cons); mfi.isValid(); ++mfi) {
         if (!first_box) {
             box_stream << ";";
         }
@@ -472,6 +500,97 @@ IceFallSubstepReductionDiagnostics compute_icefall_substep_reduction_diagnostics
     diagnostics.box_summary = first_box ? std::string("none") : box_stream.str();
 
     return diagnostics;
+}
+
+void compute_icefall_reference_global_substep (const amrex::Geometry& geom,
+                                               amrex::MultiFab& reference_cons,
+                                               const int n_substep,
+                                               const amrex::Real dt)
+{
+    const amrex::Box domain = geom.Domain();
+    const int k_lo = domain.smallEnd(2);
+    const int k_hi = domain.bigEnd(2);
+    const amrex::Real coef = (dt / geom.CellSize(2)) / amrex::Real(n_substep);
+
+    amrex::MultiFab fz;
+    const amrex::IntVect ng = reference_cons.nGrowVect();
+    const amrex::BoxArray ba = reference_cons.boxArray();
+    const amrex::DistributionMapping dm = reference_cons.DistributionMap();
+    fz.define(amrex::convert(ba, amrex::IntVect(0, 0, 1)), dm, 1, ng);
+    fz.setVal(amrex::Real(0.0));
+
+    for (int nsub(0); nsub<n_substep; ++nsub) {
+        for (amrex::MFIter mfi(fz, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            auto cons_array = reference_cons.const_array(mfi);
+            auto fz_array = fz.array(mfi);
+
+            const auto& box3d = mfi.tilebox();
+
+            amrex::ParallelFor(box3d, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+            {
+                const amrex::Real rho_km1 = (k == k_lo) ? cons_array(i,j,k,Rho_comp)
+                                                        : cons_array(i,j,k-1,Rho_comp);
+                const amrex::Real rho_k = (k == k_hi + 1) ? cons_array(i,j,k-1,Rho_comp)
+                                                          : cons_array(i,j,k,Rho_comp);
+                const amrex::Real qci_km1 = (k == k_lo)
+                    ? icefall_mixing_ratio_from_conserved(cons_array(i,j,k,RhoQ3_comp), rho_km1)
+                    : icefall_mixing_ratio_from_conserved(cons_array(i,j,k-1,RhoQ3_comp), rho_km1);
+                const amrex::Real qci_k = (k == k_hi + 1)
+                    ? icefall_mixing_ratio_from_conserved(cons_array(i,j,k-1,RhoQ3_comp), rho_k)
+                    : icefall_mixing_ratio_from_conserved(cons_array(i,j,k,RhoQ3_comp), rho_k);
+                const SAMFaceState face_state = sam_face_average_state(k, k_lo, k_hi,
+                                                                       rho_km1, rho_k,
+                                                                       zero, zero,
+                                                                       qci_km1, qci_k,
+                                                                       zero, zero);
+                fz_array(i,j,k) = icefall_face_flux(face_state.rho_avg, face_state.qci_avg);
+            });
+        }
+
+        for (amrex::MFIter mfi(reference_cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            auto cons_array = reference_cons.array(mfi);
+            auto const_cons_array = reference_cons.const_array(mfi);
+            auto fz_array = fz.array(mfi);
+
+            const auto& tbx = mfi.tilebox();
+
+            amrex::ParallelFor(tbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+            {
+                const amrex::Real rho = const_cons_array(i,j,k,Rho_comp);
+                const amrex::Real qci_mass = const_cons_array(i,j,k,RhoQ3_comp);
+                const amrex::Real qci = icefall_mixing_ratio_from_conserved(qci_mass, rho);
+
+                amrex::Real dqi = sam_sedimentation_tendency(fz_array(i,j,k+1), fz_array(i,j,k),
+                                                             rho, one, coef);
+                dqi = std::max(-qci, dqi);
+
+                cons_array(i,j,k,RhoQ3_comp) = qci_mass + rho * dqi;
+            });
+        }
+    }
+}
+
+std::string icefall_state_summary (const char* label,
+                                   const SAMCellState& state,
+                                   const amrex::Real raw_qci)
+{
+    std::ostringstream stream;
+    stream << label
+           << " raw_qci=" << raw_qci
+           << " rho=" << state.rho
+           << " theta=" << state.theta
+           << " tabs=" << state.tabs
+           << " pres_mbar=" << state.pres_mbar
+           << " qv=" << state.qv
+           << " qcl=" << state.qcl
+           << " qci=" << state.qci
+           << " qn=" << state.qn
+           << " qt=" << state.qt
+           << " qpr=" << state.qpr
+           << " qps=" << state.qps
+           << " qpg=" << state.qpg
+           << " qp=" << state.qp;
+    return stream.str();
 }
 
 struct PrecipFallCellState {
@@ -875,11 +994,13 @@ TEST(SAMParallel, CopyMicroToStateFillBoundaryParallel)
 }
 
 // Motivation:
-// IceFall substepping must use the global MPI maximum reduced cloud-ice flux,
-// not each rank's local maximum. IceFall does not expose n_substep directly,
-// so this regression reconstructs the same face-flux reduction on a
-// distributed MultiFab and checks that the substep count comes from the global
-// reduced maximum when the cloud-ice field is intentionally heterogeneous.
+// IceFall chooses a vertical sedimentation substep count from the maximum
+// cloud-ice sedimentation flux. That maximum must be global across MPI ranks,
+// not rank-local, so every rank advances the same physical timestep with the
+// same substep count. This regression constructs a heterogeneous cloud-ice
+// field whose maximum flux is present only on some ranks and checks that the
+// public IceFall result matches an independently computed global-max substep
+// reference.
 TEST(SAMParallel, IceFallSubstepCountUsesGlobalMaximum)
 {
     constexpr int nx = 8;
@@ -894,92 +1015,209 @@ TEST(SAMParallel, IceFallSubstepCountUsesGlobalMaximum)
     amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
 
     amrex::BoxArray ba(domain);
-    ba.maxSize(amrex::IntVect(2, ny, nz));
+    const amrex::IntVect max_size(AMREX_D_DECL(2, 2, nz));
+    ba.maxSize(max_size);
     amrex::DistributionMapping dm(ba);
 
-    amrex::MultiFab rho(ba, dm, 1, 0);
-    amrex::MultiFab qci(ba, dm, 1, 0);
-    fill_icefall_reduction_state(rho, qci);
+    amrex::MultiFab initial_cons(ba, dm, RhoQ6_comp + 1, 0);
+    fill_icefall_reduction_conserved_state(initial_cons, geom);
 
-    const IceFallSubstepReductionDiagnostics diagnostics =
-        compute_icefall_substep_reduction_diagnostics(geom, rho, qci, dt);
+    amrex::MultiFab public_cons(ba, dm, RhoQ6_comp + 1, 0);
+    amrex::MultiFab::Copy(public_cons, initial_cons, 0, 0, RhoQ6_comp + 1, 0);
+
+    amrex::MultiFab reference_cons(ba, dm, RhoQ6_comp + 1, 0);
+    amrex::MultiFab::Copy(reference_cons, initial_cons, 0, 0, RhoQ6_comp + 1, 0);
+
+    const IceFallFluxReductionDiagnostics diagnostics =
+        compute_icefall_flux_reduction_diagnostics(geom, initial_cons, dt);
 
     const int rank = amrex::ParallelDescriptor::MyProc();
     const int nprocs = amrex::ParallelDescriptor::NProcs();
-    const amrex::Real expected_global_max = diagnostics.global_max_reduced_flux;
+    const amrex::Real dz = geom.CellSize(2);
+    const amrex::Real expected_global_max = diagnostics.global_max_flux;
     const int expected_n_substep = sam_substep_count_from_reduced_flux(
         expected_global_max + std::numeric_limits<amrex::Real>::epsilon(),
         dt,
-        geom.CellSize(2));
+        dz);
 
-    int min_global_n_substep = diagnostics.global_n_substep;
-    int max_global_n_substep = diagnostics.global_n_substep;
-    amrex::ParallelDescriptor::ReduceIntMin(min_global_n_substep);
-    amrex::ParallelDescriptor::ReduceIntMax(max_global_n_substep);
+    int any_local_differs = (diagnostics.local_n_substep != expected_n_substep) ? 1 : 0;
+    amrex::ParallelDescriptor::ReduceIntMax(any_local_differs);
 
-    int ranks_with_local_flux_below_global =
-        (std::abs(diagnostics.local_max_reduced_flux - diagnostics.global_max_reduced_flux) >
-         exact_zero_or_near_zero_tol())
-            ? 1
-            : 0;
-    int ranks_with_local_substep_difference =
-        (diagnostics.local_n_substep != diagnostics.global_n_substep) ? 1 : 0;
-    amrex::ParallelDescriptor::ReduceIntSum(ranks_with_local_flux_below_global);
-    amrex::ParallelDescriptor::ReduceIntSum(ranks_with_local_substep_difference);
-
-    EXPECT_EQ(min_global_n_substep, max_global_n_substep)
+    ASSERT_GT(expected_n_substep, 1)
         << "rank=" << rank
-        << " owned_boxes=" << diagnostics.owned_box_count
         << " boxes=" << diagnostics.box_summary
-        << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
-        << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+        << " max_size=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+        << " local_max_flux=" << diagnostics.local_max_flux
+        << " global_max_flux=" << diagnostics.global_max_flux
+        << " local_n_substep=" << diagnostics.local_n_substep
+        << " global_n_substep=" << diagnostics.global_n_substep
         << " expected_n_substep=" << expected_n_substep
-        << " inferred_local_n_substep=" << diagnostics.local_n_substep
-        << " inferred_global_n_substep=" << diagnostics.global_n_substep
+        << " any_rank_local_count_differs=" << any_local_differs
+        << " dt=" << dt
+        << " dz=" << dz
         << " initial_qci_mass=" << diagnostics.initial_qci_mass;
+
     EXPECT_EQ(diagnostics.global_n_substep, expected_n_substep)
         << "rank=" << rank
         << " owned_boxes=" << diagnostics.owned_box_count
         << " boxes=" << diagnostics.box_summary
-        << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
-        << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+        << " max_size=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+        << " local_max_flux=" << diagnostics.local_max_flux
+        << " global_max_flux=" << diagnostics.global_max_flux
+        << " local_n_substep=" << diagnostics.local_n_substep
+        << " global_n_substep=" << diagnostics.global_n_substep
         << " expected_n_substep=" << expected_n_substep
-        << " inferred_local_n_substep=" << diagnostics.local_n_substep
-        << " inferred_global_n_substep=" << diagnostics.global_n_substep
-        << " initial_qci_mass=" << diagnostics.initial_qci_mass;
-    EXPECT_LE(diagnostics.local_n_substep, diagnostics.global_n_substep)
-        << "rank=" << rank
-        << " owned_boxes=" << diagnostics.owned_box_count
-        << " boxes=" << diagnostics.box_summary
-        << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
-        << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
-        << " expected_n_substep=" << expected_n_substep
-        << " inferred_local_n_substep=" << diagnostics.local_n_substep
-        << " inferred_global_n_substep=" << diagnostics.global_n_substep
+        << " any_rank_local_count_differs=" << any_local_differs
+        << " dt=" << dt
+        << " dz=" << dz
         << " initial_qci_mass=" << diagnostics.initial_qci_mass;
 
     if (nprocs > 1) {
-        EXPECT_GT(ranks_with_local_flux_below_global, 0)
+        ASSERT_EQ(any_local_differs, 1)
             << "rank=" << rank
             << " owned_boxes=" << diagnostics.owned_box_count
             << " boxes=" << diagnostics.box_summary
-            << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
-            << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+            << " max_size=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+            << " local_max_flux=" << diagnostics.local_max_flux
+            << " global_max_flux=" << diagnostics.global_max_flux
+            << " local_n_substep=" << diagnostics.local_n_substep
+            << " global_n_substep=" << diagnostics.global_n_substep
             << " expected_n_substep=" << expected_n_substep
-            << " inferred_local_n_substep=" << diagnostics.local_n_substep
-            << " inferred_global_n_substep=" << diagnostics.global_n_substep
-            << " initial_qci_mass=" << diagnostics.initial_qci_mass;
-        EXPECT_GT(ranks_with_local_substep_difference, 0)
-            << "rank=" << rank
-            << " owned_boxes=" << diagnostics.owned_box_count
-            << " boxes=" << diagnostics.box_summary
-            << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
-            << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
-            << " expected_n_substep=" << expected_n_substep
-            << " inferred_local_n_substep=" << diagnostics.local_n_substep
-            << " inferred_global_n_substep=" << diagnostics.global_n_substep
+            << " any_rank_local_count_differs=" << any_local_differs
+            << " dt=" << dt
+            << " dz=" << dz
             << " initial_qci_mass=" << diagnostics.initial_qci_mass;
     }
+
+    std::unique_ptr<amrex::MultiFab> z_phys_nd;
+    std::unique_ptr<amrex::MultiFab> detJ_cc;
+
+    SolverChoice sc = make_sam_solver_choice(MoistureType::SAM);
+
+    SAM public_sam;
+    public_sam.Define(sc);
+    public_sam.Set_dzmin(dz);
+    public_sam.Set_RealWidth(0);
+    public_sam.Init(public_cons, ba, geom, dt, z_phys_nd, detJ_cc);
+    public_sam.Copy_State_to_Micro(public_cons);
+    public_sam.IceFall(sc);
+    public_sam.Copy_Micro_to_State(public_cons);
+
+    compute_icefall_reference_global_substep(geom, reference_cons, expected_n_substep, dt);
+
+    const int num_terms = nx * ny * nz;
+    const amrex::Real public_final_qci_mass = sum_component_mass(geom, public_cons, RhoQ3_comp);
+    const amrex::Real reference_final_qci_mass = sum_component_mass(geom, reference_cons, RhoQ3_comp);
+    const amrex::Real mass_residual = public_final_qci_mass - reference_final_qci_mass;
+
+    EXPECT_NEAR(public_final_qci_mass,
+                reference_final_qci_mass,
+                mpi_reduction_tol(reference_final_qci_mass, num_terms))
+        << "rank=" << rank
+        << " owned_boxes=" << diagnostics.owned_box_count
+        << " boxes=" << diagnostics.box_summary
+        << " max_size=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+        << " local_max_flux=" << diagnostics.local_max_flux
+        << " global_max_flux=" << diagnostics.global_max_flux
+        << " local_n_substep=" << diagnostics.local_n_substep
+        << " global_n_substep=" << diagnostics.global_n_substep
+        << " expected_n_substep=" << expected_n_substep
+        << " any_rank_local_count_differs=" << any_local_differs
+        << " dt=" << dt
+        << " dz=" << dz
+        << " initial_qci_mass=" << diagnostics.initial_qci_mass
+        << " public_final_qci_mass=" << public_final_qci_mass
+        << " reference_final_qci_mass=" << reference_final_qci_mass
+        << " mass_residual=" << mass_residual;
+
+    bool local_mismatch = false;
+    std::string first_mismatch_message;
+
+    for (amrex::MFIter mfi(public_cons); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        const auto public_arr = public_cons.const_array(mfi);
+        const auto reference_arr = reference_cons.const_array(mfi);
+
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    const SAMCellState public_state = sam_cons_to_primitive(
+                        public_arr(i,j,k,Rho_comp),
+                        public_arr(i,j,k,RhoTheta_comp),
+                        public_arr(i,j,k,RhoQ1_comp),
+                        public_arr(i,j,k,RhoQ2_comp),
+                        public_arr(i,j,k,RhoQ3_comp),
+                        public_arr(i,j,k,RhoQ4_comp),
+                        public_arr(i,j,k,RhoQ5_comp),
+                        public_arr(i,j,k,RhoQ6_comp));
+                    const SAMCellState reference_state = sam_cons_to_primitive(
+                        reference_arr(i,j,k,Rho_comp),
+                        reference_arr(i,j,k,RhoTheta_comp),
+                        reference_arr(i,j,k,RhoQ1_comp),
+                        reference_arr(i,j,k,RhoQ2_comp),
+                        reference_arr(i,j,k,RhoQ3_comp),
+                        reference_arr(i,j,k,RhoQ4_comp),
+                        reference_arr(i,j,k,RhoQ5_comp),
+                        reference_arr(i,j,k,RhoQ6_comp));
+
+                    const amrex::Real raw_qci_public = public_arr(i,j,k,RhoQ3_comp);
+                    const amrex::Real raw_qci_reference = reference_arr(i,j,k,RhoQ3_comp);
+                    const amrex::Real raw_qci_tol = formula_abs_tol(
+                        std::max({std::abs(raw_qci_public), std::abs(raw_qci_reference), amrex::Real(1.0)}));
+                    const amrex::Real state_tol = formula_abs_tol(
+                        std::max({std::abs(public_state.tabs),
+                                  std::abs(reference_state.tabs),
+                                  std::abs(public_state.qt),
+                                  std::abs(reference_state.qt),
+                                  amrex::Real(1.0)}));
+
+                    const bool cell_mismatch =
+                        std::abs(raw_qci_public - raw_qci_reference) > raw_qci_tol ||
+                        std::abs(public_state.rho - reference_state.rho) > state_tol ||
+                        std::abs(public_state.theta - reference_state.theta) > state_tol ||
+                        std::abs(public_state.tabs - reference_state.tabs) > state_tol ||
+                        std::abs(public_state.pres_mbar - reference_state.pres_mbar) > state_tol ||
+                        std::abs(public_state.qv - reference_state.qv) > state_tol ||
+                        std::abs(public_state.qcl - reference_state.qcl) > state_tol ||
+                        std::abs(public_state.qci - reference_state.qci) > state_tol ||
+                        std::abs(public_state.qn - reference_state.qn) > state_tol ||
+                        std::abs(public_state.qt - reference_state.qt) > state_tol ||
+                        std::abs(public_state.qpr - reference_state.qpr) > state_tol ||
+                        std::abs(public_state.qps - reference_state.qps) > state_tol ||
+                        std::abs(public_state.qpg - reference_state.qpg) > state_tol ||
+                        std::abs(public_state.qp - reference_state.qp) > state_tol;
+
+                    if (cell_mismatch) {
+                        if (!local_mismatch) {
+                            std::ostringstream mismatch_stream;
+                            mismatch_stream << "rank=" << rank
+                                            << " box=" << bx
+                                            << " cell=(" << i << "," << j << "," << k << ")"
+                                            << " max_size=(" << max_size[0] << "," << max_size[1] << "," << max_size[2] << ")"
+                                            << " local_max_flux=" << diagnostics.local_max_flux
+                                            << " global_max_flux=" << diagnostics.global_max_flux
+                                            << " local_n_substep=" << diagnostics.local_n_substep
+                                            << " global_n_substep=" << diagnostics.global_n_substep
+                                            << " expected_n_substep=" << expected_n_substep
+                                            << " any_rank_local_count_differs=" << any_local_differs
+                                            << " dt=" << dt
+                                            << " dz=" << dz
+                                            << " initial_qci_mass=" << diagnostics.initial_qci_mass
+                                            << " public_final_qci_mass=" << public_final_qci_mass
+                                            << " reference_final_qci_mass=" << reference_final_qci_mass
+                                            << " mass_residual=" << mass_residual
+                                            << icefall_state_summary(" public", public_state, raw_qci_public)
+                                            << icefall_state_summary(" reference", reference_state, raw_qci_reference);
+                            first_mismatch_message = mismatch_stream.str();
+                        }
+                        local_mismatch = true;
+                    }
+                }
+            }
+        }
+    }
+
+    EXPECT_FALSE(local_mismatch) << first_mismatch_message;
 }
 
 // Motivation:
