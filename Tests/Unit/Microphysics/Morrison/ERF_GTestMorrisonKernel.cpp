@@ -12,6 +12,30 @@ struct KernelCase {
     MorrisonCellState state;
     amrex::Real qvqvs;
     amrex::Real qvqvsi;
+    amrex::Real autoconversion_qc;
+    amrex::Real autoconversion_nc;
+    amrex::Real autoconversion_rho;
+    amrex::Real autoconversion_dt;
+    amrex::Real accretion_qc;
+    amrex::Real accretion_qr;
+    amrex::Real accretion_nc;
+    amrex::Real limiter_qc;
+    amrex::Real limiter_dt;
+    amrex::Real limiter_prc;
+    amrex::Real limiter_pra;
+    amrex::Real sedimentation_fallout_from_above;
+    amrex::Real sedimentation_fallout_to_below;
+    amrex::Real sedimentation_dz;
+    amrex::Real sedimentation_rho;
+    amrex::Real sedimentation_dt;
+    int sedimentation_nstep;
+    amrex::Real surface_fallout_rain;
+    amrex::Real surface_fallout_cloud_water;
+    amrex::Real surface_fallout_snow;
+    amrex::Real surface_fallout_cloud_ice;
+    amrex::Real surface_fallout_graupel;
+    amrex::Real surface_dt;
+    int surface_nstep;
     amrex::Real distribution_mass;
     amrex::Real distribution_number;
     amrex::Real coefficient;
@@ -23,6 +47,15 @@ struct KernelOutputs {
     MorrisonCellState state;
     MorrisonEffectiveRadii effective_radii;
     MorrisonQSmallCleanupDiagnostics cleanup;
+    amrex::Real total_water_full;
+    amrex::Real total_water_no_ice;
+    MorrisonAutoconversionRates autoconversion;
+    MorrisonAccretionRates accretion;
+    MorrisonCloudWaterLimiterDiagnostics limiter;
+    amrex::Real limited_prc;
+    amrex::Real limited_pra;
+    MorrisonSedimentationBudget sedimentation;
+    MorrisonSurfacePrecipitationIncrement surface;
     MorrisonDistributionParameters distribution;
 };
 
@@ -40,44 +73,134 @@ void launch_morrison_helper_kernel (const int ncases,
         const MorrisonQSmallCleanupDiagnostics cleanup =
             morrison_apply_qsmall_mass_number_cleanup(state, effective_radii, kQSmall);
         morrison_apply_warm_small_ice_melt_to_rain(state, kLatentFusion, kCpm);
+        const amrex::Real total_water_full = morrison_total_water_full(state);
+        const amrex::Real total_water_no_ice = morrison_total_water_no_ice(state);
+        const MorrisonAutoconversionRates autoconversion = morrison_compute_warm_rain_autoconversion(
+            cases_ptr[idx].autoconversion_qc, cases_ptr[idx].autoconversion_nc,
+            cases_ptr[idx].autoconversion_rho, cases_ptr[idx].autoconversion_dt, kCons29);
+        const MorrisonAccretionRates accretion = morrison_compute_cloud_rain_accretion(
+            cases_ptr[idx].accretion_qc, cases_ptr[idx].accretion_qr, cases_ptr[idx].accretion_nc);
+        amrex::Real limited_prc = cases_ptr[idx].limiter_prc;
+        amrex::Real limited_pra = cases_ptr[idx].limiter_pra;
+        const MorrisonCloudWaterLimiterDiagnostics limiter = morrison_apply_cloud_water_sink_limiter(
+            cases_ptr[idx].limiter_qc, cases_ptr[idx].limiter_dt, kQSmall, limited_prc, limited_pra);
+        const MorrisonSedimentationBudget sedimentation = morrison_sedimentation_budget(
+            cases_ptr[idx].sedimentation_fallout_from_above,
+            cases_ptr[idx].sedimentation_fallout_to_below,
+            cases_ptr[idx].sedimentation_dz, cases_ptr[idx].sedimentation_rho,
+            cases_ptr[idx].sedimentation_dt, cases_ptr[idx].sedimentation_nstep);
+        const MorrisonSurfacePrecipitationIncrement surface = morrison_surface_precipitation_increment(
+            cases_ptr[idx].surface_fallout_rain, cases_ptr[idx].surface_fallout_cloud_water,
+            cases_ptr[idx].surface_fallout_snow, cases_ptr[idx].surface_fallout_cloud_ice,
+            cases_ptr[idx].surface_fallout_graupel, cases_ptr[idx].surface_dt, cases_ptr[idx].surface_nstep);
         const MorrisonDistributionParameters distribution = morrison_exponential_distribution_parameters(
             cases_ptr[idx].distribution_mass, cases_ptr[idx].distribution_number,
             cases_ptr[idx].coefficient, cases_ptr[idx].lambda_min, cases_ptr[idx].lambda_max);
 
-        outputs_ptr[idx] = KernelOutputs{state, effective_radii, cleanup, distribution};
+        outputs_ptr[idx] = KernelOutputs{state, effective_radii, cleanup, total_water_full, total_water_no_ice,
+                                         autoconversion, accretion, limiter, limited_prc, limited_pra,
+                                         sedimentation, surface, distribution};
     });
     morrison_test::sync();
+}
+
+KernelCase make_kernel_case (const MorrisonCellState& state,
+                             const amrex::Real qvqvs,
+                             const amrex::Real qvqvsi,
+                             const amrex::Real autoconversion_qc,
+                             const amrex::Real autoconversion_nc,
+                             const amrex::Real autoconversion_rho,
+                             const amrex::Real autoconversion_dt,
+                             const amrex::Real accretion_qc,
+                             const amrex::Real accretion_qr,
+                             const amrex::Real accretion_nc,
+                             const amrex::Real limiter_qc,
+                             const amrex::Real limiter_dt,
+                             const amrex::Real limiter_prc,
+                             const amrex::Real limiter_pra,
+                             const amrex::Real sedimentation_fallout_from_above,
+                             const amrex::Real sedimentation_fallout_to_below,
+                             const amrex::Real sedimentation_dz,
+                             const amrex::Real sedimentation_rho,
+                             const amrex::Real sedimentation_dt,
+                             const int sedimentation_nstep,
+                             const amrex::Real surface_fallout_rain,
+                             const amrex::Real surface_fallout_cloud_water,
+                             const amrex::Real surface_fallout_snow,
+                             const amrex::Real surface_fallout_cloud_ice,
+                             const amrex::Real surface_fallout_graupel,
+                             const amrex::Real surface_dt,
+                             const int surface_nstep,
+                             const amrex::Real distribution_mass,
+                             const amrex::Real distribution_number,
+                             const amrex::Real coefficient,
+                             const amrex::Real lambda_min,
+                             const amrex::Real lambda_max)
+{
+    return KernelCase{state, qvqvs, qvqvsi,
+                      autoconversion_qc, autoconversion_nc, autoconversion_rho, autoconversion_dt,
+                      accretion_qc, accretion_qr, accretion_nc,
+                      limiter_qc, limiter_dt, limiter_prc, limiter_pra,
+                      sedimentation_fallout_from_above, sedimentation_fallout_to_below,
+                      sedimentation_dz, sedimentation_rho, sedimentation_dt, sedimentation_nstep,
+                      surface_fallout_rain, surface_fallout_cloud_water, surface_fallout_snow,
+                      surface_fallout_cloud_ice, surface_fallout_graupel, surface_dt, surface_nstep,
+                      distribution_mass, distribution_number, coefficient, lambda_min, lambda_max};
 }
 
 std::vector<KernelCase> make_kernel_cases ()
 {
     const amrex::Real mass = amrex::Real(2.0e-4);
     return {
-        {make_state(amrex::Real(1.0e-2), kQSmall * amrex::Real(0.5), kQSmall * amrex::Real(0.5),
-                    kQSmall * amrex::Real(0.5), kQSmall * amrex::Real(0.5), kQSmall * amrex::Real(0.5),
-                    amrex::Real(10.0), amrex::Real(20.0), amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
-         morrison_subsaturation_ratio_threshold, morrison_subsaturation_ratio_threshold,
-         mass, number_for_lambda(mass, kRainCoefficient, amrex::Real(0.5) * (kLamMinRain + kLamMaxRain)),
-         kRainCoefficient, kLamMinRain, kLamMaxRain},
-        {make_state(amrex::Real(1.0e-2), amrex::Real(2.0e-9), amrex::Real(3.0e-9),
-                    amrex::Real(4.0e-9), amrex::Real(5.0e-9), amrex::Real(6.0e-9),
-                    amrex::Real(10.0), amrex::Real(20.0), amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
-         morrison_subsaturation_ratio_threshold - amrex::Real(1.0e-3),
-         morrison_subsaturation_ratio_threshold - amrex::Real(1.0e-3),
-         mass, number_for_lambda(mass, kSnowCoefficient, kLamMinSnow * amrex::Real(0.25)),
-         kSnowCoefficient, kLamMinSnow, kLamMaxSnow},
-        {make_state(amrex::Real(1.0e-2), amrex::Real(1.0e-4), amrex::Real(0.0),
-                    amrex::Real(2.0e-4), amrex::Real(2.0e-7), amrex::Real(3.0e-7),
-                    amrex::Real(10.0), amrex::Real(20.0), amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
-         morrison_subsaturation_ratio_threshold, morrison_subsaturation_ratio_threshold,
-         mass, number_for_lambda(mass, kGraupelCoefficient, kLamMaxGraupel * amrex::Real(4.0)),
-         kGraupelCoefficient, kLamMinGraupel, kLamMaxGraupel},
-        {make_state(amrex::Real(1.0e-2), kQSmall, kQSmall, kQSmall, morrison_warm_small_ice_melt_threshold,
-                    morrison_warm_small_ice_melt_threshold, amrex::Real(10.0), amrex::Real(20.0),
-                    amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
-         morrison_subsaturation_ratio_threshold, morrison_subsaturation_ratio_threshold,
-         mass, number_for_lambda(mass, kRainCoefficient, kLamMinRain),
-         kRainCoefficient, kLamMinRain, kLamMaxRain}
+        make_kernel_case(
+            make_state(amrex::Real(1.0e-2), kQSmall * amrex::Real(0.5), kQSmall * amrex::Real(0.5),
+                       kQSmall * amrex::Real(0.5), kQSmall * amrex::Real(0.5), kQSmall * amrex::Real(0.5),
+                       amrex::Real(10.0), amrex::Real(20.0), amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
+            morrison_subsaturation_ratio_threshold, morrison_subsaturation_ratio_threshold,
+            morrison_autoconversion_cloud_water_threshold * amrex::Real(0.5), amrex::Real(1.0e8), amrex::Real(1.1), amrex::Real(2.0),
+            morrison_cloud_rain_accretion_threshold * amrex::Real(0.5), amrex::Real(2.0e-4), amrex::Real(8.0e7),
+            amrex::Real(3.0e-4), amrex::Real(10.0), amrex::Real(1.0e-7), amrex::Real(1.0e-7),
+            amrex::Real(0.0), amrex::Real(7.0e-5), amrex::Real(80.0), amrex::Real(1.0), amrex::Real(2.5), 2,
+            amrex::Real(3.0e-5), amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0), amrex::Real(5.0), 4,
+            mass, number_for_lambda(mass, kRainCoefficient, amrex::Real(0.5) * (kLamMinRain + kLamMaxRain)),
+            kRainCoefficient, kLamMinRain, kLamMaxRain),
+        make_kernel_case(
+            make_state(amrex::Real(1.0e-2), amrex::Real(2.0e-9), amrex::Real(3.0e-9),
+                       amrex::Real(4.0e-9), amrex::Real(5.0e-9), amrex::Real(6.0e-9),
+                       amrex::Real(10.0), amrex::Real(20.0), amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
+            morrison_subsaturation_ratio_threshold - amrex::Real(1.0e-3),
+            morrison_subsaturation_ratio_threshold - amrex::Real(1.0e-3),
+            amrex::Real(1.2e-6), amrex::Real(1.0e8), amrex::Real(1.1), amrex::Real(2.0),
+            amrex::Real(1.0e-4), amrex::Real(2.0e-4), amrex::Real(8.0e7),
+            amrex::Real(3.0e-4), amrex::Real(10.0), amrex::Real(7.0e-5), amrex::Real(5.0e-5),
+            amrex::Real(9.0e-5), amrex::Real(4.0e-5), amrex::Real(80.0), amrex::Real(1.0), amrex::Real(2.5), 2,
+            amrex::Real(3.0e-5), amrex::Real(2.0e-6), amrex::Real(4.0e-6), amrex::Real(5.0e-6), amrex::Real(6.0e-6), amrex::Real(5.0), 4,
+            mass, number_for_lambda(mass, kSnowCoefficient, kLamMinSnow * amrex::Real(0.25)),
+            kSnowCoefficient, kLamMinSnow, kLamMaxSnow),
+        make_kernel_case(
+            make_state(amrex::Real(1.0e-2), amrex::Real(1.0e-4), amrex::Real(0.0),
+                       amrex::Real(2.0e-4), amrex::Real(2.0e-7), amrex::Real(3.0e-7),
+                       amrex::Real(10.0), amrex::Real(20.0), amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
+            morrison_subsaturation_ratio_threshold, morrison_subsaturation_ratio_threshold,
+            amrex::Real(2.0e-3), amrex::Real(1.0e6), amrex::Real(1.1), amrex::Real(1000.0),
+            amrex::Real(1.0e-4), morrison_cloud_rain_accretion_threshold * amrex::Real(0.5), amrex::Real(8.0e7),
+            amrex::Real(3.0e-4), amrex::Real(10.0), amrex::Real(7.0e-5), amrex::Real(5.0e-5),
+            amrex::Real(9.0e-5), amrex::Real(4.0e-5), amrex::Real(120.0), amrex::Real(0.8), amrex::Real(3.0), 3,
+            amrex::Real(0.0), amrex::Real(0.0), amrex::Real(4.0e-6), amrex::Real(5.0e-6), amrex::Real(6.0e-6), amrex::Real(6.0), 3,
+            mass, number_for_lambda(mass, kGraupelCoefficient, kLamMaxGraupel * amrex::Real(4.0)),
+            kGraupelCoefficient, kLamMinGraupel, kLamMaxGraupel),
+        make_kernel_case(
+            make_state(amrex::Real(1.0e-2), kQSmall, kQSmall, kQSmall, morrison_warm_small_ice_melt_threshold,
+                       morrison_warm_small_ice_melt_threshold, amrex::Real(10.0), amrex::Real(20.0),
+                       amrex::Real(30.0), amrex::Real(40.0), amrex::Real(50.0)),
+            morrison_subsaturation_ratio_threshold, morrison_subsaturation_ratio_threshold,
+            amrex::Real(1.2e-6), amrex::Real(1.0e8), amrex::Real(1.1), amrex::Real(2.0),
+            amrex::Real(1.0e-4), amrex::Real(2.0e-4), amrex::Real(8.0e7),
+            amrex::Real(3.0e-4), amrex::Real(10.0), amrex::Real(1.0e-7), amrex::Real(1.0e-7),
+            amrex::Real(0.0), amrex::Real(7.0e-5), amrex::Real(80.0), amrex::Real(1.0), amrex::Real(2.5), 2,
+            amrex::Real(0.0), amrex::Real(2.0e-6), amrex::Real(0.0), amrex::Real(5.0e-6), amrex::Real(0.0), amrex::Real(6.0), 3,
+            mass, number_for_lambda(mass, kRainCoefficient, kLamMinRain),
+            kRainCoefficient, kLamMinRain, kLamMaxRain)
     };
 }
 
@@ -90,10 +213,31 @@ KernelOutputs host_reference (const KernelCase& test_case)
     const MorrisonQSmallCleanupDiagnostics cleanup =
         morrison_apply_qsmall_mass_number_cleanup(state, effective_radii, kQSmall);
     morrison_apply_warm_small_ice_melt_to_rain(state, kLatentFusion, kCpm);
+    const amrex::Real total_water_full = morrison_total_water_full(state);
+    const amrex::Real total_water_no_ice = morrison_total_water_no_ice(state);
+    const MorrisonAutoconversionRates autoconversion = morrison_compute_warm_rain_autoconversion(
+        test_case.autoconversion_qc, test_case.autoconversion_nc, test_case.autoconversion_rho,
+        test_case.autoconversion_dt, kCons29);
+    const MorrisonAccretionRates accretion = morrison_compute_cloud_rain_accretion(
+        test_case.accretion_qc, test_case.accretion_qr, test_case.accretion_nc);
+    amrex::Real limited_prc = test_case.limiter_prc;
+    amrex::Real limited_pra = test_case.limiter_pra;
+    const MorrisonCloudWaterLimiterDiagnostics limiter = morrison_apply_cloud_water_sink_limiter(
+        test_case.limiter_qc, test_case.limiter_dt, kQSmall, limited_prc, limited_pra);
+    const MorrisonSedimentationBudget sedimentation = morrison_sedimentation_budget(
+        test_case.sedimentation_fallout_from_above, test_case.sedimentation_fallout_to_below,
+        test_case.sedimentation_dz, test_case.sedimentation_rho, test_case.sedimentation_dt,
+        test_case.sedimentation_nstep);
+    const MorrisonSurfacePrecipitationIncrement surface = morrison_surface_precipitation_increment(
+        test_case.surface_fallout_rain, test_case.surface_fallout_cloud_water,
+        test_case.surface_fallout_snow, test_case.surface_fallout_cloud_ice,
+        test_case.surface_fallout_graupel, test_case.surface_dt, test_case.surface_nstep);
     const MorrisonDistributionParameters distribution = morrison_exponential_distribution_parameters(
         test_case.distribution_mass, test_case.distribution_number, test_case.coefficient,
         test_case.lambda_min, test_case.lambda_max);
-    return KernelOutputs{state, effective_radii, cleanup, distribution};
+    return KernelOutputs{state, effective_radii, cleanup, total_water_full, total_water_no_ice,
+                         autoconversion, accretion, limiter, limited_prc, limited_pra,
+                         sedimentation, surface, distribution};
 }
 
 void expect_state_near (const MorrisonCellState& actual,

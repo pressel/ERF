@@ -76,7 +76,7 @@ if(ERF_ENABLE_MPI)
   endif()
 
   if(NOT DEFINED ERF_PARALLEL_TEST_NRANKS OR "${ERF_PARALLEL_TEST_NRANKS}" STREQUAL "")
-    set(ERF_PARALLEL_TEST_NRANKS "2")
+    set(ERF_PARALLEL_TEST_NRANKS "1;2;4")
   endif()
 
   # Convert variables that may contain space-separated arguments used to build

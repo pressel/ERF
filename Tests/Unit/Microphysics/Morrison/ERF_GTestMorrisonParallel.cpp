@@ -1,10 +1,19 @@
 #include <algorithm>
+#include <memory>
 
+#include <AMReX_BoxArray.H>
+#include <AMReX_DistributionMapping.H>
+#include <AMReX_Geometry.H>
+#include <AMReX_MultiFab.H>
+#include <AMReX_ParmParse.H>
 #include <AMReX_ParallelDescriptor.H>
 
 #include <gtest/gtest.h>
 
+#include "ERF_Constants.H"
+#include "ERF_IndexDefines.H"
 #include "ERF_GTestMorrisonCommon.H"
+#include "ERF_Morrison.H"
 
 using namespace morrison_test;
 
@@ -17,7 +26,167 @@ amrex::Real normalized_error (const amrex::Real actual,
     return std::abs(actual - expected) / std::max(tol, std::numeric_limits<amrex::Real>::min());
 }
 
+enum ParallelPublicCopyErrComps {
+    ParallelErrRho = 0,
+    ParallelErrRhoTheta,
+    ParallelErrQ1,
+    ParallelErrQ2,
+    ParallelErrQ3,
+    ParallelErrQ4,
+    ParallelErrQ5,
+    ParallelErrQ6,
+    ParallelErrQ7,
+    ParallelErrQ8,
+    ParallelErrQ9,
+    ParallelErrQ10,
+    ParallelErrQ11,
+    NumParallelPublicCopyErrComps
+};
+
+amrex::Geometry make_parallel_public_geometry (const int nx,
+                                               const int ny,
+                                               const int nz)
+{
+    const amrex::Box domain(amrex::IntVect(0), amrex::IntVect(AMREX_D_DECL(nx - 1, ny - 1, nz - 1)));
+    const amrex::RealBox real_box({AMREX_D_DECL(amrex::Real(0.0), amrex::Real(0.0), amrex::Real(0.0))},
+                                  {AMREX_D_DECL(static_cast<amrex::Real>(nx),
+                                                static_cast<amrex::Real>(ny),
+                                                static_cast<amrex::Real>(nz))});
+    const amrex::Array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 0)};
+    return amrex::Geometry(domain, &real_box, amrex::CoordSys::cartesian, periodicity.data());
+}
+
+SolverChoice make_parallel_morrison_solver_choice ()
+{
+    SolverChoice sc;
+    sc.c_p = Cp_d;
+    sc.rdOcp = R_d / Cp_d;
+    sc.ave_plane = 2;
+    sc.moisture_type = MoistureType::Morrison;
+    sc.use_shoc = false;
+    sc.moisture_indices = MoistureComponentIndices(
+        RhoQ1_comp, RhoQ2_comp, RhoQ3_comp, RhoQ4_comp, RhoQ5_comp, RhoQ6_comp,
+        RhoQ7_comp, RhoQ8_comp, RhoQ9_comp, RhoQ10_comp, RhoQ11_comp);
+    return sc;
+}
+
+void fill_parallel_public_copy_state (amrex::MultiFab& cons)
+{
+    for (amrex::MFIter mfi(cons, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.growntilebox();
+        auto arr = cons.array(mfi);
+        amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const amrex::Real rho = amrex::Real(1.0) + amrex::Real(0.01) * static_cast<amrex::Real>(i + 2 * j + 3 * k + 6);
+            arr(i,j,k,Rho_comp) = rho;
+            arr(i,j,k,RhoTheta_comp) = rho * (amrex::Real(286.0) + static_cast<amrex::Real>(i + j + k));
+            arr(i,j,k,RhoKE_comp) = amrex::Real(0.0);
+            arr(i,j,k,RhoScalar_comp) = amrex::Real(0.0);
+
+            arr(i,j,k,RhoQ1_comp) = rho * amrex::Real(7.0e-3);
+            arr(i,j,k,RhoQ2_comp) = rho * ((i % 3 == 0) ? -amrex::Real(1.0e-5) : amrex::Real(1.0e-4));
+            arr(i,j,k,RhoQ3_comp) = rho * amrex::Real(2.0e-5);
+            arr(i,j,k,RhoQ4_comp) = rho * amrex::Real(3.0e-5);
+            arr(i,j,k,RhoQ5_comp) = rho * ((j % 2 == 0) ? -amrex::Real(2.0e-5) : amrex::Real(4.0e-5));
+            arr(i,j,k,RhoQ6_comp) = rho * amrex::Real(5.0e-5);
+            arr(i,j,k,RhoQ7_comp) = rho * amrex::Real(6.0e7);
+            arr(i,j,k,RhoQ8_comp) = rho * ((k % 2 == 0) ? -amrex::Real(1.0e4) : amrex::Real(7.0e4));
+            arr(i,j,k,RhoQ9_comp) = rho * amrex::Real(8.0e4);
+            arr(i,j,k,RhoQ10_comp) = rho * amrex::Real(9.0e4);
+            arr(i,j,k,RhoQ11_comp) = rho * amrex::Real(1.0e5);
+        });
+    }
+    morrison_test::sync();
+}
+
+void compute_parallel_public_copy_errors (const amrex::MultiFab& before,
+                                          const amrex::MultiFab& after,
+                                          amrex::MultiFab& err)
+{
+    for (amrex::MFIter mfi(after, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.tilebox();
+        const auto before_arr = before.const_array(mfi);
+        const auto after_arr = after.const_array(mfi);
+        auto err_arr = err.array(mfi);
+        amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            err_arr(i,j,k,ParallelErrRho) = amrex::Math::abs(after_arr(i,j,k,Rho_comp) - before_arr(i,j,k,Rho_comp));
+            err_arr(i,j,k,ParallelErrRhoTheta) = amrex::Math::abs(after_arr(i,j,k,RhoTheta_comp) - before_arr(i,j,k,RhoTheta_comp));
+            err_arr(i,j,k,ParallelErrQ1) = amrex::Math::abs(after_arr(i,j,k,RhoQ1_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ1_comp)));
+            err_arr(i,j,k,ParallelErrQ2) = amrex::Math::abs(after_arr(i,j,k,RhoQ2_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ2_comp)));
+            err_arr(i,j,k,ParallelErrQ3) = amrex::Math::abs(after_arr(i,j,k,RhoQ3_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ3_comp)));
+            err_arr(i,j,k,ParallelErrQ4) = amrex::Math::abs(after_arr(i,j,k,RhoQ4_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ4_comp)));
+            err_arr(i,j,k,ParallelErrQ5) = amrex::Math::abs(after_arr(i,j,k,RhoQ5_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ5_comp)));
+            err_arr(i,j,k,ParallelErrQ6) = amrex::Math::abs(after_arr(i,j,k,RhoQ6_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ6_comp)));
+            err_arr(i,j,k,ParallelErrQ7) = amrex::Math::abs(after_arr(i,j,k,RhoQ7_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ7_comp)));
+            err_arr(i,j,k,ParallelErrQ8) = amrex::Math::abs(after_arr(i,j,k,RhoQ8_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ8_comp)));
+            err_arr(i,j,k,ParallelErrQ9) = amrex::Math::abs(after_arr(i,j,k,RhoQ9_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ9_comp)));
+            err_arr(i,j,k,ParallelErrQ10) = amrex::Math::abs(after_arr(i,j,k,RhoQ10_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ10_comp)));
+            err_arr(i,j,k,ParallelErrQ11) = amrex::Math::abs(after_arr(i,j,k,RhoQ11_comp) - amrex::max(amrex::Real(0), before_arr(i,j,k,RhoQ11_comp)));
+        });
+    }
+    morrison_test::sync();
+}
+
+void expect_parallel_copy_error_le (const amrex::MultiFab& err,
+                                    const int err_comp,
+                                    const amrex::MultiFab& scale_source,
+                                    const int state_comp)
+{
+    EXPECT_LE(err.max(err_comp), formula_abs_tol(scale_source.max(state_comp)))
+        << "rank=" << amrex::ParallelDescriptor::MyProc()
+        << " error component=" << err_comp << " state component=" << state_comp;
+}
+
 } // namespace
+
+// Motivation: This is the public-path MPI/decomposition contract for Morrison
+// state mapping. A split BoxArray is distributed by AMReX, then the public
+// Define/Init/Copy_State_to_Micro/Copy_Micro_to_State path must reproduce the
+// same clamped conserved state under any tested rank count.
+TEST(MorrisonParallel, PublicCopyRoundTripIsDecompositionInvariant)
+{
+    amrex::ParmParse pp("erf");
+    pp.add("use_morr_cpp_answer", true);
+
+    const amrex::Geometry geom = make_parallel_public_geometry(4, 3, 2);
+    amrex::BoxArray ba(geom.Domain());
+    ba.maxSize(amrex::IntVect(1, 1, 2));
+    amrex::DistributionMapping dm(ba);
+    amrex::MultiFab cons(ba, dm, RhoQ11_comp + 1, 1);
+    amrex::MultiFab before(ba, dm, RhoQ11_comp + 1, 1);
+    amrex::MultiFab err(ba, dm, NumParallelPublicCopyErrComps, 0);
+    auto z_phys_nd = std::make_unique<amrex::MultiFab>(ba, dm, 1, 1);
+    auto detJ_cc = std::make_unique<amrex::MultiFab>(ba, dm, 1, 1);
+
+    cons.setVal(amrex::Real(0.0));
+    before.setVal(amrex::Real(0.0));
+    err.setVal(amrex::Real(0.0));
+    z_phys_nd->setVal(amrex::Real(0.0));
+    detJ_cc->setVal(amrex::Real(1.0));
+    fill_parallel_public_copy_state(cons);
+    amrex::MultiFab::Copy(before, cons, 0, 0, cons.nComp(), cons.nGrowVect());
+
+    Morrison morrison;
+    SolverChoice sc = make_parallel_morrison_solver_choice();
+    morrison.Define(sc);
+    morrison.Init(cons, ba, geom, amrex::Real(1.0), z_phys_nd, detJ_cc);
+    morrison.Copy_State_to_Micro(cons);
+    morrison.Copy_Micro_to_State(cons);
+    compute_parallel_public_copy_errors(before, cons, err);
+
+    EXPECT_LE(err.max(ParallelErrRho), exact_zero_tol());
+    EXPECT_LE(err.max(ParallelErrRhoTheta), exact_zero_tol());
+    expect_parallel_copy_error_le(err, ParallelErrQ1, before, RhoQ1_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ2, before, RhoQ2_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ3, before, RhoQ3_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ4, before, RhoQ4_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ5, before, RhoQ5_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ6, before, RhoQ6_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ7, before, RhoQ7_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ8, before, RhoQ8_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ9, before, RhoQ9_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ10, before, RhoQ10_comp);
+    expect_parallel_copy_error_le(err, ParallelErrQ11, before, RhoQ11_comp);
+}
 
 // Motivation: This helper-distribution test keeps the MPI harness honest for
 // Morrison helper checks by splitting deterministic PSD cases across ranks and
