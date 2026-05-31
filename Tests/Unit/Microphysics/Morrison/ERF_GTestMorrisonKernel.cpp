@@ -257,12 +257,65 @@ void expect_state_near (const MorrisonCellState& actual,
     EXPECT_NEAR(actual.ng, expected.ng, formula_abs_tol(expected.ng));
 }
 
+void expect_autoconversion_near (const MorrisonAutoconversionRates& actual,
+                                 const MorrisonAutoconversionRates& expected)
+{
+    EXPECT_NEAR(actual.prc, expected.prc, backend_math_abs_tol(expected.prc));
+    EXPECT_NEAR(actual.nprc, expected.nprc, backend_math_abs_tol(expected.nprc));
+    EXPECT_NEAR(actual.nprc1, expected.nprc1, backend_math_abs_tol(expected.nprc1));
+    EXPECT_EQ(actual.active, expected.active);
+    EXPECT_EQ(actual.nprc_limited, expected.nprc_limited);
+    EXPECT_EQ(actual.nprc1_limited, expected.nprc1_limited);
+}
+
+void expect_accretion_near (const MorrisonAccretionRates& actual,
+                            const MorrisonAccretionRates& expected)
+{
+    EXPECT_NEAR(actual.pra, expected.pra, backend_math_abs_tol(expected.pra));
+    EXPECT_NEAR(actual.npra, expected.npra, backend_math_abs_tol(expected.npra));
+    EXPECT_EQ(actual.active, expected.active);
+}
+
+void expect_limiter_near (const MorrisonCloudWaterLimiterDiagnostics& actual,
+                          const MorrisonCloudWaterLimiterDiagnostics& expected,
+                          const amrex::Real actual_prc,
+                          const amrex::Real expected_prc,
+                          const amrex::Real actual_pra,
+                          const amrex::Real expected_pra)
+{
+    EXPECT_NEAR(actual.ratio, expected.ratio, formula_abs_tol(expected.ratio));
+    EXPECT_EQ(actual.limited, expected.limited);
+    EXPECT_NEAR(actual_prc, expected_prc, formula_abs_tol(expected_prc));
+    EXPECT_NEAR(actual_pra, expected_pra, formula_abs_tol(expected_pra));
+}
+
+void expect_sedimentation_budget_near (const MorrisonSedimentationBudget& actual,
+                                       const MorrisonSedimentationBudget& expected)
+{
+    EXPECT_NEAR(actual.flux_divergence, expected.flux_divergence,
+                formula_abs_tol(expected.flux_divergence));
+    EXPECT_NEAR(actual.mixing_ratio_tendency, expected.mixing_ratio_tendency,
+                formula_abs_tol(expected.mixing_ratio_tendency));
+    EXPECT_NEAR(actual.density_content_delta, expected.density_content_delta,
+                formula_abs_tol(expected.density_content_delta));
+}
+
+void expect_surface_increment_near (const MorrisonSurfacePrecipitationIncrement& actual,
+                                    const MorrisonSurfacePrecipitationIncrement& expected)
+{
+    EXPECT_NEAR(actual.precipitation, expected.precipitation, formula_abs_tol(expected.precipitation));
+    EXPECT_NEAR(actual.snow, expected.snow, formula_abs_tol(expected.snow));
+    EXPECT_NEAR(actual.snow_plus_ice, expected.snow_plus_ice, formula_abs_tol(expected.snow_plus_ice));
+    EXPECT_NEAR(actual.graupel, expected.graupel, formula_abs_tol(expected.graupel));
+}
+
 } // namespace
 
 // Motivation: The extracted Morrison helpers are called from AMReX kernels in
-// production. This sweep covers qsmall cleanup, threshold equality, warm
-// tiny-ice melt, subsaturated cleanup, and PSD lower/upper/in-range branches on
-// the active backend, then compares against the same helper surface on host.
+// production. This test compares host/device parity for the total-water,
+// cleanup/melt, warm-rain source, cloud-water limiter, sedimentation-budget,
+// surface-increment, and PSD helpers. Formula correctness is covered by the
+// scalar and physical-property tests.
 TEST(MorrisonKernel, HostDeviceHelperEquivalenceCoversExtractedBranches)
 {
     const std::vector<KernelCase> cases = make_kernel_cases();
@@ -282,11 +335,22 @@ TEST(MorrisonKernel, HostDeviceHelperEquivalenceCoversExtractedBranches)
     for (int idx = 0; idx < static_cast<int>(cases.size()); ++idx) {
         SCOPED_TRACE(state_label(cases[idx].state));
         expect_state_near(device_outputs[idx].state, host_outputs[idx].state);
+        EXPECT_NEAR(device_outputs[idx].total_water_full, host_outputs[idx].total_water_full,
+                    formula_abs_tol(host_outputs[idx].total_water_full));
+        EXPECT_NEAR(device_outputs[idx].total_water_no_ice, host_outputs[idx].total_water_no_ice,
+                    formula_abs_tol(host_outputs[idx].total_water_no_ice));
         EXPECT_EQ(device_outputs[idx].cleanup.qc_zeroed, host_outputs[idx].cleanup.qc_zeroed);
         EXPECT_EQ(device_outputs[idx].cleanup.qi_zeroed, host_outputs[idx].cleanup.qi_zeroed);
         EXPECT_EQ(device_outputs[idx].cleanup.qr_zeroed, host_outputs[idx].cleanup.qr_zeroed);
         EXPECT_EQ(device_outputs[idx].cleanup.qs_zeroed, host_outputs[idx].cleanup.qs_zeroed);
         EXPECT_EQ(device_outputs[idx].cleanup.qg_zeroed, host_outputs[idx].cleanup.qg_zeroed);
+        expect_autoconversion_near(device_outputs[idx].autoconversion, host_outputs[idx].autoconversion);
+        expect_accretion_near(device_outputs[idx].accretion, host_outputs[idx].accretion);
+        expect_limiter_near(device_outputs[idx].limiter, host_outputs[idx].limiter,
+                            device_outputs[idx].limited_prc, host_outputs[idx].limited_prc,
+                            device_outputs[idx].limited_pra, host_outputs[idx].limited_pra);
+        expect_sedimentation_budget_near(device_outputs[idx].sedimentation, host_outputs[idx].sedimentation);
+        expect_surface_increment_near(device_outputs[idx].surface, host_outputs[idx].surface);
         EXPECT_NEAR(device_outputs[idx].distribution.lambda, host_outputs[idx].distribution.lambda,
                     backend_math_abs_tol(host_outputs[idx].distribution.lambda));
         EXPECT_NEAR(device_outputs[idx].distribution.number, host_outputs[idx].distribution.number,
