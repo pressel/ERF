@@ -17,6 +17,7 @@
 #include "ERF_DataStruct.H"
 #include "ERF_NullMoist.H"
 #include "ERF_Morrison.H"
+#include "ERF_MorrisonUtils.H"
 #ifdef ERF_USE_MORR_FORT
 #include <ERF_Morrison_Fortran_Interface.H>
 #endif
@@ -879,35 +880,22 @@ namespace MORRInd {
 
             // AT SUBSATURATION, REMOVE SMALL AMOUNTS OF CLOUD/PRECIP WATER
             // hm modify 7/0/09 change limit to Real(1.e-8)
-            if (qvqvs < Real(0.9)) {
-              if (morr_arr(i,j,k,MORRInd::qr3d) < Real(1.0e-8)) {
-                morr_arr(i,j,k,MORRInd::qv3d) += morr_arr(i,j,k,MORRInd::qr3d); // budget equation: transfer rain to vapor
-                morr_arr(i,j,k,MORRInd::t3d) -= morr_arr(i,j,k,MORRInd::qr3d) * morr_arr(i,j,k,MORRInd::xxlv) / morr_arr(i,j,k,MORRInd::cpm); // budget equation: adjust temperature
-                morr_arr(i,j,k,MORRInd::qr3d) = Real(0); // temporary update: set rain to Real(0)
-              }
-              if (morr_arr(i,j,k,MORRInd::qc3d) < Real(1.0e-8)) {
-                morr_arr(i,j,k,MORRInd::qv3d) += morr_arr(i,j,k,MORRInd::qc3d); // budget equation: transfer cloud water to vapor
-                morr_arr(i,j,k,MORRInd::t3d) -= morr_arr(i,j,k,MORRInd::qc3d) * morr_arr(i,j,k,MORRInd::xxlv) / morr_arr(i,j,k,MORRInd::cpm); // budget equation: adjust temperature
-                morr_arr(i,j,k,MORRInd::qc3d) = Real(0); // temporary update: set cloud water to Real(0)
-              }
-            }
-            if (qvqvsi < Real(0.9)) {
-              if (morr_arr(i,j,k,MORRInd::qi3d) < Real(1.0e-8)) {
-                morr_arr(i,j,k,MORRInd::qv3d) += morr_arr(i,j,k,MORRInd::qi3d); // budget equation: transfer cloud ice to vapor
-                morr_arr(i,j,k,MORRInd::t3d) -= morr_arr(i,j,k,MORRInd::qi3d) * morr_arr(i,j,k,MORRInd::xxls) / morr_arr(i,j,k,MORRInd::cpm); // budget equation: adjust temperature
-                morr_arr(i,j,k,MORRInd::qi3d) = Real(0); // temporary update: set cloud ice to Real(0)
-              }
-              if (morr_arr(i,j,k,MORRInd::qni3d) < Real(1.0e-8)) {
-                morr_arr(i,j,k,MORRInd::qv3d) += morr_arr(i,j,k,MORRInd::qni3d); // budget equation: transfer snow to vapor
-                morr_arr(i,j,k,MORRInd::t3d) -= morr_arr(i,j,k,MORRInd::qni3d) * morr_arr(i,j,k,MORRInd::xxls) / morr_arr(i,j,k,MORRInd::cpm); // budget equation: adjust temperature
-                morr_arr(i,j,k,MORRInd::qni3d) = Real(0); // temporary update: set snow to Real(0)
-              }
-              if (morr_arr(i,j,k,MORRInd::qg3d) < Real(1.0e-8)) {
-                morr_arr(i,j,k,MORRInd::qv3d) += morr_arr(i,j,k,MORRInd::qg3d); // budget equation: transfer graupel to vapor
-                morr_arr(i,j,k,MORRInd::t3d) -= morr_arr(i,j,k,MORRInd::qg3d) * morr_arr(i,j,k,MORRInd::xxls) / morr_arr(i,j,k,MORRInd::cpm); // budget equation: adjust temperature
-                morr_arr(i,j,k,MORRInd::qg3d) = Real(0); // temporary update: set graupel to Real(0)
-              }
-            }
+            MorrisonCellState cell_state{
+              morr_arr(i,j,k,MORRInd::rho), morr_arr(i,j,k,MORRInd::t3d), morr_arr(i,j,k,MORRInd::pres),
+              morr_arr(i,j,k,MORRInd::qv3d), morr_arr(i,j,k,MORRInd::qc3d), morr_arr(i,j,k,MORRInd::qi3d),
+              morr_arr(i,j,k,MORRInd::qr3d), morr_arr(i,j,k,MORRInd::qni3d), morr_arr(i,j,k,MORRInd::qg3d),
+              morr_arr(i,j,k,MORRInd::nc3d), morr_arr(i,j,k,MORRInd::ni3d), morr_arr(i,j,k,MORRInd::nr3d),
+              morr_arr(i,j,k,MORRInd::ns3d), morr_arr(i,j,k,MORRInd::ng3d)};
+            morrison_apply_subsaturation_small_hydrometeor_cleanup(
+              cell_state, qvqvs, qvqvsi, morr_arr(i,j,k,MORRInd::xxlv),
+              morr_arr(i,j,k,MORRInd::xxls), morr_arr(i,j,k,MORRInd::cpm));
+            morr_arr(i,j,k,MORRInd::t3d) = cell_state.temperature;
+            morr_arr(i,j,k,MORRInd::qv3d) = cell_state.qv;
+            morr_arr(i,j,k,MORRInd::qc3d) = cell_state.qc;
+            morr_arr(i,j,k,MORRInd::qi3d) = cell_state.qi;
+            morr_arr(i,j,k,MORRInd::qr3d) = cell_state.qr;
+            morr_arr(i,j,k,MORRInd::qni3d) = cell_state.qs;
+            morr_arr(i,j,k,MORRInd::qg3d) = cell_state.qg;
             // HEAT OF FUSION
             morr_arr(i,j,k,MORRInd::xlf) = morr_arr(i,j,k,MORRInd::xxls) - morr_arr(i,j,k,MORRInd::xxlv);
 
@@ -915,31 +903,35 @@ namespace MORRInd {
             // Note: QSMALL is not defined in the variable list, so I'll define it
             const Real QSMALL = m_qsmall;
 
-            if (morr_arr(i,j,k,MORRInd::qc3d) < QSMALL) {
-              morr_arr(i,j,k,MORRInd::qc3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::nc3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::effc) = Real(0);
-            }
-            if (morr_arr(i,j,k,MORRInd::qr3d) < QSMALL) {
-              morr_arr(i,j,k,MORRInd::qr3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::nr3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::effr) = Real(0);
-            }
-            if (morr_arr(i,j,k,MORRInd::qi3d) < QSMALL) {
-              morr_arr(i,j,k,MORRInd::qi3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::ni3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::effi) = Real(0);
-            }
-            if (morr_arr(i,j,k,MORRInd::qni3d) < QSMALL) {
-              morr_arr(i,j,k,MORRInd::qni3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::ns3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::effs) = Real(0);
-            }
-            if (morr_arr(i,j,k,MORRInd::qg3d) < QSMALL) {
-              morr_arr(i,j,k,MORRInd::qg3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::ng3d) = Real(0);
-              morr_arr(i,j,k,MORRInd::effg) = Real(0);
-            }
+            cell_state.qc = morr_arr(i,j,k,MORRInd::qc3d);
+            cell_state.qi = morr_arr(i,j,k,MORRInd::qi3d);
+            cell_state.qr = morr_arr(i,j,k,MORRInd::qr3d);
+            cell_state.qs = morr_arr(i,j,k,MORRInd::qni3d);
+            cell_state.qg = morr_arr(i,j,k,MORRInd::qg3d);
+            cell_state.nc = morr_arr(i,j,k,MORRInd::nc3d);
+            cell_state.ni = morr_arr(i,j,k,MORRInd::ni3d);
+            cell_state.nr = morr_arr(i,j,k,MORRInd::nr3d);
+            cell_state.ns = morr_arr(i,j,k,MORRInd::ns3d);
+            cell_state.ng = morr_arr(i,j,k,MORRInd::ng3d);
+            MorrisonEffectiveRadii effective_radii{
+              morr_arr(i,j,k,MORRInd::effc), morr_arr(i,j,k,MORRInd::effi), morr_arr(i,j,k,MORRInd::effr),
+              morr_arr(i,j,k,MORRInd::effs), morr_arr(i,j,k,MORRInd::effg)};
+            morrison_apply_qsmall_mass_number_cleanup(cell_state, effective_radii, QSMALL);
+            morr_arr(i,j,k,MORRInd::qc3d) = cell_state.qc;
+            morr_arr(i,j,k,MORRInd::qi3d) = cell_state.qi;
+            morr_arr(i,j,k,MORRInd::qr3d) = cell_state.qr;
+            morr_arr(i,j,k,MORRInd::qni3d) = cell_state.qs;
+            morr_arr(i,j,k,MORRInd::qg3d) = cell_state.qg;
+            morr_arr(i,j,k,MORRInd::nc3d) = cell_state.nc;
+            morr_arr(i,j,k,MORRInd::ni3d) = cell_state.ni;
+            morr_arr(i,j,k,MORRInd::nr3d) = cell_state.nr;
+            morr_arr(i,j,k,MORRInd::ns3d) = cell_state.ns;
+            morr_arr(i,j,k,MORRInd::ng3d) = cell_state.ng;
+            morr_arr(i,j,k,MORRInd::effc) = effective_radii.effc;
+            morr_arr(i,j,k,MORRInd::effi) = effective_radii.effi;
+            morr_arr(i,j,k,MORRInd::effr) = effective_radii.effr;
+            morr_arr(i,j,k,MORRInd::effs) = effective_radii.effs;
+            morr_arr(i,j,k,MORRInd::effg) = effective_radii.effg;
             // INITIALIZE SEDIMENTATION TENDENCIES FOR MIXING RATIO
             morr_arr(i,j,k,MORRInd::qrsten) = Real(0);  // temporary update: initialize QRSTEN
             morr_arr(i,j,k,MORRInd::qisten) = Real(0);  // temporary update: initialize QISTEN
@@ -1009,21 +1001,22 @@ namespace MORRInd {
 
               // GET SIZE DISTRIBUTION PARAMETERS
               // MELT VERY SMALL SNOW AND GRAUPEL MIXING RATIOS, ADD TO RAIN
-              if (morr_arr(i,j,k,MORRInd::qni3d) < Real(1.0e-6)) {
-                morr_arr(i,j,k,MORRInd::qr3d) = morr_arr(i,j,k,MORRInd::qr3d) + morr_arr(i,j,k,MORRInd::qni3d);         // Transfer snow to rain
-                morr_arr(i,j,k,MORRInd::nr3d) = morr_arr(i,j,k,MORRInd::nr3d) + morr_arr(i,j,k,MORRInd::ns3d);          // Transfer snow number to rain
-                morr_arr(i,j,k,MORRInd::t3d) = morr_arr(i,j,k,MORRInd::t3d) - morr_arr(i,j,k,MORRInd::qni3d) * morr_arr(i,j,k,MORRInd::xlf) / morr_arr(i,j,k,MORRInd::cpm); // Adjust temperature
-                morr_arr(i,j,k,MORRInd::qni3d) = Real(0);                 // Set snow to Real(0)
-                morr_arr(i,j,k,MORRInd::ns3d) = Real(0);                  // Set snow number to Real(0)
-              }
-
-              if (morr_arr(i,j,k,MORRInd::qg3d) < Real(1.0e-6)) {
-                morr_arr(i,j,k,MORRInd::qr3d) = morr_arr(i,j,k,MORRInd::qr3d) + morr_arr(i,j,k,MORRInd::qg3d);          // Transfer graupel to rain
-                morr_arr(i,j,k,MORRInd::nr3d) = morr_arr(i,j,k,MORRInd::nr3d) + morr_arr(i,j,k,MORRInd::ng3d);          // Transfer graupel number to rain
-                morr_arr(i,j,k,MORRInd::t3d) = morr_arr(i,j,k,MORRInd::t3d) - morr_arr(i,j,k,MORRInd::qg3d) * morr_arr(i,j,k,MORRInd::xlf) / morr_arr(i,j,k,MORRInd::cpm);  // Adjust temperature
-                morr_arr(i,j,k,MORRInd::qg3d) = Real(0);                  // Set graupel to Real(0)
-                morr_arr(i,j,k,MORRInd::ng3d) = Real(0);                  // Set graupel number to Real(0)
-              }
+              cell_state.temperature = morr_arr(i,j,k,MORRInd::t3d);
+              cell_state.qr = morr_arr(i,j,k,MORRInd::qr3d);
+              cell_state.qs = morr_arr(i,j,k,MORRInd::qni3d);
+              cell_state.qg = morr_arr(i,j,k,MORRInd::qg3d);
+              cell_state.nr = morr_arr(i,j,k,MORRInd::nr3d);
+              cell_state.ns = morr_arr(i,j,k,MORRInd::ns3d);
+              cell_state.ng = morr_arr(i,j,k,MORRInd::ng3d);
+              morrison_apply_warm_small_ice_melt_to_rain(
+                cell_state, morr_arr(i,j,k,MORRInd::xlf), morr_arr(i,j,k,MORRInd::cpm));
+              morr_arr(i,j,k,MORRInd::t3d) = cell_state.temperature;
+              morr_arr(i,j,k,MORRInd::qr3d) = cell_state.qr;
+              morr_arr(i,j,k,MORRInd::qni3d) = cell_state.qs;
+              morr_arr(i,j,k,MORRInd::qg3d) = cell_state.qg;
+              morr_arr(i,j,k,MORRInd::nr3d) = cell_state.nr;
+              morr_arr(i,j,k,MORRInd::ns3d) = cell_state.ns;
+              morr_arr(i,j,k,MORRInd::ng3d) = cell_state.ng;
               // Skip to label 300 if concentrations are below thresholds
               if (morr_arr(i,j,k,MORRInd::qc3d) < m_qsmall && morr_arr(i,j,k,MORRInd::qni3d) < Real(1.0e-8) && morr_arr(i,j,k,MORRInd::qr3d) < m_qsmall && morr_arr(i,j,k,MORRInd::qg3d) < Real(1.0e-8)) {
                 skipConcentrations=true;//                goto label_300;
@@ -1039,20 +1032,12 @@ namespace MORRInd {
                 // ========================================================================
                 // Rain
                 if (morr_arr(i,j,k,MORRInd::qr3d) >= m_qsmall) {
-                  // Calculate lambda parameter using cons26 (pi*rhow/6)
-                  morr_arr(i,j,k,MORRInd::lamr) = std::pow(m_pi * m_rhow * morr_arr(i,j,k,MORRInd::nr3d) / morr_arr(i,j,k,MORRInd::qr3d), one/three);
-                  morr_arr(i,j,k,MORRInd::n0r) = morr_arr(i,j,k,MORRInd::nr3d)*morr_arr(i,j,k,MORRInd::lamr);
-
-                  // Check for slope and adjust vars
-                  if (morr_arr(i,j,k,MORRInd::lamr) < m_lamminr) {
-                    morr_arr(i,j,k,MORRInd::lamr) = m_lamminr;
-                    morr_arr(i,j,k,MORRInd::n0r) = std::pow(morr_arr(i,j,k,MORRInd::lamr), Real(4.0)) * morr_arr(i,j,k,MORRInd::qr3d) / (m_pi * m_rhow);
-                    morr_arr(i,j,k,MORRInd::nr3d) = morr_arr(i,j,k,MORRInd::n0r) / morr_arr(i,j,k,MORRInd::lamr);  // Update number concentration
-                  } else if (morr_arr(i,j,k,MORRInd::lamr) > m_lammaxr) {
-                    morr_arr(i,j,k,MORRInd::lamr) = m_lammaxr;
-                    morr_arr(i,j,k,MORRInd::n0r) = std::pow(morr_arr(i,j,k,MORRInd::lamr), Real(4.0)) * morr_arr(i,j,k,MORRInd::qr3d) / (m_pi * m_rhow);
-                    morr_arr(i,j,k,MORRInd::nr3d) = morr_arr(i,j,k,MORRInd::n0r) / morr_arr(i,j,k,MORRInd::lamr);  // Update number concentration
-                  }
+                  const MorrisonDistributionParameters rain_distribution = morrison_exponential_distribution_parameters(
+                    morr_arr(i,j,k,MORRInd::qr3d), morr_arr(i,j,k,MORRInd::nr3d), m_pi * m_rhow,
+                    m_lamminr, m_lammaxr, three);
+                  morr_arr(i,j,k,MORRInd::lamr) = rain_distribution.lambda;
+                  morr_arr(i,j,k,MORRInd::n0r) = rain_distribution.intercept;
+                  morr_arr(i,j,k,MORRInd::nr3d) = rain_distribution.number;
                 }
 
                 // Cloud droplets
@@ -1096,42 +1081,22 @@ namespace MORRInd {
 
                 // Snow
                 if (morr_arr(i,j,k,MORRInd::qni3d) >= m_qsmall) {
-                  // Calculate lambda parameter
-                  morr_arr(i,j,k,MORRInd::lams) = std::pow(m_cons1 * morr_arr(i,j,k,MORRInd::ns3d) / morr_arr(i,j,k,MORRInd::qni3d), one/ds0);
-
-                  // Calculate intercept parameter
-                  morr_arr(i,j,k,MORRInd::n0s) = morr_arr(i,j,k,MORRInd::ns3d) * morr_arr(i,j,k,MORRInd::lams);
-
-                  // Check for slope and adjust vars
-                  if (morr_arr(i,j,k,MORRInd::lams) < m_lammins) {
-                    morr_arr(i,j,k,MORRInd::lams) = m_lammins;
-                    morr_arr(i,j,k,MORRInd::n0s) = std::pow(morr_arr(i,j,k,MORRInd::lams), Real(4.0)) * morr_arr(i,j,k,MORRInd::qni3d) / m_cons1;
-                    morr_arr(i,j,k,MORRInd::ns3d) = morr_arr(i,j,k,MORRInd::n0s) / morr_arr(i,j,k,MORRInd::lams);  // Update number concentration
-                  } else if (morr_arr(i,j,k,MORRInd::lams) > m_lammaxs) {
-                    morr_arr(i,j,k,MORRInd::lams) = m_lammaxs;
-                    morr_arr(i,j,k,MORRInd::n0s) = std::pow(morr_arr(i,j,k,MORRInd::lams), Real(4.0)) * morr_arr(i,j,k,MORRInd::qni3d) / m_cons1;
-                    morr_arr(i,j,k,MORRInd::ns3d) = morr_arr(i,j,k,MORRInd::n0s) / morr_arr(i,j,k,MORRInd::lams);  // Update number concentration
-                  }
+                  const MorrisonDistributionParameters snow_distribution = morrison_exponential_distribution_parameters(
+                    morr_arr(i,j,k,MORRInd::qni3d), morr_arr(i,j,k,MORRInd::ns3d), m_cons1,
+                    m_lammins, m_lammaxs, ds0);
+                  morr_arr(i,j,k,MORRInd::lams) = snow_distribution.lambda;
+                  morr_arr(i,j,k,MORRInd::n0s) = snow_distribution.intercept;
+                  morr_arr(i,j,k,MORRInd::ns3d) = snow_distribution.number;
                 }
 
                 // Graupel
                 if (morr_arr(i,j,k,MORRInd::qg3d) >= m_qsmall) {
-                  // Calculate lambda parameter
-                  morr_arr(i,j,k,MORRInd::lamg) = std::pow(m_cons2 * morr_arr(i,j,k,MORRInd::ng3d) / morr_arr(i,j,k,MORRInd::qg3d), one/dg0);
-
-                  // Calculate intercept parameter
-                  morr_arr(i,j,k,MORRInd::n0g) = morr_arr(i,j,k,MORRInd::ng3d) * morr_arr(i,j,k,MORRInd::lamg);
-
-                  // Check for slope and adjust vars
-                  if (morr_arr(i,j,k,MORRInd::lamg) < m_lamming) {
-                    morr_arr(i,j,k,MORRInd::lamg) = m_lamming;
-                    morr_arr(i,j,k,MORRInd::n0g) = std::pow(morr_arr(i,j,k,MORRInd::lamg), Real(4.0)) * morr_arr(i,j,k,MORRInd::qg3d) / m_cons2;
-                    morr_arr(i,j,k,MORRInd::ng3d) = morr_arr(i,j,k,MORRInd::n0g) / morr_arr(i,j,k,MORRInd::lamg);  // Update number concentration
-                  } else if (morr_arr(i,j,k,MORRInd::lamg) > m_lammaxg) {
-                    morr_arr(i,j,k,MORRInd::lamg) = m_lammaxg;
-                    morr_arr(i,j,k,MORRInd::n0g) = std::pow(morr_arr(i,j,k,MORRInd::lamg), Real(4.0)) * morr_arr(i,j,k,MORRInd::qg3d) / m_cons2;
-                    morr_arr(i,j,k,MORRInd::ng3d) = morr_arr(i,j,k,MORRInd::n0g) / morr_arr(i,j,k,MORRInd::lamg);  // Update number concentration
-                  }
+                  const MorrisonDistributionParameters graupel_distribution = morrison_exponential_distribution_parameters(
+                    morr_arr(i,j,k,MORRInd::qg3d), morr_arr(i,j,k,MORRInd::ng3d), m_cons2,
+                    m_lamming, m_lammaxg, dg0);
+                  morr_arr(i,j,k,MORRInd::lamg) = graupel_distribution.lambda;
+                  morr_arr(i,j,k,MORRInd::n0g) = graupel_distribution.intercept;
+                  morr_arr(i,j,k,MORRInd::ng3d) = graupel_distribution.number;
                 }
                 ////////////////////// First instance of ZERO OUT PROCESS RATES
                 // Zero out process rates
