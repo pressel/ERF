@@ -244,9 +244,9 @@ public:
                 // Cloud water not permitted (sublimation)
                 else if(tabs <= tbgmin) {
                 }
-                // Mixed cloud phase (condensation & fusion)
+                // Mixed cloud phase (condensation & deposition)
                 else {
-                    lstari = fac_fus;
+                    lstari = fac_sub;
                     domn   = an;
                 }
             } else if (SAM_moisture_type == 2) {

@@ -1,4 +1,5 @@
 #include <array>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -335,6 +336,142 @@ void fill_nonuniform_detj (amrex::MultiFab& detJ_cc)
     }
 
     amrex::Gpu::streamSynchronize();
+}
+
+struct IceFallSubstepReductionDiagnostics {
+    amrex::Real initial_qci_mass{amrex::Real(0.0)};
+    amrex::Real local_max_reduced_flux{amrex::Real(0.0)};
+    amrex::Real global_max_reduced_flux{amrex::Real(0.0)};
+    int local_n_substep{0};
+    int global_n_substep{0};
+    int owned_box_count{0};
+    std::string box_summary{"none"};
+};
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real icefall_reduction_rho (const int i,
+                                   const int j,
+                                   const int k) noexcept
+{
+    return amrex::Real(1.0) + amrex::Real(0.02) * i + amrex::Real(0.03) * j + amrex::Real(0.04) * k;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real icefall_reduction_qci (const int i,
+                                   const int j,
+                                   const int k) noexcept
+{
+    const amrex::Real stripe_boost = (i >= 6) ? amrex::Real(5.0e-3) : amrex::Real(0.0);
+    return amrex::Real(2.0e-4) + amrex::Real(5.0e-4) * i + amrex::Real(1.0e-4) * j +
+           amrex::Real(2.0e-4) * k + stripe_boost;
+}
+
+void fill_icefall_reduction_state (amrex::MultiFab& rho,
+                                   amrex::MultiFab& qci)
+{
+    rho.setVal(amrex::Real(0.0));
+    qci.setVal(amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(rho, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        auto rho_arr = rho.array(mfi);
+        auto qci_arr = qci.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            rho_arr(i,j,k) = icefall_reduction_rho(i, j, k);
+            qci_arr(i,j,k) = icefall_reduction_qci(i, j, k);
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+}
+
+IceFallSubstepReductionDiagnostics compute_icefall_substep_reduction_diagnostics (
+    const amrex::Geometry& geom,
+    const amrex::MultiFab& rho,
+    const amrex::MultiFab& qci,
+    const amrex::Real dt)
+{
+    IceFallSubstepReductionDiagnostics diagnostics{};
+    const amrex::Box domain = geom.Domain();
+    const int k_lo = domain.smallEnd(2);
+    const int k_hi = domain.bigEnd(2);
+    const amrex::Real cell_volume = geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
+
+    amrex::MultiFab fz;
+    fz.define(amrex::convert(qci.boxArray(), amrex::IntVect(0, 0, 1)), qci.DistributionMap(), 1, 0);
+    fz.setVal(amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(fz, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& box3d = mfi.tilebox();
+        auto qci_arr = qci.const_array(mfi);
+        auto rho_arr = rho.const_array(mfi);
+        auto fz_arr = fz.array(mfi);
+
+        amrex::ParallelFor(box3d, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const amrex::Real rho_km1 = (k == k_lo) ? rho_arr(i,j,k) : rho_arr(i,j,k-1);
+            const amrex::Real rho_k = (k == k_hi + 1) ? rho_arr(i,j,k-1) : rho_arr(i,j,k);
+            const amrex::Real qci_km1 = (k == k_lo) ? qci_arr(i,j,k) : qci_arr(i,j,k-1);
+            const amrex::Real qci_k = (k == k_hi + 1) ? qci_arr(i,j,k-1) : qci_arr(i,j,k);
+            const SAMFaceState face_state = sam_face_average_state(k, k_lo, k_hi,
+                                                                   rho_km1, rho_k,
+                                                                   zero, zero,
+                                                                   qci_km1, qci_k,
+                                                                   zero, zero);
+            fz_arr(i,j,k) = face_state.rho_avg *
+                            sam_cloud_ice_terminal_velocity(face_state.qci_avg) *
+                            face_state.qci_avg;
+        });
+    }
+
+    amrex::Gpu::streamSynchronize();
+
+    const auto fz_arrays = fz.const_arrays();
+    const amrex::GpuTuple<amrex::Real> max_reduced_flux = amrex::ParReduce(
+        amrex::TypeList<amrex::ReduceOpMax>{},
+        amrex::TypeList<amrex::Real>{},
+        fz, amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real> {
+            return {fz_arrays[box_no](i,j,k)};
+        });
+
+    diagnostics.local_max_reduced_flux = amrex::max(amrex::Real(0.0), amrex::get<0>(max_reduced_flux));
+    diagnostics.global_max_reduced_flux = diagnostics.local_max_reduced_flux;
+    amrex::ParallelDescriptor::ReduceRealMax(diagnostics.global_max_reduced_flux);
+
+    diagnostics.local_n_substep = sam_substep_count_from_reduced_flux(
+        diagnostics.local_max_reduced_flux + std::numeric_limits<amrex::Real>::epsilon(),
+        dt,
+        geom.CellSize(2));
+    diagnostics.global_n_substep = sam_substep_count_from_reduced_flux(
+        diagnostics.global_max_reduced_flux + std::numeric_limits<amrex::Real>::epsilon(),
+        dt,
+        geom.CellSize(2));
+
+    const auto rho_arrays = rho.const_arrays();
+    const auto qci_arrays = qci.const_arrays();
+    const amrex::GpuTuple<amrex::Real> qci_mass = amrex::ParReduce(
+        amrex::TypeList<amrex::ReduceOpSum>{},
+        amrex::TypeList<amrex::Real>{},
+        qci, amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept -> amrex::GpuTuple<amrex::Real> {
+            return {cell_volume * rho_arrays[box_no](i,j,k) * qci_arrays[box_no](i,j,k)};
+        });
+    diagnostics.initial_qci_mass = amrex::get<0>(qci_mass);
+    amrex::ParallelDescriptor::ReduceRealSum(diagnostics.initial_qci_mass);
+
+    std::ostringstream box_stream;
+    bool first_box = true;
+    for (amrex::MFIter mfi(qci); mfi.isValid(); ++mfi) {
+        if (!first_box) {
+            box_stream << ";";
+        }
+        first_box = false;
+        ++diagnostics.owned_box_count;
+        box_stream << mfi.validbox();
+    }
+    diagnostics.box_summary = first_box ? std::string("none") : box_stream.str();
+
+    return diagnostics;
 }
 
 struct PrecipFallCellState {
@@ -735,6 +872,114 @@ TEST(SAMParallel, CopyMicroToStateFillBoundaryParallel)
 
     amrex::ParallelDescriptor::ReduceIntSum(local_checked);
     EXPECT_GT(local_checked, 0);
+}
+
+// Motivation:
+// IceFall substepping must use the global MPI maximum reduced cloud-ice flux,
+// not each rank's local maximum. IceFall does not expose n_substep directly,
+// so this regression reconstructs the same face-flux reduction on a
+// distributed MultiFab and checks that the substep count comes from the global
+// reduced maximum when the cloud-ice field is intentionally heterogeneous.
+TEST(SAMParallel, IceFallSubstepCountUsesGlobalMaximum)
+{
+    constexpr int nx = 8;
+    constexpr int ny = 4;
+    constexpr int nz = 4;
+    const amrex::Real dt = amrex::Real(1000.0);
+
+    amrex::Box domain(amrex::IntVect(0, 0, 0), amrex::IntVect(nx - 1, ny - 1, nz - 1));
+    amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                            {AMREX_D_DECL(8.0, 4.0, 4.0)});
+    amrex::Array<int, AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(1, 1, 0)};
+    amrex::Geometry geom(domain, &real_box, 0, is_periodic.data());
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(amrex::IntVect(2, ny, nz));
+    amrex::DistributionMapping dm(ba);
+
+    amrex::MultiFab rho(ba, dm, 1, 0);
+    amrex::MultiFab qci(ba, dm, 1, 0);
+    fill_icefall_reduction_state(rho, qci);
+
+    const IceFallSubstepReductionDiagnostics diagnostics =
+        compute_icefall_substep_reduction_diagnostics(geom, rho, qci, dt);
+
+    const int rank = amrex::ParallelDescriptor::MyProc();
+    const int nprocs = amrex::ParallelDescriptor::NProcs();
+    const amrex::Real expected_global_max = diagnostics.global_max_reduced_flux;
+    const int expected_n_substep = sam_substep_count_from_reduced_flux(
+        expected_global_max + std::numeric_limits<amrex::Real>::epsilon(),
+        dt,
+        geom.CellSize(2));
+
+    int min_global_n_substep = diagnostics.global_n_substep;
+    int max_global_n_substep = diagnostics.global_n_substep;
+    amrex::ParallelDescriptor::ReduceIntMin(min_global_n_substep);
+    amrex::ParallelDescriptor::ReduceIntMax(max_global_n_substep);
+
+    int ranks_with_local_flux_below_global =
+        (std::abs(diagnostics.local_max_reduced_flux - diagnostics.global_max_reduced_flux) >
+         exact_zero_or_near_zero_tol())
+            ? 1
+            : 0;
+    int ranks_with_local_substep_difference =
+        (diagnostics.local_n_substep != diagnostics.global_n_substep) ? 1 : 0;
+    amrex::ParallelDescriptor::ReduceIntSum(ranks_with_local_flux_below_global);
+    amrex::ParallelDescriptor::ReduceIntSum(ranks_with_local_substep_difference);
+
+    EXPECT_EQ(min_global_n_substep, max_global_n_substep)
+        << "rank=" << rank
+        << " owned_boxes=" << diagnostics.owned_box_count
+        << " boxes=" << diagnostics.box_summary
+        << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
+        << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+        << " expected_n_substep=" << expected_n_substep
+        << " inferred_local_n_substep=" << diagnostics.local_n_substep
+        << " inferred_global_n_substep=" << diagnostics.global_n_substep
+        << " initial_qci_mass=" << diagnostics.initial_qci_mass;
+    EXPECT_EQ(diagnostics.global_n_substep, expected_n_substep)
+        << "rank=" << rank
+        << " owned_boxes=" << diagnostics.owned_box_count
+        << " boxes=" << diagnostics.box_summary
+        << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
+        << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+        << " expected_n_substep=" << expected_n_substep
+        << " inferred_local_n_substep=" << diagnostics.local_n_substep
+        << " inferred_global_n_substep=" << diagnostics.global_n_substep
+        << " initial_qci_mass=" << diagnostics.initial_qci_mass;
+    EXPECT_LE(diagnostics.local_n_substep, diagnostics.global_n_substep)
+        << "rank=" << rank
+        << " owned_boxes=" << diagnostics.owned_box_count
+        << " boxes=" << diagnostics.box_summary
+        << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
+        << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+        << " expected_n_substep=" << expected_n_substep
+        << " inferred_local_n_substep=" << diagnostics.local_n_substep
+        << " inferred_global_n_substep=" << diagnostics.global_n_substep
+        << " initial_qci_mass=" << diagnostics.initial_qci_mass;
+
+    if (nprocs > 1) {
+        EXPECT_GT(ranks_with_local_flux_below_global, 0)
+            << "rank=" << rank
+            << " owned_boxes=" << diagnostics.owned_box_count
+            << " boxes=" << diagnostics.box_summary
+            << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
+            << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+            << " expected_n_substep=" << expected_n_substep
+            << " inferred_local_n_substep=" << diagnostics.local_n_substep
+            << " inferred_global_n_substep=" << diagnostics.global_n_substep
+            << " initial_qci_mass=" << diagnostics.initial_qci_mass;
+        EXPECT_GT(ranks_with_local_substep_difference, 0)
+            << "rank=" << rank
+            << " owned_boxes=" << diagnostics.owned_box_count
+            << " boxes=" << diagnostics.box_summary
+            << " local_max_reduced_flux=" << diagnostics.local_max_reduced_flux
+            << " global_max_reduced_flux=" << diagnostics.global_max_reduced_flux
+            << " expected_n_substep=" << expected_n_substep
+            << " inferred_local_n_substep=" << diagnostics.local_n_substep
+            << " inferred_global_n_substep=" << diagnostics.global_n_substep
+            << " initial_qci_mass=" << diagnostics.initial_qci_mass;
+    }
 }
 
 // Motivation:

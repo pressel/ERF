@@ -1089,6 +1089,349 @@ TEST(SAMPhysicalProperties, PrecipFall_RainSnowGraupelComponentBudgetsClose)
                                                     amrex::Real(1.0)})));
 }
 
+    struct CloudAdjustmentLimiterInvestigation {
+        bool found{false};
+        SAMCellState initial_state{};
+        SAMCellState partitioned_state{};
+        SAMCellState final_state{};
+        amrex::Real qsat_final{amrex::Real(0.0)};
+        amrex::Real requested_delta_qc{amrex::Real(0.0)};
+        amrex::Real requested_delta_qi{amrex::Real(0.0)};
+        bool clipped_qc{false};
+        bool clipped_qi{false};
+    };
+
+    amrex::Real cloud_adjustment_total_nonprecip_water (const SAMCellState& state)
+    {
+        return state.qv + state.qcl + state.qci;
+    }
+
+    amrex::Real cloud_adjustment_latent_proxy (const SAMCellState& state)
+    {
+        return state.tabs + kFacCond * state.qv - kFacFus * state.qci;
+    }
+
+    CloudAdjustmentLimiterInvestigation find_cloud_adjustment_limiter_active_case ()
+    {
+        constexpr amrex::Real an = a_bg;
+        constexpr amrex::Real bn = tbgmin * a_bg;
+
+        const amrex::Real pres_mbar = amrex::Real(900.0);
+        const std::array<amrex::Real, 9> tabs_samples = {
+            tbgmin + amrex::Real(0.1),
+            tbgmin + amrex::Real(1.0),
+            tbgmin + amrex::Real(2.5),
+            tbgmin + amrex::Real(5.0),
+            amrex::Real(0.5) * (tbgmin + tbgmax),
+            tbgmax - amrex::Real(5.0),
+            tbgmax - amrex::Real(2.5),
+            tbgmax - amrex::Real(1.0),
+            tbgmax - amrex::Real(0.1)};
+        const std::array<amrex::Real, 7> qn_samples = {
+            amrex::Real(2.0e-4),
+            amrex::Real(4.0e-4),
+            amrex::Real(8.0e-4),
+            amrex::Real(1.2e-3),
+            amrex::Real(1.8e-3),
+            amrex::Real(2.4e-3),
+            amrex::Real(3.0e-3)};
+        const std::array<amrex::Real, 6> liquid_fractions = {
+            amrex::Real(0.0),
+            amrex::Real(0.15),
+            amrex::Real(0.35),
+            amrex::Real(0.65),
+            amrex::Real(0.85),
+            amrex::Real(1.0)};
+        const std::array<amrex::Real, 8> deficit_fractions = {
+            amrex::Real(0.05),
+            amrex::Real(0.15),
+            amrex::Real(0.25),
+            amrex::Real(0.40),
+            amrex::Real(0.55),
+            amrex::Real(0.70),
+            amrex::Real(0.85),
+            amrex::Real(0.95)};
+
+        for (const amrex::Real tabs_initial : tabs_samples) {
+            for (const amrex::Real qn_initial : qn_samples) {
+                for (const amrex::Real liquid_fraction : liquid_fractions) {
+                    const amrex::Real qcl_initial = liquid_fraction * qn_initial;
+                    const amrex::Real qci_initial = (one - liquid_fraction) * qn_initial;
+                    const SAMCloudPhaseChange partition = sam_partition_cloud_phase(
+                        kSAMWithIceMode,
+                        tabs_initial,
+                        qn_initial,
+                        qcl_initial,
+                        qci_initial,
+                        kFacCond,
+                        kFacFus,
+                        an,
+                        bn);
+                    const amrex::Real qsat_partition =
+                        mixed_qsat_for_state(kSAMWithIceMode, partition.tabs, pres_mbar);
+
+                    for (const amrex::Real deficit_fraction : deficit_fractions) {
+                        const amrex::Real qv_initial = qsat_partition - deficit_fraction * qn_initial;
+                        if (qv_initial <= amrex::Real(0.0)) {
+                            continue;
+                        }
+
+                        const SAMCellState initial_state = make_cell_state(
+                            tabs_initial,
+                            pres_mbar,
+                            qv_initial,
+                            qcl_initial,
+                            qci_initial,
+                            amrex::Real(0.0),
+                            amrex::Real(0.0),
+                            amrex::Real(0.0));
+                        const SAMCellState partitioned_state = make_cell_state(
+                            partition.tabs,
+                            pres_mbar,
+                            qv_initial,
+                            partition.qcl,
+                            partition.qci,
+                            amrex::Real(0.0),
+                            amrex::Real(0.0),
+                            amrex::Real(0.0));
+
+                        if (partitioned_state.qt <= qsat_partition) {
+                            continue;
+                        }
+
+                        amrex::FArrayBox tabs_fab(single_cell_box(), 1);
+                        amrex::FArrayBox pres_fab(single_cell_box(), 1);
+                        amrex::FArrayBox qv_fab(single_cell_box(), 1);
+                        amrex::FArrayBox qc_fab(single_cell_box(), 1);
+                        amrex::FArrayBox qi_fab(single_cell_box(), 1);
+                        amrex::FArrayBox qn_fab(single_cell_box(), 1);
+                        amrex::FArrayBox qt_fab(single_cell_box(), 1);
+
+                        auto tabs_array = tabs_fab.array();
+                        auto pres_array = pres_fab.array();
+                        auto qv_array = qv_fab.array();
+                        auto qc_array = qc_fab.array();
+                        auto qi_array = qi_fab.array();
+                        auto qn_array = qn_fab.array();
+                        auto qt_array = qt_fab.array();
+
+                        tabs_array(0,0,0) = partitioned_state.tabs;
+                        pres_array(0,0,0) = partitioned_state.pres_mbar;
+                        qv_array(0,0,0) = partitioned_state.qv;
+                        qc_array(0,0,0) = partitioned_state.qcl;
+                        qi_array(0,0,0) = partitioned_state.qci;
+                        qn_array(0,0,0) = partitioned_state.qn;
+                        qt_array(0,0,0) = partitioned_state.qt;
+
+                        int i = 0;
+                        int j = 0;
+                        int k = 0;
+                        const amrex::Real tabs_final = SAM::NewtonIterSat(
+                            i,
+                            j,
+                            k,
+                            kSAMWithIceMode,
+                            kFacCond,
+                            kFacFus,
+                            kFacSub,
+                            an,
+                            bn,
+                            tabs_array,
+                            pres_array,
+                            qv_array,
+                            qc_array,
+                            qi_array,
+                            qn_array,
+                            qt_array);
+
+                        CloudAdjustmentLimiterInvestigation result{};
+                        result.initial_state = initial_state;
+                        result.partitioned_state = partitioned_state;
+                        result.final_state = make_cell_state(
+                            tabs_final,
+                            pres_mbar,
+                            qv_array(0,0,0),
+                            qc_array(0,0,0),
+                            qi_array(0,0,0),
+                            amrex::Real(0.0),
+                            amrex::Real(0.0),
+                            amrex::Real(0.0));
+
+                        amrex::Real qsatw_final;
+                        amrex::Real qsati_final;
+                        erf_qsatw(tabs_final, pres_mbar, qsatw_final);
+                        erf_qsati(tabs_final, pres_mbar, qsati_final);
+                        const amrex::Real omn_final =
+                            sam_cloud_liquid_fraction(kSAMWithIceMode, tabs_final, an, bn);
+                        result.qsat_final = sam_mixed_qsat(omn_final, qsatw_final, qsati_final);
+                        result.requested_delta_qc =
+                            (partitioned_state.qv - result.qsat_final) * omn_final;
+                        result.requested_delta_qi =
+                            (partitioned_state.qv - result.qsat_final) * (one - omn_final);
+
+                        const amrex::Real actual_delta_qc =
+                            result.final_state.qcl - partitioned_state.qcl;
+                        const amrex::Real actual_delta_qi =
+                            result.final_state.qci - partitioned_state.qci;
+                        const amrex::Real qc_tol = property_accumulation_tol(
+                            2,
+                            std::max({std::abs(result.requested_delta_qc),
+                                      std::abs(actual_delta_qc),
+                                      amrex::Real(1.0)}));
+                        const amrex::Real qi_tol = property_accumulation_tol(
+                            2,
+                            std::max({std::abs(result.requested_delta_qi),
+                                      std::abs(actual_delta_qi),
+                                      amrex::Real(1.0)}));
+                        result.clipped_qc =
+                            std::abs(actual_delta_qc - result.requested_delta_qc) > qc_tol;
+                        result.clipped_qi =
+                            std::abs(actual_delta_qi - result.requested_delta_qi) > qi_tol;
+
+                        if (result.clipped_qc || result.clipped_qi) {
+                            result.found = true;
+                            return result;
+                        }
+                    }
+                }
+            }
+        }
+
+        return {};
+    }
+
+    // Motivation:
+    // Reproduce the same held-pressure cloud-adjustment sequence used by SAM::Cloud
+    // on a valid one-cell state: phase repartition first, then NewtonIterSat. The
+    // full non-precipitating cloud-adjustment contract is total water qv+qcl+qci
+    // and the latent proxy T + fac_cond*qv - fac_fus*qci. This test searches for a
+    // valid limiter-active NewtonIterSat case and verifies that the combined cloud
+    // adjustment still preserves that contract.
+    TEST(SAMPhysicalProperties, CloudAdjustmentLimiterActiveConservesWaterAndLatentProxy)
+    {
+        const CloudAdjustmentLimiterInvestigation investigation =
+            find_cloud_adjustment_limiter_active_case();
+
+        ASSERT_TRUE(investigation.found)
+            << "No valid Cloud/NewtonIterSat limiter-active case was found in the deterministic search grid.";
+        ASSERT_TRUE(investigation.clipped_qc || investigation.clipped_qi);
+
+        const amrex::Real initial_total_water =
+            cloud_adjustment_total_nonprecip_water(investigation.initial_state);
+        const amrex::Real final_total_water =
+            cloud_adjustment_total_nonprecip_water(investigation.final_state);
+        const amrex::Real initial_latent_proxy =
+            cloud_adjustment_latent_proxy(investigation.initial_state);
+        const amrex::Real final_latent_proxy =
+            cloud_adjustment_latent_proxy(investigation.final_state);
+        const amrex::Real total_water_residual = final_total_water - initial_total_water;
+        const amrex::Real latent_proxy_residual = final_latent_proxy - initial_latent_proxy;
+        const amrex::Real qv_minus_qsat_final =
+            investigation.final_state.qv - investigation.qsat_final;
+        const amrex::Real qsat_tol =
+            property_accumulation_tol(6, std::max(std::abs(investigation.qsat_final), amrex::Real(1.0)));
+        // NewtonIterSat stops on a temperature update tolerance, so the final
+        // cloud-adjustment latent proxy should close far tighter than that, but
+        // not necessarily to pure accumulation roundoff.
+        const amrex::Real latent_proxy_tol = std::max(
+            property_accumulation_tol(6, std::max(std::abs(initial_latent_proxy), amrex::Real(1.0))),
+            amrex::Real(1.0e-9));
+
+        EXPECT_NEAR(final_total_water,
+                    initial_total_water,
+                    property_accumulation_tol(6, std::max(std::abs(initial_total_water), amrex::Real(1.0))))
+            << "initial_qv=" << investigation.initial_state.qv
+            << " initial_qcl=" << investigation.initial_state.qcl
+            << " initial_qci=" << investigation.initial_state.qci
+            << " initial_qn=" << investigation.initial_state.qn
+            << " initial_qt=" << investigation.initial_state.qt
+            << " final_qv=" << investigation.final_state.qv
+            << " final_qcl=" << investigation.final_state.qcl
+            << " final_qci=" << investigation.final_state.qci
+            << " final_qn=" << investigation.final_state.qn
+            << " final_qt=" << investigation.final_state.qt
+            << " partitioned_qv=" << investigation.partitioned_state.qv
+            << " partitioned_qcl=" << investigation.partitioned_state.qcl
+            << " partitioned_qci=" << investigation.partitioned_state.qci
+            << " initial_tabs=" << investigation.initial_state.tabs
+            << " partitioned_tabs=" << investigation.partitioned_state.tabs
+            << " final_tabs=" << investigation.final_state.tabs
+            << " pressure_mbar=" << investigation.initial_state.pres_mbar
+            << " initial_total_water=" << initial_total_water
+            << " final_total_water=" << final_total_water
+            << " total_water_residual=" << total_water_residual
+            << " initial_latent_proxy=" << initial_latent_proxy
+            << " final_latent_proxy=" << final_latent_proxy
+            << " latent_proxy_residual=" << latent_proxy_residual
+            << " qv_minus_qsat_final=" << qv_minus_qsat_final
+            << " clipped_qc=" << investigation.clipped_qc
+            << " clipped_qi=" << investigation.clipped_qi
+            << " requested_delta_qc=" << investigation.requested_delta_qc
+            << " requested_delta_qi=" << investigation.requested_delta_qi;
+            EXPECT_NEAR(qv_minus_qsat_final,
+                    amrex::Real(0.0),
+                    qsat_tol)
+                << "initial_qv=" << investigation.initial_state.qv
+                << " initial_qcl=" << investigation.initial_state.qcl
+                << " initial_qci=" << investigation.initial_state.qci
+                << " initial_qn=" << investigation.initial_state.qn
+                << " initial_qt=" << investigation.initial_state.qt
+                << " final_qv=" << investigation.final_state.qv
+                << " final_qcl=" << investigation.final_state.qcl
+                << " final_qci=" << investigation.final_state.qci
+                << " final_qn=" << investigation.final_state.qn
+                << " final_qt=" << investigation.final_state.qt
+                << " partitioned_qv=" << investigation.partitioned_state.qv
+                << " partitioned_qcl=" << investigation.partitioned_state.qcl
+                << " partitioned_qci=" << investigation.partitioned_state.qci
+                << " initial_tabs=" << investigation.initial_state.tabs
+                << " partitioned_tabs=" << investigation.partitioned_state.tabs
+                << " final_tabs=" << investigation.final_state.tabs
+                << " pressure_mbar=" << investigation.initial_state.pres_mbar
+                << " initial_total_water=" << initial_total_water
+                << " final_total_water=" << final_total_water
+                << " total_water_residual=" << total_water_residual
+                << " initial_latent_proxy=" << initial_latent_proxy
+                << " final_latent_proxy=" << final_latent_proxy
+                << " latent_proxy_residual=" << latent_proxy_residual
+                << " qv_minus_qsat_final=" << qv_minus_qsat_final
+                << " clipped_qc=" << investigation.clipped_qc
+                << " clipped_qi=" << investigation.clipped_qi
+                << " requested_delta_qc=" << investigation.requested_delta_qc
+                << " requested_delta_qi=" << investigation.requested_delta_qi;
+        EXPECT_NEAR(final_latent_proxy,
+                    initial_latent_proxy,
+                    latent_proxy_tol)
+            << "initial_qv=" << investigation.initial_state.qv
+            << " initial_qcl=" << investigation.initial_state.qcl
+            << " initial_qci=" << investigation.initial_state.qci
+            << " initial_qn=" << investigation.initial_state.qn
+            << " initial_qt=" << investigation.initial_state.qt
+            << " final_qv=" << investigation.final_state.qv
+            << " final_qcl=" << investigation.final_state.qcl
+            << " final_qci=" << investigation.final_state.qci
+            << " final_qn=" << investigation.final_state.qn
+            << " final_qt=" << investigation.final_state.qt
+            << " partitioned_qv=" << investigation.partitioned_state.qv
+            << " partitioned_qcl=" << investigation.partitioned_state.qcl
+            << " partitioned_qci=" << investigation.partitioned_state.qci
+            << " initial_tabs=" << investigation.initial_state.tabs
+            << " partitioned_tabs=" << investigation.partitioned_state.tabs
+            << " final_tabs=" << investigation.final_state.tabs
+            << " pressure_mbar=" << investigation.initial_state.pres_mbar
+            << " initial_total_water=" << initial_total_water
+            << " final_total_water=" << final_total_water
+            << " total_water_residual=" << total_water_residual
+            << " initial_latent_proxy=" << initial_latent_proxy
+            << " final_latent_proxy=" << final_latent_proxy
+            << " latent_proxy_residual=" << latent_proxy_residual
+            << " qv_minus_qsat_final=" << qv_minus_qsat_final
+            << " clipped_qc=" << investigation.clipped_qc
+            << " clipped_qi=" << investigation.clipped_qi
+            << " requested_delta_qc=" << investigation.requested_delta_qc
+            << " requested_delta_qi=" << investigation.requested_delta_qi;
+    }
+
 // Motivation:
 // The same component-wise PrecipFall budgets should close in terrain-like
 // coordinates when the donor limiter and mass budgets are detJ-weighted.
