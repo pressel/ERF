@@ -1063,9 +1063,11 @@ WSM6::Advance(const Real& dt_advance,
         auto const& workdiffi_arr = workdiffi_fab.array();
         auto const& workr_arr     = workr_fab.array();
         auto const& worka_arr     = worka_fab.array();
+        auto const& work1c_arr    = work1c_fab.array();
         auto const& denqrs1_arr   = denqrs1_fab.array();
         auto const& denqrs2_arr   = denqrs2_fab.array();
         auto const& denqrs3_arr   = denqrs3_fab.array();
+        auto const& denqci_arr    = denqci_fab.array();
         auto const& fall_r_arr    = fall_r_fab.array();
         auto const& fall_s_arr    = fall_s_fab.array();
         auto const& fall_g_arr    = fall_g_fab.array();
@@ -1073,7 +1075,6 @@ WSM6::Advance(const Real& dt_advance,
         auto const& qsum_arr      = qsum_fab.array();
         auto const& nislfv_r_diag_arr = nislfv_r_diag_fab.array();
         auto const& nislfv_sg_diag_arr = nislfv_sg_diag_fab.array();
-        auto const& work1c_arr = work1c_fab.array();
 
         ParallelFor(fab_box, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
             work1c_arr(i,j,k) = Real(0.0);
@@ -1244,6 +1245,7 @@ WSM6::Advance(const Real& dt_advance,
             const Real rslopeg2max_loc = m_rslopeg2max;
             const Real rslopeg3max_loc = m_rslopeg3max;
             const Real bvtg_loc        = m_bvtg;
+            const Real pi_wsm6_loc     = m_pi_wsm6;
             const Real n0g_loc         = m_n0g;
 
             ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
@@ -1382,6 +1384,203 @@ WSM6::Advance(const Real& dt_advance,
                 fall_s_arr(i,j,klo) = delqrs2_arr(i,j,0);
                 fall_g_arr(i,j,klo) = delqrs3_arr(i,j,0);
             });
+
+            // G6: repack qrs_tmp, second slope_wsm6 [lines 655-663]
+            // slope params updated after sedimentation moved mass
+            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                qrs_tmp_r_arr(i,j,k) = qr_arr(i,j,k);
+                qrs_tmp_s_arr(i,j,k) = qs_arr(i,j,k);
+                qrs_tmp_g_arr(i,j,k) = qg_arr(i,j,k);
+                Real dummy_n0sfac;
+                wsm6_slope_rain_cell(
+                    qrs_tmp_r_arr(i,j,k), den_arr(i,j,k), denfac_arr(i,j,k),
+                    pidn0r_loc, Real(qcrmin), rslopermax_loc, rsloperbmax_loc,
+                    rsloper2max_loc, rsloper3max_loc, Real(bvtr), Real(pvtr),
+                    rslope_r_arr(i,j,k), rslopeb_r_arr(i,j,k),
+                    rslope2_r_arr(i,j,k), rslope3_r_arr(i,j,k),
+                    work1_r_arr(i,j,k));
+                wsm6_slope_snow_cell(
+                    qrs_tmp_s_arr(i,j,k), den_arr(i,j,k), denfac_arr(i,j,k),
+                    t_arr(i,j,k), pidn0s_loc, Real(alpha_wsm6),
+                    Real(n0smax), Real(n0s), Real(t0c), Real(qcrmin),
+                    rslopesmax_loc, rslopesbmax_loc,
+                    rslopes2max_loc, rslopes3max_loc,
+                    Real(bvts), Real(pvts),
+                    rslope_s_arr(i,j,k), rslopeb_s_arr(i,j,k),
+                    rslope2_s_arr(i,j,k), rslope3_s_arr(i,j,k),
+                    work1_s_arr(i,j,k), dummy_n0sfac);
+                wsm6_slope_graup_cell(
+                    qrs_tmp_g_arr(i,j,k), den_arr(i,j,k), denfac_arr(i,j,k),
+                    pidn0g_loc, Real(qcrmin),
+                    rslopegmax_loc, rslopegbmax_loc,
+                    rslopeg2max_loc, rslopeg3max_loc,
+                    bvtg_loc, Real(pvtg),
+                    rslope_g_arr(i,j,k), rslopeb_g_arr(i,j,k),
+                    rslope2_g_arr(i,j,k), rslope3_g_arr(i,j,k),
+                    work1_g_arr(i,j,k));
+            });
+
+            // G7: melting (T>T0 only) [lines 665-704]
+            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                const Real supcol = Real(t0c) - t_arr(i,j,k);
+                n0sfac_arr(i,j,k) = amrex::max(
+                    amrex::min(std::exp(Real(alpha_wsm6) * supcol),
+                               Real(n0smax) / Real(n0s)),
+                    Real(1.0));
+
+                if (t_arr(i,j,k) > Real(t0c)) {
+                    const Real xlf = Real(xlf0);
+                    work2_arr(i,j,k) = wsm6_venfac(
+                        p_arr(i,j,k), t_arr(i,j,k), den_arr(i,j,k), Real(den0));
+
+                    if (qs_arr(i,j,k) > Real(0.0)) {
+                        const Real coeres =
+                            rslope2_s_arr(i,j,k) *
+                            std::sqrt(rslope_s_arr(i,j,k) * rslopeb_s_arr(i,j,k));
+                        psmlt_arr(i,j,k) =
+                            wsm6_xka(t_arr(i,j,k), den_arr(i,j,k)) / xlf *
+                            (Real(t0c) - t_arr(i,j,k)) * pi_wsm6_loc * Real(0.5) *
+                            n0sfac_arr(i,j,k) *
+                            (Real(precs1) * rslope2_s_arr(i,j,k) +
+                             Real(precs2) * work2_arr(i,j,k) * coeres) /
+                            den_arr(i,j,k);
+                        psmlt_arr(i,j,k) = amrex::min(
+                            amrex::max(psmlt_arr(i,j,k) * dtcld,
+                                       -qs_arr(i,j,k)),
+                            Real(0.0));
+                        qs_arr(i,j,k) = qs_arr(i,j,k) + psmlt_arr(i,j,k);
+                        qr_arr(i,j,k) = qr_arr(i,j,k) - psmlt_arr(i,j,k);
+                        t_arr(i,j,k) = t_arr(i,j,k) + xlf / cpm_arr(i,j,k) * psmlt_arr(i,j,k);
+                    }
+
+                    if (qg_arr(i,j,k) > Real(0.0)) {
+                        const Real coeres =
+                            rslope2_g_arr(i,j,k) *
+                            std::sqrt(rslope_g_arr(i,j,k) * rslopeb_g_arr(i,j,k));
+                        pgmlt_arr(i,j,k) =
+                            wsm6_xka(t_arr(i,j,k), den_arr(i,j,k)) / xlf *
+                            (Real(t0c) - t_arr(i,j,k)) *
+                            (Real(precg1) * rslope2_g_arr(i,j,k) +
+                             Real(precg2) * work2_arr(i,j,k) * coeres) /
+                            den_arr(i,j,k);
+                        pgmlt_arr(i,j,k) = amrex::min(
+                            amrex::max(pgmlt_arr(i,j,k) * dtcld,
+                                       -qg_arr(i,j,k)),
+                            Real(0.0));
+                        qg_arr(i,j,k) = qg_arr(i,j,k) + pgmlt_arr(i,j,k);
+                        qr_arr(i,j,k) = qr_arr(i,j,k) - pgmlt_arr(i,j,k);
+                        t_arr(i,j,k) = t_arr(i,j,k) + xlf / cpm_arr(i,j,k) * pgmlt_arr(i,j,k);
+                    }
+                }
+            });
+
+            // G8: cloud ice sedimentation/fallout [lines 708-735]
+            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                if (qi_arr(i,j,k) <= Real(0.0)) {
+                    work1c_arr(i,j,k) = Real(0.0);
+                } else {
+                    const Real tmp = den_arr(i,j,k) *
+                        amrex::max(qi_arr(i,j,k), Real(qmin));
+                    const Real xni = amrex::min(
+                        amrex::max(Real(5.38e7) *
+                                   std::sqrt(std::sqrt(tmp*tmp*tmp)),
+                                   Real(1.0e3)),
+                        Real(1.0e6));
+                    const Real xmi = den_arr(i,j,k) * qi_arr(i,j,k) / xni;
+                    const Real diameter = amrex::max(
+                        amrex::min(Real(dicon) * std::sqrt(xmi), Real(dimax)),
+                        Real(1.0e-25));
+                    work1c_arr(i,j,k) = Real(1.49e4) *
+                        std::exp(std::log(diameter) * Real(1.31));
+                }
+                denqci_arr(i,j,k) = den_arr(i,j,k) * qi_arr(i,j,k);
+            });
+
+            ParallelFor(box2d, [=] AMREX_GPU_DEVICE (int i, int j, int) {
+                const int km_local = khi - klo + 1;
+#ifdef AMREX_USE_GPU
+                if (km_local > WSM6_MAX_LEVELS) return;
+#endif
+#ifndef AMREX_USE_GPU
+                amrex::Vector<Real> den_col_v(km_local);
+                amrex::Vector<Real> denfac_col_v(km_local);
+                amrex::Vector<Real> t_col_v(km_local);
+                amrex::Vector<Real> dz_col_v(km_local);
+                amrex::Vector<Real> work1c_col_v(km_local);
+                amrex::Vector<Real> denqci_col_v(km_local);
+                Real* den_col = den_col_v.data();
+                Real* denfac_col = denfac_col_v.data();
+                Real* t_col = t_col_v.data();
+                Real* dz_col = dz_col_v.data();
+                Real* work1c_col = work1c_col_v.data();
+                Real* denqci_col = denqci_col_v.data();
+#else
+                Real den_col[WSM6_MAX_LEVELS];
+                Real denfac_col[WSM6_MAX_LEVELS];
+                Real t_col[WSM6_MAX_LEVELS];
+                Real dz_col[WSM6_MAX_LEVELS];
+                Real work1c_col[WSM6_MAX_LEVELS];
+                Real denqci_col[WSM6_MAX_LEVELS];
+#endif
+                Real delqi_col = Real(0.0);
+
+                for (int k = klo; k <= khi; ++k) {
+                    const int kk = k - klo;
+                    den_col[kk]    = den_arr(i,j,k);
+                    denfac_col[kk] = denfac_arr(i,j,k);
+                    t_col[kk]      = t_arr(i,j,k);
+                    dz_col[kk]     = delz_tmp_arr(i,j,k);
+                    work1c_col[kk]  = work1c_arr(i,j,k);
+                    denqci_col[kk]  = denqci_arr(i,j,k);
+                }
+
+                wsm6_nislfv_rain_plm(
+                    1, km_local, den_col, denfac_col, t_col, dz_col,
+                    work1c_col, denqci_col, &delqi_col, dtcld, (i - ilo + 1), 0,
+                    (microphysics_debug >= 2 && i == ilo && j == jlo) ? 2 : 0);
+
+                for (int k = klo; k <= khi; ++k) {
+                    const int kk = k - klo;
+                    work1c_arr(i,j,k) = work1c_col[kk];
+                    denqci_arr(i,j,k) = denqci_col[kk];
+                    qi_arr(i,j,k) = amrex::max(
+                        denqci_col[kk] / den_col[kk], Real(0.0));
+                }
+
+                delqi_arr(i,j,0) = delqi_col / delz_arr(i,j,klo) / dtcld;
+                fallc_arr(i,j,klo) = delqi_arr(i,j,0);
+            });
+
+            // G9: surface precipitation accumulation [lines 741-770]
+            ParallelFor(box2d, [=] AMREX_GPU_DEVICE (int i, int j, int) {
+                const Real fallsum =
+                    fall_r_arr(i,j,klo) + fall_s_arr(i,j,klo) +
+                    fall_g_arr(i,j,klo) + fallc_arr(i,j,klo);
+                const Real fallsum_qsi = fall_s_arr(i,j,klo) + fallc_arr(i,j,klo);
+                const Real fallsum_qg = fall_g_arr(i,j,klo);
+                const Real precip = delz_arr(i,j,klo) / denr * dtcld * Real(1000.0);
+
+                if (fallsum > Real(0.0)) {
+                    rainncv_arr(i,j,0) += fallsum * precip;
+                    rainacc_arr(i,j,0) += fallsum * precip;
+                }
+                if (fallsum_qsi > Real(0.0)) {
+                    tstepsnow_arr(i,j,0) += fallsum_qsi * precip;
+                    snowncv_arr(i,j,0) += fallsum_qsi * precip;
+                    snowacc_arr(i,j,0) += fallsum_qsi * precip;
+                }
+                if (fallsum_qg > Real(0.0)) {
+                    tstepgraup_arr(i,j,0) += fallsum_qg * precip;
+                    graupelncv_arr(i,j,0) += fallsum_qg * precip;
+                    graupacc_arr(i,j,0) += fallsum_qg * precip;
+                }
+                if (fallsum > Real(0.0)) {
+                    sr_arr(i,j,0) =
+                        (snowncv_arr(i,j,0) + graupelncv_arr(i,j,0)) /
+                        (rainncv_arr(i,j,0) + Real(1.0e-12));
+                }
+            });
+
             constexpr Real pi = Real(3.141592653589793238462643383279502884);
 
             // G10: instantaneous phase changes [lines 774-830]
@@ -1947,6 +2146,7 @@ WSM6::Advance(const Real& dt_advance,
                     value = amrex::max(qmin_l, qc_arr(i,j,k));
                     source = (praut_arr(i,j,k) + pracw_arr(i,j,k)
                             + paacw_arr(i,j,k) + paacw_arr(i,j,k)) * dtcld;
+//                            + paacw_arr(i,j,k)) * dtcld;
                     if (source > value) {
                         factor = value / source;
                         praut_arr(i,j,k) = praut_arr(i,j,k) * factor;
@@ -2030,6 +2230,7 @@ WSM6::Advance(const Real& dt_advance,
                                        + pgdep_arr(i,j,k) + pigen_arr(i,j,k)
                                        + pidep_arr(i,j,k));
                     qv_arr(i,j,k) = qv_arr(i,j,k) + work2_arr(i,j,k) * dtcld;
+//                                       + paacw_arr(i,j,k))
                     qc_arr(i,j,k) = amrex::max(
                         qc_arr(i,j,k) - (praut_arr(i,j,k) + pracw_arr(i,j,k)
                                        + paacw_arr(i,j,k) + paacw_arr(i,j,k))
@@ -2080,6 +2281,7 @@ WSM6::Advance(const Real& dt_advance,
                     value = amrex::max(qmin_l, qc_arr(i,j,k));
                     source = (praut_arr(i,j,k) + pracw_arr(i,j,k)
                             + paacw_arr(i,j,k) + paacw_arr(i,j,k)) * dtcld;
+//                            + paacw_arr(i,j,k)) * dtcld;
                     if (source > value) {
                         factor = value / source;
                         praut_arr(i,j,k) = praut_arr(i,j,k) * factor;
@@ -2125,6 +2327,7 @@ WSM6::Advance(const Real& dt_advance,
                     work2_arr(i,j,k) = -(prevp_arr(i,j,k) + psevp_arr(i,j,k)
                                        + pgevp_arr(i,j,k));
                     qv_arr(i,j,k) = qv_arr(i,j,k) + work2_arr(i,j,k) * dtcld;
+//                                       + paacw_arr(i,j,k))
                     qc_arr(i,j,k) = amrex::max(
                         qc_arr(i,j,k) - (praut_arr(i,j,k) + pracw_arr(i,j,k)
                                        + paacw_arr(i,j,k) + paacw_arr(i,j,k))
