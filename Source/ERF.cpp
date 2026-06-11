@@ -1585,17 +1585,26 @@ ERF::InitData_post ()
         //
         // This constructor will make the SurfaceLayer object but not allocate the arrays at each level.
         //
+        // Build vector of eb pointers for all levels
+        amrex::Vector<const eb_*> eb_ptrs;
+        eb_ptrs.resize(finest_level + 1, nullptr);
+        if (solverChoice.terrain_type == TerrainType::EB) {
+            for (int lev = 0; lev <= finest_level; lev++) {
+                eb_ptrs[lev] = eb[lev] ? eb[lev].get() : nullptr;
+            }
+        }
+
         m_SurfaceLayer = std::make_unique<SurfaceLayer>(geom, rotate, pp_prefix, Qv_prim,
                                                         z_phys_nd,
                                                         solverChoice.mesh_type,
                                                         solverChoice.terrain_type,
                                                         solverChoice.turbChoice[finest_level],
 #ifdef ERF_USE_NETCDF
-                                                        start_low_time, final_low_time, low_time_interval
+                                                        start_low_time, final_low_time, low_time_interval,
 #else
-                                                        zero, zero
+                                                        zero, zero, zero,
 #endif
-                                                        );
+                                                        eb_ptrs);
         // This call will allocate the arrays at each level. If we regrid later, either changing
         // the number of levels or just the grids at each existing level, we will call an update routine
         // to redefine the internal arrays in m_SurfaceLayer.
