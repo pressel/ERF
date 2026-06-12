@@ -196,14 +196,16 @@ void erf_slow_rhs_pre (int level, int finest_level,
 
     if (l_use_diff) {
 #ifdef ERF_USE_EAMXX_SHOC
-        if (solverChoice.turbChoice[level].uses_eamxx_shoc() && eamxx_shoc_lev) {
+        if (tc.uses_eamxx_shoc()) {
+            AMREX_ALWAYS_ASSERT(eamxx_shoc_lev != nullptr);
             // SHOC either supplies host-applied vertical SGS coefficients or
             // clears them so the host does not re-apply SHOC transport.
             eamxx_shoc_lev->set_eddy_diffs();
         }
 #endif
 #ifdef ERF_USE_NATIVE_SHOC
-        if (solverChoice.turbChoice[level].uses_native_shoc() && native_shoc_lev) {
+        if (tc.uses_native_shoc()) {
+            AMREX_ALWAYS_ASSERT(native_shoc_lev != nullptr);
             // SHOC either supplies host-applied vertical SGS coefficients or
             // clears them so the host does not re-apply SHOC transport.
             native_shoc_lev->set_eddy_diffs();
@@ -221,19 +223,19 @@ void erf_slow_rhs_pre (int level, int finest_level,
         dflux_y = std::make_unique<MultiFab>(convert(ba,IntVect(0,1,0)), dm, nvars, ng);
         dflux_z = std::make_unique<MultiFab>(convert(ba,IntVect(0,0,1)), dm, nvars, 0);
 
+        bool surface_layer_handled = false;
 #ifdef ERF_USE_EAMXX_SHOC
-        if (tc.uses_eamxx_shoc() && eamxx_shoc_lev) {
+        if (tc.uses_eamxx_shoc()) {
+            AMREX_ALWAYS_ASSERT(eamxx_shoc_lev != nullptr);
             // EAMxx SHOC owns the overlapping lower-boundary fluxes here, so
             // do not fall through to the generic SurfaceLayer path.
             eamxx_shoc_lev->set_diff_stresses();
+            surface_layer_handled = true;
         }
 #endif
-        bool surface_layer_handled = false;
-#ifdef ERF_USE_EAMXX_SHOC
-        surface_layer_handled = tc.uses_eamxx_shoc() && eamxx_shoc_lev;
-#endif
 #ifdef ERF_USE_NATIVE_SHOC
-        if (tc.uses_native_shoc() && native_shoc_lev) {
+        if (tc.uses_native_shoc()) {
+            AMREX_ALWAYS_ASSERT(native_shoc_lev != nullptr);
             if (native_shoc_lev->uses_shoc_tendencies()) {
                 // SHOC has already consumed the lower-boundary fluxes inside
                 // its own tendency solve, so prevent the host diffusion path
