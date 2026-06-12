@@ -37,7 +37,6 @@ target_compile_definitions(erf_shoc_unit_tests PRIVATE
 
 target_link_libraries(erf_shoc_unit_tests PRIVATE
   GTest::gtest
-  amrex
   erf_srclib
 )
 
