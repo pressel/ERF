@@ -504,7 +504,7 @@ void erf_slow_rhs_post (int level, int finest_level,
 #endif
 
 #ifdef ERF_USE_EAMXX_SHOC
-        if (tc.uses_eamxx_shoc() && eamxx_shoc_lev && eamxx_shoc_lev->uses_shoc_tendencies()) {
+        if (tc.uses_eamxx_shoc() && eamxx_shoc_lev) {
             eamxx_shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
         }
 #endif

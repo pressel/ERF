@@ -229,7 +229,7 @@ TEST(ShocPhysical, ColumnHeatBudgetTracksSurfaceFlux)
 
     const amrex::Real after = column_moist_energy(col);
     const amrex::Real expected = dt * rho_sfc * Cp_d * 0.02;
-    EXPECT_NEAR(after - before, expected, 5.0e-9 * std::max(amrex::Real(1.0), std::abs(expected)));
+    EXPECT_NEAR(after - before, expected, 5.0e-9 * amrex::max(amrex::Real(1.0), amrex::Math::abs(expected)));
 }
 
 TEST(ShocPhysical, StrongerSurfaceHeatingRaisesMeanThetaMore)
@@ -609,7 +609,7 @@ TEST(ShocPhysical, DryUniformNoFluxColumnIsConserved)
     });
 
     EXPECT_NEAR(column_moist_energy(col), energy_before,
-                1.0e-12_rt * amrex::max(1.0_rt, std::abs(energy_before)));
+                1.0e-12_rt * amrex::max(1.0_rt, amrex::Math::abs(energy_before)));
     EXPECT_NEAR(column_total_water(col), water_before, 1.0e-14_rt);
 
     const auto qv = col.qv.const_array();
@@ -660,7 +660,7 @@ TEST(ShocPhysical, ColumnWaterBudgetTracksSurfaceLatentFlux)
 
     const amrex::Real water_after = column_total_water(col);
     EXPECT_NEAR(water_after - water_before, expected_delta,
-                1.0e-9_rt * amrex::max(1.0_rt, std::abs(expected_delta)));
+                1.0e-9_rt * amrex::max(1.0_rt, amrex::Math::abs(expected_delta)));
 
     const auto qv = col.qv.const_array();
     const auto qc = col.qc.const_array();

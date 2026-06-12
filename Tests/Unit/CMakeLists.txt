@@ -43,7 +43,6 @@ function(erf_register_gtest_suite target)
   endif()
 
   list(JOIN ERF_GTEST_LABELS ";" _erf_gtest_labels)
-  string(REPLACE ";" "\\;" _erf_gtest_labels "${_erf_gtest_labels}")
 
   gtest_discover_tests(${target}
     DISCOVERY_MODE POST_BUILD

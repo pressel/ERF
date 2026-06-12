@@ -229,19 +229,14 @@ void erf_slow_rhs_pre (int level, int finest_level,
 
 #ifdef ERF_USE_EAMXX_SHOC
         if (tc.uses_eamxx_shoc() && eamxx_shoc_lev) {
-            if (eamxx_shoc_lev->uses_shoc_tendencies()) {
-                // SHOC has already consumed the lower-boundary fluxes inside
-                // its own tendency solve, so prevent the host diffusion path
-                // from applying them a second time.
-                eamxx_shoc_lev->set_diff_stresses();
-            } else if (l_use_SurfLayer) {
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
-                SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
-                                                   Hfx1, Hfx2, Hfx3,
-                                                   Q1fx1, Q1fx2, Q1fx3,
-                                                   &z_phys_nd);
-            }
+            // EAMxx SHOC owns the overlapping lower-boundary fluxes here, so
+            // do not fall through to the generic SurfaceLayer path.
+            eamxx_shoc_lev->set_diff_stresses();
         }
+#endif
+        bool surface_layer_handled = false;
+#ifdef ERF_USE_EAMXX_SHOC
+        surface_layer_handled = tc.uses_eamxx_shoc() && eamxx_shoc_lev;
 #endif
 #ifdef ERF_USE_NATIVE_SHOC
         if (tc.uses_native_shoc() && native_shoc_lev) {
@@ -250,21 +245,17 @@ void erf_slow_rhs_pre (int level, int finest_level,
                 // its own tendency solve, so prevent the host diffusion path
                 // from applying them a second time.
                 native_shoc_lev->set_diff_stresses();
-            } else if (l_use_SurfLayer) {
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
-                SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
-                                                   Hfx1, Hfx2, Hfx3,
-                                                   Q1fx1, Q1fx2, Q1fx3,
-                                                   &z_phys_nd);
+                surface_layer_handled = true;
+            } else if (native_shoc_lev->uses_host_diffusion()) {
+                surface_layer_handled = false;
+            } else {
+                surface_layer_handled = true;
             }
-        } else if (l_use_SurfLayer) {
-#else
-        if (l_use_SurfLayer) {
+        }
 #endif
+        if (!surface_layer_handled && l_use_SurfLayer) {
+            Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
             if (!l_use_eb) {
-                // Set surface shear stresses, update heat and moisture fluxes
-                // (fluxes will be later applied in the diffusion source update)
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
                 SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
                                                    Hfx1, Hfx2, Hfx3,
                                                    Q1fx1, Q1fx2, Q1fx3,
@@ -274,11 +265,10 @@ void erf_slow_rhs_pre (int level, int finest_level,
                 //    copy_surface_tau_for_implicit(Tau_lev, Tau_corr_lev);
                 //}
             } else {
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
                 SurfLayer->impose_SurfaceLayer_bcs_EB(level, mfs, Tau_EB,
-                                                   Hfx1, Hfx2, Hfx3_EB,
-                                                   Q1fx1, Q1fx2, Q1fx3,
-                                                   ebfact);
+                                                      Hfx1, Hfx2, Hfx3_EB,
+                                                      Q1fx1, Q1fx2, Q1fx3,
+                                                      ebfact);
             }
         }
     } // l_use_diff

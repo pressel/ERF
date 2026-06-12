@@ -287,8 +287,7 @@
         }
 
 #ifdef ERF_USE_EAMXX_SHOC
-        if (solverChoice.turbChoice[level].uses_eamxx_shoc() && eamxx_shoc_interface[level] &&
-            eamxx_shoc_interface[level]->uses_shoc_tendencies()) {
+        if (solverChoice.turbChoice[level].uses_eamxx_shoc() && eamxx_shoc_interface[level]) {
             eamxx_shoc_interface[level]->add_fast_tend(S_rhs);
         }
 #endif

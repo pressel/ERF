@@ -226,14 +226,14 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
 
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
-        Real numer = 0.0_rt;
+        Real numerator = 0.0_rt;
         Real denom = 0.0_rt;
         for (int k = 0; k < layout.nlev; ++k) {
             const Real tke_sqrt = std::sqrt(amrex::max(tke(ic,k,0), shoc_min_tke()));
-            numer += tke_sqrt * zt(ic,k,0) * dz(ic,k,0);
+            numerator += tke_sqrt * zt(ic,k,0) * dz(ic,k,0);
             denom += tke_sqrt * dz(ic,k,0);
         }
-        const Real l_inf = (denom > 0.0_rt) ? 0.1_rt * numer / denom : shoc_min_len();
+        const Real l_inf = (denom > 0.0_rt) ? 0.1_rt * numerator / denom : shoc_min_len();
 
         for (int k = 0; k < layout.nlev; ++k) {
             const Real theta_v_k = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),

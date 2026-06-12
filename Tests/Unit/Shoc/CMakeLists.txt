@@ -43,7 +43,12 @@ target_link_libraries(erf_shoc_unit_tests PRIVATE
 
 erf_finalize_target(erf_shoc_unit_tests)
 
-erf_register_gtest_suite(erf_shoc_unit_tests
-  LABELS unit shoc
+gtest_add_tests(TARGET erf_shoc_unit_tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  TEST_LIST erf_shoc_unit_tests_tests
 )
+
+if(erf_shoc_unit_tests_tests)
+  set_tests_properties(${erf_shoc_unit_tests_tests}
+    PROPERTIES LABELS "unit;shoc")
+endif()

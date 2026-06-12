@@ -71,11 +71,11 @@ TEST(ShocMoments, SurfaceMomentBoundaryConditionsMatchTranslatedE3smSemantics)
 
     const amrex::Real ustar2 = std::sqrt(0.04 * 0.04 + 0.03 * 0.03);
     const amrex::Real wstar = std::cbrt((CONST_GRAV / 300.0) * 0.02);
-    const amrex::Real uf = std::max<amrex::Real>(0.01, std::sqrt(ustar2 + 0.3 * wstar * wstar));
+    const amrex::Real uf = amrex::max(amrex::Real(0.01), std::sqrt(ustar2 + 0.3 * wstar * wstar));
     const amrex::Real expected_thl_sec = 0.72 * std::pow(0.02 / uf, 2);
     const amrex::Real expected_qw_sec = 0.72 * std::pow(1.0e-4 / uf, 2);
     const amrex::Real expected_qwthl = 0.36 * (0.02 / uf) * (1.0e-4 / uf);
-    const amrex::Real expected_wtke = std::pow(std::max<amrex::Real>(std::sqrt(ustar2), 0.01), 3);
+    const amrex::Real expected_wtke = std::pow(amrex::max(std::sqrt(ustar2), amrex::Real(0.01)), 3);
 
     const auto thl_sec = col.thl_sec.const_array();
     const auto qw_sec = col.qw_sec.const_array();
