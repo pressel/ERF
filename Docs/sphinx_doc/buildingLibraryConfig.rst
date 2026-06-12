@@ -32,10 +32,14 @@ ERF integrates external libraries for core functionality and advanced physics:
      - Parallel I/O backend for NetCDF
      - Optional
      - ``-DERF_ENABLE_HDF5=ON``
-   * - **SHOC**
+   * - **Native SHOC**
      - Turbulence and cloud macrophysics (:ref:`SHOC`)
      - Optional
-     - ``-DERF_ENABLE_SHOC=ON`` / ``USE_SHOC=TRUE``
+     - ``-DERF_ENABLE_NATIVE_SHOC=ON`` / ``USE_NATIVE_SHOC=TRUE``
+   * - **EAMxx SHOC**
+     - Optional EAMxx SHOC turbulence and cloud macrophysics
+     - Optional
+     - ``-DERF_ENABLE_EAMXX_SHOC=ON`` / ``USE_EAMXX_SHOC=TRUE``
    * - **P3**
      - Microphysics (:ref:`Microphysics`)
      - Optional
@@ -309,7 +313,7 @@ SHOC (Simplified Higher-Order Closure) provides turbulence and cloud macrophysic
 
       .. code-block:: bash
 
-         cmake -DERF_ENABLE_SHOC=ON \
+         cmake -DERF_ENABLE_NATIVE_SHOC=ON \
                -DERF_ENABLE_MPI=ON \
                ..
 
@@ -318,10 +322,10 @@ SHOC (Simplified Higher-Order Closure) provides turbulence and cloud macrophysic
       .. code-block:: bash
 
          source Build/GNU_Ekat/ekat_build_commands.sh
-         make USE_SHOC=TRUE USE_MPI=TRUE
+         make USE_NATIVE_SHOC=TRUE USE_MPI=TRUE
 
 .. note::
-   SHOC requires MPI and automatically enables EKAT (provides Kokkos for GPU support).
+   Native SHOC requires no EAMxx dependencies. EAMxx SHOC requires MPI and automatically enables EKAT (provides Kokkos for GPU support).
 
 P3 (Microphysics)
 ~~~~~~~~~~~~~~~~~

@@ -20,6 +20,15 @@
                                     << " with dt = " << slow_dt
                                     << " using RHS created at " << old_stage_time << std::endl;
 
+        #if defined(ERF_USE_NETCDF)
+        bool moist_set_rhs = false;
+        if ( solverChoice.use_real_bcs && (level==0) &&
+             (solverChoice.moisture_type != MoistureType::None) )
+        {
+            moist_set_rhs = true;
+        }
+        #endif
+
         const GpuArray<Real, AMREX_SPACEDIM> dxInv = fine_geom.InvCellSizeArray();
 
         // *************************************************************************
@@ -47,8 +56,18 @@
                           fine_geom, solverChoice, m_SurfaceLayer, domain_bcs_type_d, domain_bcs_type,
                           z_phys_nd[level], z_phys_cc[level], ax[level], ay[level], az[level],
                           detJ_cc[level], new_detJ, stretched_dz_d[level], mapfac[level], EBFactory(level),
-#ifdef ERF_USE_SHOC
-                          shoc_interface[level],
+#if defined(ERF_USE_NETCDF)
+                          moist_set_rhs,
+                          start_time+old_stage_time,
+                          start_bdy_time, final_bdy_time, bdy_time_interval,
+                          real_width,
+                          bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi,
+#endif
+#ifdef ERF_USE_EAMXX_SHOC
+                          eamxx_shoc_interface[level].get(),
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+                          native_shoc_driver[level].get(),
 #endif
                           fr_as_crse, fr_as_fine,
                           m_r2d);

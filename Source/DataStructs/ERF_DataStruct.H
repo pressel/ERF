@@ -1,6 +1,7 @@
 #ifndef ERF_DATA_STRUCT_H_
 #define ERF_DATA_STRUCT_H_
 
+#include <algorithm>
 #include <string>
 #include <iostream>
 
@@ -653,12 +654,18 @@ struct SolverChoice {
         // Are me transporting the scalar component?
         pp.query("transport_scalar",transport_scalar);
 
-        // Are we using SHOC? (test on compilation done in turb struct)
-        if (turbChoice[0].pbl_type == PBLType::SHOC) { use_shoc = true; }
+        for (int lev = 0; lev <= max_level; ++lev) {
+            if (turbChoice[lev].uses_eamxx_shoc()) {
+                use_eamxx_shoc = true;
+            }
+            if (turbChoice[lev].uses_native_shoc()) {
+                use_native_shoc = true;
+            }
+        }
 
-        // Implicit vertical diffusion (not available with Shoc)
-        if (use_shoc) {
-            amrex::Print() << "Turning off native vertical implicit solve at all levels with SHOC PBL scheme." << std::endl;
+        // Implicit vertical diffusion (not available with SHOC family)
+        if (uses_shoc_family()) {
+            amrex::Print() << "Turning off native vertical implicit solve at all levels with SHOC family PBL scheme." << std::endl;
             for (int lev = 0; lev <= max_level; lev++) {
                vert_implicit_fac[lev][0] = zero;
                vert_implicit_fac[lev][1] = zero;
@@ -760,7 +767,7 @@ struct SolverChoice {
                     }
                 }
             } // do_vert_implicit
-        } // use_shoc
+        } // uses_shoc_family
 
         // Which type of multilevel coupling
         coupling_type = CouplingType::TwoWay; // Default
@@ -1319,7 +1326,8 @@ struct SolverChoice {
     bool use_rotate_surface_flux = false;
 
     // Should we use SHOC?
-    bool use_shoc = false;
+    bool use_eamxx_shoc = false;
+    bool use_native_shoc = false;
 
     // Transport the passive scalar?
     bool transport_scalar = true;
@@ -1343,6 +1351,20 @@ struct SolverChoice {
     bool use_source_perturbation (int lev) const
     {
         return pert_type[lev] == PerturbationType::Source;
+    }
+
+    bool uses_shoc_family () const noexcept
+    {
+        return use_eamxx_shoc || use_native_shoc;
+    }
+
+    bool pbl_suppresses_microphysics_condensation () const noexcept
+    {
+        return std::any_of(
+            turbChoice.begin(), turbChoice.end(),
+            [] (const TurbChoice& tc) {
+                return tc.pbl_suppresses_microphysics_condensation();
+            });
     }
 
     bool any_perturbation () const
