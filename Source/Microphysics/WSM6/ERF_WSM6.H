@@ -44,7 +44,7 @@ public:
     void Define(SolverChoice& sc) override
     {
         m_axis = sc.ave_plane;
-        m_do_cond = (!sc.use_shoc);
+        m_do_cond = (!sc.pbl_suppresses_microphysics_condensation());
     }
 
     void Init(const amrex::MultiFab& cons_in,

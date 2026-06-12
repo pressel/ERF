@@ -124,7 +124,4 @@ private:
     bool apply_shoc_moisture_tendencies () const;
     void print_debug_summary (amrex::Real dt) const;
 };
-
-using SHOCInterface = ShocDriver;
-
 #endif

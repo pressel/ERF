@@ -344,12 +344,19 @@ ERF::derive_diag_profiles_stag (Real /*time*/,
 
     bool use_moisture = (solverChoice.moisture_type != MoistureType::None);
     const MultiFab* eta_src = nullptr;
+    const bool have_native_shoc_diagnostics =
+#ifdef ERF_USE_NATIVE_SHOC
+        solverChoice.turbChoice[lev].uses_native_shoc() &&
+        native_shoc_driver[lev] &&
+        native_shoc_driver[lev]->uses_shoc_tendencies() &&
+        native_shoc_driver[lev]->has_native_diagnostics();
+#else
+        false;
+#endif
     if (l_use_kturb) {
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc && shoc_interface[lev] &&
-            shoc_interface[lev]->uses_shoc_tendencies() &&
-            shoc_interface[lev]->has_native_diagnostics()) {
-            eta_src = &shoc_interface[lev]->native_diagnostics();
+#ifdef ERF_USE_NATIVE_SHOC
+        if (have_native_shoc_diagnostics) {
+            eta_src = &native_shoc_driver[lev]->native_diagnostics();
         } else
 #endif
         {

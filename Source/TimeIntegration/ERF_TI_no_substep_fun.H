@@ -300,8 +300,10 @@
         apply_bcs(S_sum, time_for_fp, S_sum[IntVars::cons].nGrow(), S_sum[IntVars::xmom].nGrow(),
                   fast_only=true, vel_and_mom_synced=false);
 
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc && shoc_interface[level]->debug_summary_enabled()) {
+#ifdef ERF_USE_NATIVE_SHOC
+        if (solverChoice.turbChoice[level].uses_native_shoc() &&
+            native_shoc_driver[level] &&
+            native_shoc_driver[level]->debug_summary_enabled()) {
             auto print_minmax = [] (const char* name, const MultiFab& mf, int comp) {
                 amrex::Print() << "    " << name
                                << " min=" << mf.min(comp)
@@ -328,8 +330,10 @@
 #endif
 
         if (solverChoice.anelastic[level]) {
-#ifdef ERF_USE_SHOC
-            if (solverChoice.use_shoc && shoc_interface[level]->debug_summary_enabled()) {
+#ifdef ERF_USE_NATIVE_SHOC
+            if (solverChoice.turbChoice[level].uses_native_shoc() &&
+                native_shoc_driver[level] &&
+                native_shoc_driver[level]->debug_summary_enabled()) {
                 auto print_minmax = [] (const char* name, const MultiFab& mf, int comp) {
                     amrex::Print() << "    " << name
                                    << " min=" << mf.min(comp)

@@ -3,6 +3,12 @@
 #include <ERF_TI_slow_headers.H>
 #include <ERF_EBAdvection.H>
 #include <ERF_EBRedistribute.H>
+#ifdef ERF_USE_EAMXX_SHOC
+#include "ERF_ShocInterface.H"
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+#include "ERF_ShocDriver.H"
+#endif
 
 using namespace amrex;
 
@@ -93,8 +99,11 @@ void erf_slow_rhs_post (int level, int finest_level,
                         Vector<Vector<FArrayBox>>& bdy_data_ylo,
                         Vector<Vector<FArrayBox>>& bdy_data_yhi,
 #endif
-#ifdef ERF_USE_SHOC
-                        std::unique_ptr<SHOCInterface>& shoc_lev,
+#ifdef ERF_USE_EAMXX_SHOC
+                        std::unique_ptr<SHOCInterface>& eamxx_shoc_lev,
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+                        std::unique_ptr<ShocDriver>& native_shoc_lev,
 #endif
                         YAFluxRegister* fr_as_crse,
                         YAFluxRegister* fr_as_fine,
@@ -135,7 +144,7 @@ void erf_slow_rhs_post (int level, int finest_level,
                                     tc.pbl_type  == PBLType::MYNNEDMF    ||
                                     tc.pbl_type  == PBLType::YSU         ||
                                     tc.pbl_type  == PBLType::MRF         ||
-                                    tc.pbl_type  == PBLType::SHOC );
+                                    tc.uses_shoc_family() );
     const bool l_rotate         = (solverChoice.use_rotate_surface_flux);
     const bool do_upwind        = solverChoice.upwind_real_bcs;
     const bool l_do_scalar      = (solverChoice.transport_scalar);
@@ -494,11 +503,14 @@ void erf_slow_rhs_post (int level, int finest_level,
         }
 #endif
 
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc) {
-            if (shoc_lev->uses_shoc_tendencies()) {
-                shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
-            }
+#ifdef ERF_USE_EAMXX_SHOC
+        if (tc.uses_eamxx_shoc() && eamxx_shoc_lev && eamxx_shoc_lev->uses_shoc_tendencies()) {
+            eamxx_shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
+        }
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+        if (tc.uses_native_shoc() && native_shoc_lev && native_shoc_lev->uses_shoc_tendencies()) {
+            native_shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
         }
 #endif
 

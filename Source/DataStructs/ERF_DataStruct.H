@@ -1,6 +1,7 @@
 #ifndef ERF_DATA_STRUCT_H_
 #define ERF_DATA_STRUCT_H_
 
+#include <algorithm>
 #include <string>
 #include <iostream>
 
@@ -600,11 +601,15 @@ struct SolverChoice {
         // Are me transporting the scalar component?
         pp.query("transport_scalar",transport_scalar);
 
-        // Are we using SHOC? (test on compilation done in turb struct)
-        if (turbChoice[0].pbl_type == PBLType::SHOC) { use_shoc = true; }
+        use_eamxx_shoc = false;
+        use_native_shoc = false;
+        for (int lev = 0; lev <= max_level; lev++) {
+            use_eamxx_shoc  = use_eamxx_shoc  || turbChoice[lev].uses_eamxx_shoc();
+            use_native_shoc = use_native_shoc || turbChoice[lev].uses_native_shoc();
+        }
 
         // Implicit vertical diffusion (not available with Shoc)
-        if (!use_shoc) {
+        if (!uses_shoc_family()) {
             // This controls the time-centering of the vertical differences in the diffusive term
              bool do_vert_implicit = false;
              if (pp.query("vert_implicit", do_vert_implicit) && do_vert_implicit) {
@@ -1197,7 +1202,22 @@ struct SolverChoice {
     bool use_rotate_surface_flux = false;
 
     // Should we use SHOC?
-    bool use_shoc = false;
+    bool use_eamxx_shoc = false;
+    bool use_native_shoc = false;
+
+    bool uses_shoc_family () const noexcept
+    {
+        return use_eamxx_shoc || use_native_shoc;
+    }
+
+    bool pbl_suppresses_microphysics_condensation () const noexcept
+    {
+        return std::any_of(
+            turbChoice.begin(), turbChoice.end(),
+            [] (const TurbChoice& tc) {
+                return tc.pbl_suppresses_microphysics_condensation();
+            });
+    }
 
     // Transport the passive scalar?
     bool transport_scalar = true;

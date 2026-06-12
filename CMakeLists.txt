@@ -144,7 +144,19 @@ option(ERF_ENABLE_ML_UPHYS_DIAGNOSTICS "Enable ML UPHYS diagnostics in SDM" OFF)
 if(ERF_ENABLE_ML_UPHYS_DIAGNOSTICS AND NOT ERF_ENABLE_PARTICLES)
   message(FATAL_ERROR "ERF_ENABLE_ML_UPHYS_DIAGNOSTICS requires particles be enabled")
 endif()
-set(ERF_ENABLE_SHOC ON)
+
+# Native SHOC is in-tree and should build by default.
+option(ERF_ENABLE_NATIVE_SHOC "Build native ERF SHOC parameterization" ON)
+
+# EAMxx SHOC remains optional.
+option(ERF_ENABLE_EAMXX_SHOC "Build EAMxx SHOC parameterization" OFF)
+
+# Backward-compatible deprecated alias.
+option(ERF_ENABLE_SHOC "Deprecated alias for ERF_ENABLE_EAMXX_SHOC" OFF)
+if(ERF_ENABLE_SHOC AND NOT ERF_ENABLE_EAMXX_SHOC)
+  message(WARNING "ERF_ENABLE_SHOC is deprecated; use ERF_ENABLE_EAMXX_SHOC=ON")
+  set(ERF_ENABLE_EAMXX_SHOC ON CACHE BOOL "Build EAMxx SHOC parameterization" FORCE)
+endif()
 
 #Options for performance
 option(ERF_ENABLE_MPI "Enable MPI" OFF)
@@ -323,7 +335,7 @@ list(POP_BACK CMAKE_MESSAGE_CONTEXT)
 
 ########################## EKAT ##################################
 
-if(ERF_ENABLE_RRTMGP OR ERF_ENABLE_P3)
+if(ERF_ENABLE_RRTMGP OR ERF_ENABLE_P3 OR ERF_ENABLE_EAMXX_SHOC)
   set(ERF_ENABLE_EKAT ON)
 else()
   set(ERF_ENABLE_EKAT OFF)

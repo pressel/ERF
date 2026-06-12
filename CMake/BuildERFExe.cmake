@@ -19,10 +19,7 @@ function(target_link_libraries_includes_only target visibility lib)
   endif()
 endfunction()
 
-function(erf_add_shoc_sources target)
-  set(options FULL DRIVER)
-  cmake_parse_arguments(ERF_SHOC "${options}" "" "" ${ARGN})
-
+function(erf_add_native_shoc_sources target)
   set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
 
   target_sources(${target} PRIVATE
@@ -32,24 +29,91 @@ function(erf_add_shoc_sources target)
     ${SRC_DIR}/PBL/Shoc/ERF_ShocPDF.cpp
     ${SRC_DIR}/PBL/Shoc/ERF_ShocEnergyFixer.cpp
     ${SRC_DIR}/PBL/Shoc/ERF_ShocImplicit.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocDriver.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocPreprocess.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocDiagnostics.cpp
+    ${SRC_DIR}/PBL/Shoc/ERF_ShocCoupling.cpp
   )
-
-  if(ERF_SHOC_DRIVER OR ERF_SHOC_FULL)
-    target_sources(${target} PRIVATE
-      ${SRC_DIR}/PBL/Shoc/ERF_ShocDriver.cpp
-      ${SRC_DIR}/PBL/Shoc/ERF_ShocPreprocess.cpp
-      ${SRC_DIR}/PBL/Shoc/ERF_ShocDiagnostics.cpp
-    )
-  endif()
-
-  if(ERF_SHOC_FULL)
-    target_sources(${target} PRIVATE
-      ${SRC_DIR}/PBL/Shoc/ERF_ShocCoupling.cpp
-    )
-  endif()
 
   target_include_directories(${target} PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/PBL/Shoc>
+  )
+endfunction()
+
+function(erf_add_eamxx_shoc_sources target)
+  set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
+  set(EAMXX_DIR ${PROJECT_SOURCE_DIR}/Source/PhysicsInterfaces/Shoc)
+
+  target_sources(${target} PRIVATE
+    ${EAMXX_DIR}/ERF_ShocInterface.cpp
+    ${EAMXX_DIR}/physics_saturation.cpp
+    ${EAMXX_DIR}/shoc_assumed_pdf_disp.cpp
+    ${EAMXX_DIR}/shoc_check_tke_disp.cpp
+    ${EAMXX_DIR}/shoc_compute_shoc_temperature_disp.cpp
+    ${EAMXX_DIR}/shoc_compute_shoc_vapor_disp.cpp
+    ${EAMXX_DIR}/shoc_diag_obklen_disp.cpp
+    ${EAMXX_DIR}/shoc_diag_second_shoc_moments_disp.cpp
+    ${EAMXX_DIR}/shoc_diag_third_shoc_moments_disp.cpp
+    ${EAMXX_DIR}/shoc_energy_fixer_disp.cpp
+    ${EAMXX_DIR}/shoc_energy_integrals_disp.cpp
+    ${EAMXX_DIR}/shoc_grid_disp.cpp
+    ${EAMXX_DIR}/shoc_length_disp.cpp
+    ${EAMXX_DIR}/shoc_pblintd_disp.cpp
+    ${EAMXX_DIR}/shoc_tke_disp.cpp
+    ${EAMXX_DIR}/shoc_update_host_dse_disp.cpp
+    ${EAMXX_DIR}/shoc_update_prognostics_implicit_disp.cpp
+    ${EAMXX_DIR}/shoc_adv_sgs_tke.cpp
+    ${EAMXX_DIR}/shoc_assumed_pdf.cpp
+    ${EAMXX_DIR}/shoc_calc_shoc_varorcovar.cpp
+    ${EAMXX_DIR}/shoc_calc_shoc_vertflux.cpp
+    ${EAMXX_DIR}/shoc_check_length_scale_shoc_length.cpp
+    ${EAMXX_DIR}/shoc_check_tke.cpp
+    ${EAMXX_DIR}/shoc_clipping_diag_third_shoc_moments.cpp
+    ${EAMXX_DIR}/shoc_compute_brunt_shoc_length.cpp
+    ${EAMXX_DIR}/shoc_compute_diag_third_shoc_moment.cpp
+    ${EAMXX_DIR}/shoc_compute_l_inf_shoc_length.cpp
+    ${EAMXX_DIR}/shoc_compute_shoc_mix_shoc_length.cpp
+    ${EAMXX_DIR}/shoc_compute_shoc_temperature.cpp
+    ${EAMXX_DIR}/shoc_compute_shoc_vapor.cpp
+    ${EAMXX_DIR}/shoc_compute_shr_prod.cpp
+    ${EAMXX_DIR}/shoc_compute_tmpi.cpp
+    ${EAMXX_DIR}/shoc_diag_obklen.cpp
+    ${EAMXX_DIR}/shoc_diag_second_moments.cpp
+    ${EAMXX_DIR}/shoc_diag_second_moments_lbycond.cpp
+    ${EAMXX_DIR}/shoc_diag_second_moments_srf.cpp
+    ${EAMXX_DIR}/shoc_diag_second_moments_ubycond.cpp
+    ${EAMXX_DIR}/shoc_diag_second_shoc_moments.cpp
+    ${EAMXX_DIR}/shoc_diag_third_shoc_moments.cpp
+    ${EAMXX_DIR}/shoc_dp_inverse.cpp
+    ${EAMXX_DIR}/shoc_eddy_diffusivities.cpp
+    ${EAMXX_DIR}/shoc_energy_fixer.cpp
+    ${EAMXX_DIR}/shoc_energy_integrals.cpp
+    ${EAMXX_DIR}/shoc_grid.cpp
+    ${EAMXX_DIR}/shoc_integ_column_stability.cpp
+    ${EAMXX_DIR}/shoc_isotropic_ts.cpp
+    ${EAMXX_DIR}/shoc_linear_interp.cpp
+    ${EAMXX_DIR}/shoc_length.cpp
+    ${EAMXX_DIR}/shoc_main.cpp
+    ${EAMXX_DIR}/shoc_pblintd.cpp
+    ${EAMXX_DIR}/shoc_pblintd_check_pblh.cpp
+    ${EAMXX_DIR}/shoc_pblintd_cldcheck.cpp
+    ${EAMXX_DIR}/shoc_pblintd_height.cpp
+    ${EAMXX_DIR}/shoc_pblintd_init_pot.cpp
+    ${EAMXX_DIR}/shoc_pblintd_surf_temp.cpp
+    ${EAMXX_DIR}/shoc_tridiag_solver.cpp
+    ${EAMXX_DIR}/shoc_tke.cpp
+    ${EAMXX_DIR}/shoc_update_host_dse.cpp
+    ${EAMXX_DIR}/shoc_update_prognostics_implicit.cpp
+  )
+
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/PhysicsInterfaces>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/PhysicsInterfaces/Shoc>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Submodules/ekat/src/pack>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Submodules/ekat/src/algorithm>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/external/E3SM/components/eamxx/src>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/external/E3SM/components/eamxx/src/physics>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/external/E3SM/components/eamxx/src/physics/share>
   )
 endfunction()
 
@@ -180,10 +244,18 @@ function(build_erf_lib erf_lib_name)
     target_compile_definitions(${erf_lib_name} PUBLIC RRTMGP_ENABLE_KOKKOS)
   endif()
 
-  ########################### SHOC #################################
-  if(ERF_ENABLE_SHOC)
-    erf_add_shoc_sources(${erf_lib_name} FULL)
-    target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_SHOC)
+  if(ERF_ENABLE_NATIVE_SHOC)
+    erf_add_native_shoc_sources(${erf_lib_name})
+    target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_NATIVE_SHOC)
+  endif()
+
+  if(ERF_ENABLE_EAMXX_SHOC)
+    erf_add_eamxx_shoc_sources(${erf_lib_name})
+    target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_EAMXX_SHOC)
+  endif()
+
+  if(ERF_ENABLE_NATIVE_SHOC OR ERF_ENABLE_EAMXX_SHOC)
+    target_compile_definitions(${erf_lib_name} PUBLIC ERF_HAS_SHOC_FAMILY)
   endif()
 
   if(ERF_ENABLE_MORR_FORT)

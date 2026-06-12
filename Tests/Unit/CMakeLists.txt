@@ -75,6 +75,6 @@ erf_register_gtest_suite(${erf_exe_name}
   LABELS unit
 )
 
-if(ERF_ENABLE_SHOC)
+if(ERF_ENABLE_NATIVE_SHOC)
   add_subdirectory(Shoc)
 endif()

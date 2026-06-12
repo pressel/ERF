@@ -103,7 +103,7 @@ void ERF::project_momenta (int lev, Real l_time, Real l_dt, Vector<MultiFab>& mo
 {
     BL_PROFILE("ERF::project_momenta()");
     bool shoc_debug_summary = false;
-    if (solverChoice.use_shoc) {
+    if (solverChoice.turbChoice[lev].uses_native_shoc()) {
         ParmParse pp("erf.shoc");
         pp.query("debug_summary", shoc_debug_summary);
     }

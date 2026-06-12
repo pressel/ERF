@@ -81,33 +81,33 @@ SHOCInterface::SHOCInterface (const int& lev,
 
 
 void
-ERF::compute_shoc_tendencies (int lev,
-                              MultiFab* cons,
-                              MultiFab* xvel,
-                              MultiFab* yvel,
-                              MultiFab* zvel,
-                              Real* w_subsid,
-                              MultiFab* tau13,
-                              MultiFab* tau23,
-                              MultiFab* hfx3,
-                              MultiFab* qfx3,
-                              MultiFab* eddyDiffs,
-                              MultiFab* z_phys_nd,
-                              const Real& dt_advance)
+ERF::compute_eamxx_shoc_tendencies (int lev,
+                                    MultiFab* cons,
+                                    MultiFab* xvel,
+                                    MultiFab* yvel,
+                                    MultiFab* zvel,
+                                    Real* w_subsid,
+                                    MultiFab* tau13,
+                                    MultiFab* tau23,
+                                    MultiFab* hfx3,
+                                    MultiFab* qfx3,
+                                    MultiFab* eddyDiffs,
+                                    MultiFab* z_phys_nd,
+                                    const Real& dt_advance)
 {
     Print() << "Advancing SHOC at level: " << lev << " ...";
 
-    shoc_interface[lev]->set_grids(lev, cons->boxArray(), Geom(lev),
-                                   cons , xvel , yvel, zvel, w_subsid,
-                                   tau13, tau23, hfx3, qfx3,
-                                   eddyDiffs, z_phys_nd);
+    eamxx_shoc_interface[lev]->set_grids(lev, cons->boxArray(), Geom(lev),
+                                         cons , xvel , yvel, zvel, w_subsid,
+                                         tau13, tau23, hfx3, qfx3,
+                                         eddyDiffs, z_phys_nd);
 
     auto t0 = amrex::second();
-    shoc_interface[lev]->initialize_impl();
+    eamxx_shoc_interface[lev]->initialize_impl();
     auto t1 = amrex::second();
-    shoc_interface[lev]->run_impl(dt_advance);
+    eamxx_shoc_interface[lev]->run_impl(dt_advance);
     auto t2 = amrex::second();
-    shoc_interface[lev]->finalize_impl(dt_advance);
+    eamxx_shoc_interface[lev]->finalize_impl(dt_advance);
     auto t3 = amrex::second();
 
     Print() << "Time in SHOC: initialize_impl() " << t1 - t0 << std::endl;

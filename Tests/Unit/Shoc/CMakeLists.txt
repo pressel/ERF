@@ -6,10 +6,12 @@ if(NOT TARGET GTest::gtest)
 endif()
 
 include(${PROJECT_SOURCE_DIR}/CMake/BuildERFExe.cmake)
-  include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
+include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
 
 add_executable(erf_shoc_unit_tests
+  ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
   ERF_ShocUnitMain.cpp
+  ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestRuntimeStubs.cpp
   ERF_ShocStructureTests.cpp
   ERF_ShocTkeTests.cpp
   ERF_ShocMomentsTests.cpp
@@ -18,8 +20,6 @@ add_executable(erf_shoc_unit_tests
   ERF_ShocDriverTests.cpp
   ERF_ShocPhysicalPropertyTests.cpp
 )
-
-erf_add_shoc_sources(erf_shoc_unit_tests DRIVER)
 
 target_include_directories(erf_shoc_unit_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/Source
@@ -31,11 +31,14 @@ target_include_directories(erf_shoc_unit_tests PRIVATE
 
 target_compile_definitions(erf_shoc_unit_tests PRIVATE
   ERF_SHOC_UNIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+  ERF_USE_NATIVE_SHOC
+  ERF_HAS_SHOC_FAMILY
 )
 
 target_link_libraries(erf_shoc_unit_tests PRIVATE
   GTest::gtest
   amrex
+  erf_srclib
 )
 
 erf_finalize_target(erf_shoc_unit_tests)

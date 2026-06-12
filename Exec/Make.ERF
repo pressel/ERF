@@ -1,6 +1,12 @@
 AMREX_HOME ?= $(ERF_HOME)/Submodules/AMReX
 EKAT_HOME  ?= $(ERF_HOME)/Submodules/ekat/build/install
 EAMXX_HOME ?= $(ERF_HOME)/external/E3SM/components/eamxx/src
+USE_NATIVE_SHOC ?= TRUE
+USE_EAMXX_SHOC  ?= $(USE_SHOC)
+
+ifeq ($(USE_SHOC), TRUE)
+  $(warning USE_SHOC=TRUE is deprecated; use USE_EAMXX_SHOC=TRUE)
+endif
 
 # Default is no Fortran build unless an explicit Fortran bridge/model is enabled.
 # Keep this TRUE when USE_MORR_FORT and USE_WSM6_FORT are both unset.
@@ -67,6 +73,13 @@ include $(ERF_PBL_DIR)/Make.package
 VPATH_LOCATIONS   += $(ERF_PBL_DIR)
 INCLUDE_LOCATIONS += $(ERF_PBL_DIR)
 
+ifeq ($(USE_NATIVE_SHOC), TRUE)
+DEFINES += -DERF_USE_NATIVE_SHOC -DERF_HAS_SHOC_FAMILY
+ERF_NATIVE_SHOC_DIR = $(ERF_SOURCE_DIR)/PBL/Shoc
+VPATH_LOCATIONS   += $(ERF_NATIVE_SHOC_DIR)
+INCLUDE_LOCATIONS += $(ERF_NATIVE_SHOC_DIR)
+endif
+
 ERF_INIT_DIR = $(ERF_SOURCE_DIR)/Initialization
 include $(ERF_INIT_DIR)/Make.package
 VPATH_LOCATIONS   += $(ERF_INIT_DIR)
@@ -91,6 +104,14 @@ ERF_PHYSICS_DIR = $(ERF_SOURCE_DIR)/PhysicsInterfaces
 include $(ERF_PHYSICS_DIR)/Make.package
 VPATH_LOCATIONS   += $(ERF_PHYSICS_DIR)
 INCLUDE_LOCATIONS += $(ERF_PHYSICS_DIR)
+
+ifeq ($(USE_EAMXX_SHOC), TRUE)
+DEFINES += -DERF_USE_EAMXX_SHOC -DERF_HAS_SHOC_FAMILY
+ERF_PHYSICS_SHOC_DIR = $(ERF_SOURCE_DIR)/PhysicsInterfaces/Shoc
+include $(ERF_PHYSICS_SHOC_DIR)/Make.package
+VPATH_LOCATIONS   += $(ERF_PHYSICS_SHOC_DIR)
+INCLUDE_LOCATIONS += $(ERF_PHYSICS_SHOC_DIR)
+endif
 
 ifeq ($(USE_PARTICLES),TRUE)
 ERF_PARTICLES_DIR = $(ERF_SOURCE_DIR)/Particles
@@ -311,13 +332,6 @@ ifeq ($(USE_RRTMGP), TRUE)
     INCLUDE_LOCATIONS += $(RRTMGP_HOME)/cpp/extensions/cloud_optics
   endif
 endif
-
-# Native SHOC is always built in-tree.
-DEFINES += -DERF_USE_SHOC
-
-ERF_NATIVE_SHOC_DIR = $(ERF_SOURCE_DIR)/PBL/Shoc
-VPATH_LOCATIONS   += $(ERF_NATIVE_SHOC_DIR)
-INCLUDE_LOCATIONS += $(ERF_NATIVE_SHOC_DIR)
 
 # If using P3, compile relevant source and headers
 ifeq ($(USE_P3), TRUE)

@@ -1,3 +1,4 @@
+ifeq ($(USE_NATIVE_SHOC), TRUE)
 CEXE_sources += ERF_ShocDriver.cpp
 CEXE_sources += ERF_ShocPreprocess.cpp
 CEXE_sources += ERF_ShocStructure.cpp
@@ -20,3 +21,4 @@ CEXE_headers += ERF_ShocEnergyFixer.H
 CEXE_headers += ERF_ShocImplicit.H
 CEXE_headers += ERF_ShocDiagnostics.H
 CEXE_headers += ERF_ShocDriver.H
+endif

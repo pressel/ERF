@@ -167,12 +167,14 @@ CellState make_state_from_conserved (const amrex::Real rho,
                      rhoqc / rho};
 }
 
-inline SolverChoice make_solver_choice (const bool use_shoc)
+inline SolverChoice make_solver_choice (const bool use_pbl_suppression)
 {
     SolverChoice sc;
     sc.c_p = Cp_d;
     sc.rdOcp = kRdOcp;
-    sc.use_shoc = use_shoc;
+    sc.use_native_shoc = use_pbl_suppression;
+    sc.turbChoice.resize(1);
+    sc.turbChoice[0].pbl_type = use_pbl_suppression ? PBLType::NATIVE_SHOC : PBLType::None;
     return sc;
 }
 

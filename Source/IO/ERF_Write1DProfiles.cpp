@@ -302,23 +302,30 @@ ERF::derive_diag_profiles(Real /*time*/,
     const MultiFab* shoc_shear_prod_src = nullptr;
     const MultiFab* shoc_buoy_prod_src = nullptr;
     const MultiFab* shoc_diss_tke_src = nullptr;
+    const bool have_native_shoc_diagnostics =
+#ifdef ERF_USE_NATIVE_SHOC
+        solverChoice.turbChoice[lev].uses_native_shoc() &&
+        native_shoc_driver[lev] &&
+        native_shoc_driver[lev]->uses_shoc_tendencies() &&
+        native_shoc_driver[lev]->has_native_diagnostics();
+#else
+        false;
+#endif
     if (l_use_kturb) {
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc && shoc_interface[lev] &&
-            shoc_interface[lev]->uses_shoc_tendencies() &&
-            shoc_interface[lev]->has_native_diagnostics()) {
-            eta_src = &shoc_interface[lev]->native_diagnostics();
-            shoc_cldfrac_src = &shoc_interface[lev]->shoc_cldfrac_diagnostics();
-            shoc_ql_src = &shoc_interface[lev]->shoc_ql_diagnostics();
-            shoc_ql2_src = &shoc_interface[lev]->shoc_ql2_diagnostics();
-            shoc_cond_src = &shoc_interface[lev]->shoc_cond_diagnostics();
-            shoc_wqls_sec_src = &shoc_interface[lev]->wqls_sec_diagnostics();
-            shoc_wthv_sec_src = &shoc_interface[lev]->wthv_sec_diagnostics();
-            shoc_brunt_src = &shoc_interface[lev]->brunt_diagnostics();
-            shoc_isotropy_src = &shoc_interface[lev]->isotropy_diagnostics();
-            shoc_shear_prod_src = &shoc_interface[lev]->shear_prod_diagnostics();
-            shoc_buoy_prod_src = &shoc_interface[lev]->buoy_prod_diagnostics();
-            shoc_diss_tke_src = &shoc_interface[lev]->diss_tke_diagnostics();
+#ifdef ERF_USE_NATIVE_SHOC
+        if (have_native_shoc_diagnostics) {
+            eta_src = &native_shoc_driver[lev]->native_diagnostics();
+            shoc_cldfrac_src = &native_shoc_driver[lev]->shoc_cldfrac_diagnostics();
+            shoc_ql_src = &native_shoc_driver[lev]->shoc_ql_diagnostics();
+            shoc_ql2_src = &native_shoc_driver[lev]->shoc_ql2_diagnostics();
+            shoc_cond_src = &native_shoc_driver[lev]->shoc_cond_diagnostics();
+            shoc_wqls_sec_src = &native_shoc_driver[lev]->wqls_sec_diagnostics();
+            shoc_wthv_sec_src = &native_shoc_driver[lev]->wthv_sec_diagnostics();
+            shoc_brunt_src = &native_shoc_driver[lev]->brunt_diagnostics();
+            shoc_isotropy_src = &native_shoc_driver[lev]->isotropy_diagnostics();
+            shoc_shear_prod_src = &native_shoc_driver[lev]->shear_prod_diagnostics();
+            shoc_buoy_prod_src = &native_shoc_driver[lev]->buoy_prod_diagnostics();
+            shoc_diss_tke_src = &native_shoc_driver[lev]->diss_tke_diagnostics();
         } else
 #endif
         {

@@ -164,14 +164,19 @@
                          *zpn_to_use, *zpc_to_use, *ax_to_use, *ay_to_use, *az_to_use, *dJ_to_use,
                          stretched_dz_d[level], gradp[level],
                          mapfac[level], get_eb(level),
-#ifdef ERF_USE_SHOC
-                         shoc_interface[level],
+#ifdef ERF_USE_EAMXX_SHOC
+                         eamxx_shoc_interface[level],
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+                         native_shoc_driver[level],
 #endif
                          fr_as_crse, fr_as_fine);
 
         Real host_theta_rhs_avg = 0.0;
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc && shoc_interface[level]->debug_summary_enabled()) {
+#ifdef ERF_USE_NATIVE_SHOC
+        if (solverChoice.turbChoice[level].uses_native_shoc() &&
+            native_shoc_driver[level] &&
+            native_shoc_driver[level]->debug_summary_enabled()) {
             const int klo = fine_geom.Domain().smallEnd(2);
             auto const& rhs_arrs = S_rhs[IntVars::cons].const_arrays();
             auto const& cons_arrs = S_data[IntVars::cons].const_arrays();
@@ -281,46 +286,51 @@
             }
         }
 
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc) {
-            if (shoc_interface[level]->uses_shoc_tendencies()) {
-                shoc_interface[level]->add_fast_tend(S_rhs);
-                if (shoc_interface[level]->debug_summary_enabled()) {
-                    const int klo = fine_geom.Domain().smallEnd(2);
-                    auto const& rhs_arrs = S_rhs[IntVars::cons].const_arrays();
-                    auto const& cons_arrs = S_data[IntVars::cons].const_arrays();
+#ifdef ERF_USE_EAMXX_SHOC
+        if (solverChoice.turbChoice[level].uses_eamxx_shoc() && eamxx_shoc_interface[level] &&
+            eamxx_shoc_interface[level]->uses_shoc_tendencies()) {
+            eamxx_shoc_interface[level]->add_fast_tend(S_rhs);
+        }
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+        if (solverChoice.turbChoice[level].uses_native_shoc() && native_shoc_driver[level] &&
+            native_shoc_driver[level]->uses_shoc_tendencies()) {
+            native_shoc_driver[level]->add_fast_tend(S_rhs);
+            if (native_shoc_driver[level]->debug_summary_enabled()) {
+                const int klo = fine_geom.Domain().smallEnd(2);
+                auto const& rhs_arrs = S_rhs[IntVars::cons].const_arrays();
+                auto const& cons_arrs = S_data[IntVars::cons].const_arrays();
 
-                    GpuTuple<Real,Long> sums =
-                        ParReduce(TypeList<ReduceOpSum,ReduceOpSum>{},
-                                  TypeList<Real,Long>{},
-                                  S_rhs[IntVars::cons], IntVect(0),
-                        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
-                            -> GpuTuple<Real,Long>
-                        {
-                            if (k == klo) {
-                                const Real rho = cons_arrs[box_no](i,j,k,Rho_comp);
-                                const Real theta_rhs = rhs_arrs[box_no](i,j,k,RhoTheta_comp) /
-                                                       amrex::max(rho, 1.0e-12_rt);
-                                return {theta_rhs, 1L};
-                            } else {
-                                return {0.0_rt, 0L};
-                            }
-                        });
+                GpuTuple<Real,Long> sums =
+                    ParReduce(TypeList<ReduceOpSum,ReduceOpSum>{},
+                              TypeList<Real,Long>{},
+                              S_rhs[IntVars::cons], IntVect(0),
+                    [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k) noexcept
+                        -> GpuTuple<Real,Long>
+                    {
+                        if (k == klo) {
+                            const Real rho = cons_arrs[box_no](i,j,k,Rho_comp);
+                            const Real theta_rhs = rhs_arrs[box_no](i,j,k,RhoTheta_comp) /
+                                                   amrex::max(rho, 1.0e-12_rt);
+                            return {theta_rhs, 1L};
+                        } else {
+                            return {0.0_rt, 0L};
+                        }
+                    });
 
-                    const Real theta_rhs_sum = amrex::get<0>(sums);
-                    const Long npts = amrex::get<1>(sums);
-                    if (npts > 0) {
-                        const Real total_theta_rhs_avg =
-                            theta_rhs_sum / static_cast<Real>(npts);
-                        amrex::Print() << "SHOC bottom heat budget (with-fast):"
-                                       << " level=" << level
-                                       << " time=" << old_stage_time
-                                       << " slow_dt=" << slow_dt
-                                       << " rhs_theta_avg=" << total_theta_rhs_avg
-                                       << " shoc_fast_avg="
-                                       << (total_theta_rhs_avg - host_theta_rhs_avg)
-                                       << "\n";
-                    }
+                const Real theta_rhs_sum = amrex::get<0>(sums);
+                const Long npts = amrex::get<1>(sums);
+                if (npts > 0) {
+                    const Real total_theta_rhs_avg =
+                        theta_rhs_sum / static_cast<Real>(npts);
+                    amrex::Print() << "SHOC bottom heat budget (with-fast):"
+                                   << " level=" << level
+                                   << " time=" << old_stage_time
+                                   << " slow_dt=" << slow_dt
+                                   << " rhs_theta_avg=" << total_theta_rhs_avg
+                                   << " shoc_fast_avg="
+                                   << (total_theta_rhs_avg - host_theta_rhs_avg)
+                                   << "\n";
                 }
             }
         }
