@@ -128,7 +128,7 @@ component_max_abs (const MultiFab& mf, int comp)
 {
     const Real comp_min = mf.min(comp);
     const Real comp_max = mf.max(comp);
-    return amrex::max(std::abs(comp_min), std::abs(comp_max));
+    return amrex::max(amrex::Math::abs(comp_min), amrex::Math::abs(comp_max));
 }
 
 Real

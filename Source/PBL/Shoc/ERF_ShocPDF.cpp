@@ -29,7 +29,7 @@ namespace
     Real clamp01 (Real x) { return shoc_clamp(x, 0.0_rt, 1.0_rt); }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-    Real signed_denominator (Real value, Real eps = 1.0e-12)
+    Real signed_denominator (Real value, Real eps = 1.0e-12_rt)
     {
         if (amrex::Math::abs(value) >= eps) {
             return value;
@@ -126,15 +126,17 @@ namespace
                 }
             }
 
-            thl2_1 = amrex::min(100.0_rt, amrex::max(0.0_rt,
-                (3.0 * tmp1 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
-                 - (skew_thl - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                signed_denominator(3.0_rt * a * (tmp1 - tmp2)))) * thlsec;
+            thl2_1 = shoc_clamp(
+                (3.0_rt * tmp1 * (1.0_rt - a * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1)
+                 - (skew_thl - a * tmp2 * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1 * tmp1)) /
+                signed_denominator(3.0_rt * a * (tmp1 - tmp2)),
+                0.0_rt, 100.0_rt) * thlsec;
 
-            thl2_2 = amrex::min(100.0_rt, amrex::max(0.0_rt,
-                (-3.0 * tmp2 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
-                 + (skew_thl - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                signed_denominator(3.0_rt * (1.0_rt - a) * (tmp1 - tmp2)))) * thlsec;
+            thl2_2 = shoc_clamp(
+                (-3.0_rt * tmp2 * (1.0_rt - a * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1)
+                 + (skew_thl - a * tmp2 * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1 * tmp1)) /
+                signed_denominator(3.0_rt * (1.0_rt - a) * (tmp1 - tmp2)),
+                0.0_rt, 100.0_rt) * thlsec;
 
             thl1_1 = tmp2 * sqrtthl + thl_first;
             thl1_2 = tmp1 * sqrtthl + thl_first;
@@ -170,15 +172,17 @@ namespace
                 skew_qw = ((1.2 * skew_w) / 0.2) * (tsign - 0.2);
             }
 
-            qw2_1 = amrex::min(100.0_rt, amrex::max(0.0_rt,
-                (3.0 * tmp1 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
-                 - (skew_qw - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                signed_denominator(3.0_rt * a * (tmp1 - tmp2)))) * qwsec;
+            qw2_1 = shoc_clamp(
+                (3.0_rt * tmp1 * (1.0_rt - a * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1)
+                 - (skew_qw - a * tmp2 * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1 * tmp1)) /
+                signed_denominator(3.0_rt * a * (tmp1 - tmp2)),
+                0.0_rt, 100.0_rt) * qwsec;
 
-            qw2_2 = amrex::min(100.0_rt, amrex::max(0.0_rt,
-                (-3.0 * tmp2 * (1.0 - a * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1)
-                 + (skew_qw - a * tmp2 * tmp2 * tmp2 - (1.0 - a) * tmp1 * tmp1 * tmp1)) /
-                signed_denominator(3.0_rt * (1.0_rt - a) * (tmp1 - tmp2)))) * qwsec;
+            qw2_2 = shoc_clamp(
+                (-3.0_rt * tmp2 * (1.0_rt - a * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1)
+                 + (skew_qw - a * tmp2 * tmp2 * tmp2 - (1.0_rt - a) * tmp1 * tmp1 * tmp1)) /
+                signed_denominator(3.0_rt * (1.0_rt - a) * (tmp1 - tmp2)),
+                0.0_rt, 100.0_rt) * qwsec;
 
             qw1_1 = tmp2 * sqrtqt + qw_first;
             qw1_2 = tmp1 * sqrtqt + qw_first;

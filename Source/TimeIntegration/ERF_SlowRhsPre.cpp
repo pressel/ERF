@@ -222,56 +222,47 @@ void erf_slow_rhs_pre (int level, int finest_level,
         dflux_z = std::make_unique<MultiFab>(convert(ba,IntVect(0,0,1)), dm, nvars, 0);
 
 #ifdef ERF_USE_EAMXX_SHOC
-        if (solverChoice.turbChoice[level].uses_eamxx_shoc() && eamxx_shoc_lev) {
-            if (eamxx_shoc_lev->uses_shoc_tendencies()) {
-                // SHOC has already consumed the lower-boundary fluxes inside
-                // its own tendency solve, so prevent the host diffusion path
-                // from applying them a second time.
-                eamxx_shoc_lev->set_diff_stresses();
-            } else if (l_use_SurfLayer) {
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
-                SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
-                                                   Hfx1, Hfx2, Hfx3,
-                                                   Q1fx1, Q1fx2, Q1fx3,
-                                                   &z_phys_nd);
-            }
+        if (tc.uses_eamxx_shoc() && eamxx_shoc_lev) {
+            // EAMxx SHOC owns the overlapping lower-boundary fluxes here, so
+            // do not fall through to the generic SurfaceLayer path.
+            eamxx_shoc_lev->set_diff_stresses();
         }
 #endif
+        bool surface_layer_handled = false;
+#ifdef ERF_USE_EAMXX_SHOC
+        surface_layer_handled = tc.uses_eamxx_shoc() && eamxx_shoc_lev;
+#endif
 #ifdef ERF_USE_NATIVE_SHOC
-        if (solverChoice.turbChoice[level].uses_native_shoc() && native_shoc_lev) {
+        if (tc.uses_native_shoc() && native_shoc_lev) {
             if (native_shoc_lev->uses_shoc_tendencies()) {
                 // SHOC has already consumed the lower-boundary fluxes inside
                 // its own tendency solve, so prevent the host diffusion path
                 // from applying them a second time.
                 native_shoc_lev->set_diff_stresses();
-            } else if (l_use_SurfLayer) {
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
+                surface_layer_handled = true;
+            } else if (native_shoc_lev->uses_host_diffusion()) {
+                surface_layer_handled = false;
+            } else {
+                surface_layer_handled = true;
+            }
+        }
+#endif
+        if (!surface_layer_handled && l_use_SurfLayer) {
+            Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
+            if (!l_use_eb) {
                 SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
                                                    Hfx1, Hfx2, Hfx3,
                                                    Q1fx1, Q1fx2, Q1fx3,
                                                    &z_phys_nd);
-            }
-        } else if (l_use_SurfLayer) {
-#else
-        if (l_use_SurfLayer) {
-#endif
-            if (!l_use_eb) {
-                // Set surface shear stresses, update heat and moisture fluxes
-                // (fluxes will be later applied in the diffusion source update)
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
-                SurfLayer->impose_SurfaceLayer_bcs(level, mfs, Tau_lev,
-                                                Hfx1, Hfx2, Hfx3,
-                                                Q1fx1, Q1fx2, Q1fx3,
-                                                &z_phys_nd);
 
                 //if (l_vert_implicit_fac > 0 && solverChoice.implicit_momentum_diffusion) {
                 //    copy_surface_tau_for_implicit(Tau_lev, Tau_corr_lev);
                 //}
             } else {
-                Vector<const MultiFab*> mfs = {&S_data[IntVars::cons], &xvel, &yvel, &zvel};
                 SurfLayer->impose_SurfaceLayer_bcs_EB(level, mfs, Tau_EB,
-                                                   Hfx1, Hfx2, Hfx3_EB,
-                                                   Q1fx1, Q1fx2, Q1fx3);
+                                                      Hfx1, Hfx2, Hfx3_EB,
+                                                      Q1fx1, Q1fx2, Q1fx3,
+                                                      ebfact);
             }
         }
     } // l_use_diff

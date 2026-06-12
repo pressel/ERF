@@ -145,12 +145,12 @@ ShocImplicit::compute_tmpi (const ShocColumnData& col,
                             const Vector<Real>& rho_zi,
     Vector<Real>& tmpi)
 {
-    tmpi.assign(col.layout.nlev + 1, 0.0);
+    tmpi.assign(col.layout.nlev + 1, 0.0_rt);
     const auto zt = col.zt.const_array();
     const auto zi = col.zi.const_array();
     const auto layout = col.layout;
     for (int k = 0; k <= col.layout.nlev; ++k) {
-        tmpi[k] = dt * CONST_GRAV * std::max(rho_zi[k], 1.0e-12) /
+        tmpi[k] = dt * CONST_GRAV * amrex::max(rho_zi[k], 1.0e-12_rt) /
                   interface_spacing(zt, zi, layout, ic, k);
     }
 }
@@ -164,7 +164,7 @@ ShocImplicit::compute_dp_inverse (const ShocColumnData& col,
     const auto rho = col.rho.const_array();
     const auto dz = col.dz.const_array();
     for (int k = 0; k < col.layout.nlev; ++k) {
-        rdp_zt[k] = 1.0 / std::max(CONST_GRAV * rho(ic,k,0) * dz(ic,k,0), 1.0e-12);
+        rdp_zt[k] = 1.0_rt / amrex::max(CONST_GRAV * rho(ic,k,0) * dz(ic,k,0), 1.0e-12_rt);
     }
 }
 
@@ -175,7 +175,7 @@ ShocImplicit::compute_temperature (Real thetal,
                                    Real exner)
 {
     return amrex::max(shoc_min_temp(),
-                      thetal * amrex::max(exner, 1.0e-12) + (L_v / Cp_d) * ql);
+                      thetal * amrex::max(exner, 1.0e-12_rt) + (L_v / Cp_d) * ql);
 }
 
 AMREX_GPU_HOST_DEVICE

@@ -41,11 +41,14 @@ target_link_libraries(erf_shoc_unit_tests PRIVATE
   erf_srclib
 )
 
-include(GoogleTest)
-gtest_discover_tests(erf_shoc_unit_tests
-  DISCOVERY_MODE POST_BUILD
-  DISCOVERY_TIMEOUT 30
+erf_finalize_target(erf_shoc_unit_tests)
+
+gtest_add_tests(TARGET erf_shoc_unit_tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  PROPERTIES
-    LABELS "unit;shoc"
+  TEST_LIST erf_shoc_unit_tests_tests
 )
+
+if(erf_shoc_unit_tests_tests)
+  set_tests_properties(${erf_shoc_unit_tests_tests}
+    PROPERTIES LABELS "unit;shoc")
+endif()
