@@ -122,7 +122,7 @@ If building with SHOC or P3, run the setup scripts:
    source /path/to/ERF/Build/GNU_Ekat/eamxx_clone.sh
    source /path/to/ERF/Build/GNU_Ekat/ekat_build_commands.sh
 
-Then set ``USE_SHOC=TRUE`` or ``USE_P3=TRUE`` in your GNUmakefile (step 4).
+Then set ``USE_NATIVE_SHOC=TRUE`` or ``USE_EAMXX_SHOC=TRUE`` or ``USE_P3=TRUE`` in your GNUmakefile (step 4).
 
 **3. Navigate to GNU Make Build Directory**
 
@@ -194,8 +194,12 @@ Set build variables in the ``GNUmakefile``:
         - Enables RRTMGP radiation model (sets ``USE_KOKKOS=TRUE``, ``USE_NETCDF=TRUE``)
         - FALSE
         - TRUE/FALSE
-      * - ``USE_SHOC``
-        - Enables SHOC turbulence model (sets ``USE_KOKKOS=TRUE``)
+      * - ``USE_NATIVE_SHOC``
+        - Enables native SHOC turbulence model (default ON; in-tree, no EAMxx dependency)
+        - TRUE
+        - TRUE/FALSE
+      * - ``USE_EAMXX_SHOC``
+        - Enables optional EAMxx SHOC turbulence model (sets ``USE_KOKKOS=TRUE``)
         - FALSE
         - TRUE/FALSE
       * - ``USE_P3``
@@ -384,7 +388,7 @@ If building with SHOC or P3:
    export ERF_DIR=/path/to/ERF
    source /path/to/ERF/Build/GNU_Ekat/eamxx_clone.sh
 
-Then configure with ``-DERF_ENABLE_SHOC=TRUE`` and/or ``-DERF_ENABLE_P3=TRUE`` (step 4).
+Then configure with ``-DERF_ENABLE_NATIVE_SHOC=ON`` and/or ``-DERF_ENABLE_EAMXX_SHOC=ON`` and/or ``-DERF_ENABLE_P3=ON`` (step 4).
 
 **3. Choose Build Workflow**
 
@@ -568,8 +572,12 @@ CMake can also generate makefiles for the Ninja build system for faster compilat
      - Enables RRTMGP radiation model (requires ``ERF_ENABLE_NETCDF=ON``, ``ERF_ENABLE_MPI=ON``)
      - OFF
      - ON/OFF
-   * - ``ERF_ENABLE_SHOC``
-     - Enables SHOC turbulence model (requires ``ERF_ENABLE_MPI=ON``)
+   * - ``ERF_ENABLE_NATIVE_SHOC``
+     - Enables native SHOC turbulence model (default ON; no EAMxx dependency)
+     - ON
+     - ON/OFF
+   * - ``ERF_ENABLE_EAMXX_SHOC``
+     - Enables optional EAMxx SHOC turbulence model (requires ``ERF_ENABLE_MPI=ON`` and EKAT/Kokkos/EAMxx dependencies)
      - OFF
      - ON/OFF
    * - ``ERF_ENABLE_P3``
@@ -612,7 +620,12 @@ CMake can also generate makefiles for the Ninja build system for faster compilat
      - Requires ``ERF_ENABLE_NETCDF=ON`` and ``ERF_ENABLE_MPI=ON``
      - Automatically enables ``ERF_ENABLE_EKAT=ON`` (provides Kokkos)
 
-   * ``ERF_ENABLE_SHOC`` - SHOC turbulence and cloud macrophysics
+   * ``ERF_ENABLE_NATIVE_SHOC`` - Native SHOC turbulence and cloud macrophysics
+
+     - No EAMxx dependency
+     - Default ON
+
+   * ``ERF_ENABLE_EAMXX_SHOC`` - Optional EAMxx SHOC turbulence and cloud macrophysics
 
      - Requires ``ERF_ENABLE_MPI=ON``
      - Automatically enables ``ERF_ENABLE_EKAT=ON`` (provides Kokkos)

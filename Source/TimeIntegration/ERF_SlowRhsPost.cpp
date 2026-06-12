@@ -93,8 +93,11 @@ void erf_slow_rhs_post (int level, int finest_level,
                         Vector<Vector<FArrayBox>>& bdy_data_ylo,
                         Vector<Vector<FArrayBox>>& bdy_data_yhi,
 #endif
-#ifdef ERF_USE_SHOC
-                        std::unique_ptr<SHOCInterface>& shoc_lev,
+#ifdef ERF_USE_EAMXX_SHOC
+                        SHOCInterface* eamxx_shoc_lev,
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+                        ShocDriver* native_shoc_lev,
 #endif
                         YAFluxRegister* fr_as_crse,
                         YAFluxRegister* fr_as_fine,
@@ -492,9 +495,14 @@ void erf_slow_rhs_post (int level, int finest_level,
         }
 #endif
 
-#ifdef ERF_USE_SHOC
-        if (solverChoice.use_shoc) {
-            shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
+#ifdef ERF_USE_EAMXX_SHOC
+        if (tc.uses_eamxx_shoc() && eamxx_shoc_lev && eamxx_shoc_lev->uses_shoc_tendencies()) {
+            eamxx_shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
+        }
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+        if (tc.uses_native_shoc() && native_shoc_lev && native_shoc_lev->uses_shoc_tendencies()) {
+            native_shoc_lev->add_slow_tend(mfi,tbx,cell_rhs);
         }
 #endif
 

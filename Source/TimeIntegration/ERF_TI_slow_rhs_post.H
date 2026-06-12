@@ -63,8 +63,11 @@
                           real_width,
                           bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi,
 #endif
-#ifdef ERF_USE_SHOC
-                          shoc_interface[level],
+#ifdef ERF_USE_EAMXX_SHOC
+                          eamxx_shoc_interface[level].get(),
+#endif
+#ifdef ERF_USE_NATIVE_SHOC
+                          native_shoc_driver[level].get(),
 #endif
                           fr_as_crse, fr_as_fine,
                           m_r2d);

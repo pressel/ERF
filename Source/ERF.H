@@ -65,8 +65,12 @@
 
 #include <ERF_RadiationModels.H>
 
-#ifdef ERF_USE_SHOC
+#ifdef ERF_USE_EAMXX_SHOC
 #include "ERF_ShocInterface.H"
+#endif
+
+#ifdef ERF_USE_NATIVE_SHOC
+#include "ERF_ShocDriver.H"
 #endif
 
 #ifdef ERF_USE_P3
@@ -402,7 +406,7 @@ public:
                             amrex::MultiFab& cons_in,
                             const amrex::Real& dt_advance);
 
-#ifdef ERF_USE_SHOC
+#ifdef ERF_USE_EAMXX_SHOC
     void compute_shoc_tendencies (int lev,
                                   amrex::MultiFab* cons,
                                   amrex::MultiFab* xvel,
@@ -416,6 +420,22 @@ public:
                                   amrex::MultiFab* eddyDiffs,
                                   amrex::MultiFab* z_phys_nd,
                                   const amrex::Real& dt_advance);
+#endif
+
+#ifdef ERF_USE_NATIVE_SHOC
+    void compute_native_shoc_tendencies (int lev,
+                                         amrex::MultiFab* cons,
+                                         amrex::MultiFab* xvel,
+                                         amrex::MultiFab* yvel,
+                                         amrex::MultiFab* zvel,
+                                         amrex::Real* w_subsid,
+                                         amrex::MultiFab* tau13,
+                                         amrex::MultiFab* tau23,
+                                         amrex::MultiFab* hfx3,
+                                         amrex::MultiFab* qfx3,
+                                         amrex::MultiFab* eddyDiffs,
+                                         amrex::MultiFab* z_phys_nd,
+                                         const amrex::Real& dt_advance);
 #endif
 
 #ifdef ERF_USE_P3
@@ -914,8 +934,12 @@ private:
     amrex::Vector<std::unique_ptr<IRadiation>> rad; // Radiation model at each level
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> qheating_rates;  // radiation heating rate source terms (SW, LW) (DYCORE)
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> rad_fluxes;      // radiation fluxes (SW up/dn, LW up/dn) (OUTPUT ONLY)
-#ifdef ERF_USE_SHOC
-    amrex::Vector<std::unique_ptr<SHOCInterface>> shoc_interface; // SHOC model at each level
+#ifdef ERF_USE_EAMXX_SHOC
+    amrex::Vector<std::unique_ptr<SHOCInterface>> eamxx_shoc_interface; // EAMxx SHOC model at each level
+#endif
+
+#ifdef ERF_USE_NATIVE_SHOC
+    amrex::Vector<std::unique_ptr<ShocDriver>> native_shoc_driver; // Native SHOC model at each level
 #endif
 
 #ifdef ERF_USE_P3
