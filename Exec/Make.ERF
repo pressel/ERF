@@ -2,7 +2,6 @@ AMREX_HOME ?= $(ERF_HOME)/Submodules/AMReX
 EKAT_HOME  ?= $(ERF_HOME)/Submodules/ekat/build/install
 EAMXX_HOME ?= $(ERF_HOME)/external/E3SM/components/eamxx/src
 
-USE_NATIVE_SHOC ?= TRUE
 USE_EAMXX_SHOC  ?= $(USE_SHOC)
 
 ifeq ($(USE_SHOC), TRUE)
@@ -324,15 +323,8 @@ ifeq ($(USE_RRTMGP), TRUE)
   endif
 endif
 
-# If using native SHOC, compile the in-tree source and headers
-ifeq ($(USE_NATIVE_SHOC), TRUE)
-    DEFINES += -DERF_USE_NATIVE_SHOC
-    DEFINES += -DERF_HAS_SHOC_FAMILY
-
-    ERF_NATIVE_SHOC_DIR = $(ERF_SOURCE_DIR)/PBL/Shoc
-    VPATH_LOCATIONS   += $(ERF_NATIVE_SHOC_DIR)
-    INCLUDE_LOCATIONS += $(ERF_NATIVE_SHOC_DIR)
-endif
+DEFINES += -DERF_USE_NATIVE_SHOC
+DEFINES += -DERF_HAS_SHOC_FAMILY
 
 # If using EAMxx SHOC, compile relevant source and headers
 ifeq ($(USE_EAMXX_SHOC), TRUE)
@@ -341,7 +333,6 @@ ifeq ($(USE_EAMXX_SHOC), TRUE)
 
     DEFINES += -DERF_USE_KOKKOS
     DEFINES += -DERF_USE_EAMXX_SHOC
-    DEFINES += -DERF_HAS_SHOC_FAMILY
     DEFINES += -DSHOC_ENABLE_KOKKOS
     DEFINES += -DEKAT_ENABLE_MPI
     DEFINES += -DSCREAM_SHOC_SMALL_KERNELS
