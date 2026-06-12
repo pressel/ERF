@@ -41,8 +41,6 @@ target_link_libraries(erf_shoc_unit_tests PRIVATE
   erf_srclib
 )
 
-erf_finalize_target(erf_shoc_unit_tests)
-
 gtest_add_tests(TARGET erf_shoc_unit_tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   TEST_LIST erf_shoc_unit_tests_tests
