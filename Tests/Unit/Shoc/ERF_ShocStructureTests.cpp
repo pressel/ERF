@@ -114,7 +114,7 @@ TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
     const amrex::Real th_sfc = 298.0 + (L_v / Cp_d) * cldliq;
     const amrex::Real thv_sfc = th_sfc * (1.0 + 0.61 * 0.010 - cldliq);
     const amrex::Real ustar_raw = std::sqrt(std::sqrt(0.04 * 0.04 + 0.03 * 0.03));
-    const amrex::Real ustar = std::max<amrex::Real>(0.01, ustar_raw);
+    const amrex::Real ustar = amrex::max(amrex::Real(0.01), ustar_raw);
     const amrex::Real kbfs = 0.02 + 0.61 * th_sfc * 2.0e-4;
     const amrex::Real expected_obk = -thv_sfc * std::pow(ustar, 3) /
                                      (CONST_GRAV * KAPPA * (kbfs + 1.0e-10));
