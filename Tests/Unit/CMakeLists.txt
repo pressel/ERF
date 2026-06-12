@@ -95,9 +95,7 @@ gtest_discover_tests(${erf_exe_name}
     LABELS "unit"
 )
 
-if(ERF_ENABLE_NATIVE_SHOC)
-  add_subdirectory(Shoc)
-endif()
+add_subdirectory(Shoc)
 
 if(ERF_ENABLE_MPI)
   if(NOT TARGET MPI::MPI_CXX)
