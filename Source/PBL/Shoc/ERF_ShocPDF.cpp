@@ -78,7 +78,7 @@ namespace
         w1_2 = w_first;
         w2_1 = 0.0;
         w2_2 = 0.0;
-        a = 0.5;
+        a = 0.5_rt;
 
         if (w_sec > shoc_w_tol_sqd()) {
             const Real w_sec_cu = w_sec * w_sec * w_sec;
@@ -117,12 +117,12 @@ namespace
             const Real tmp1 = -corr / w1_1;
             const Real tmp2 = -corr / w1_2;
             const Real tsign = amrex::Math::abs(tmp1 - tmp2);
-            Real skew_thl = 0.0;
+            Real skew_thl = 0.0_rt;
             if (shoc_do_thetal_skew()) {
-                if (tsign > 0.4) {
-                    skew_thl = 1.2 * skew_w;
-                } else if (tsign > 0.2) {
-                    skew_thl = ((1.2 * skew_w) / 0.2) * (tsign - 0.2);
+                if (tsign > 0.4_rt) {
+                    skew_thl = 1.2_rt * skew_w;
+                } else if (tsign > 0.2_rt) {
+                    skew_thl = ((1.2_rt * skew_w) / 0.2_rt) * (tsign - 0.2_rt);
                 }
             }
 
@@ -165,11 +165,11 @@ namespace
             const Real tmp1 = -corr / w1_1;
             const Real tmp2 = -corr / w1_2;
             const Real tsign = amrex::Math::abs(tmp1 - tmp2);
-            Real skew_qw = 0.0;
-            if (tsign > 0.4) {
-                skew_qw = 1.2 * skew_w;
-            } else if (tsign > 0.2) {
-                skew_qw = ((1.2 * skew_w) / 0.2) * (tsign - 0.2);
+            Real skew_qw = 0.0_rt;
+            if (tsign > 0.4_rt) {
+                skew_qw = 1.2_rt * skew_w;
+            } else if (tsign > 0.2_rt) {
+                skew_qw = ((1.2_rt * skew_w) / 0.2_rt) * (tsign - 0.2_rt);
             }
 
             qw2_1 = shoc_clamp(
@@ -219,7 +219,7 @@ namespace
     void compute_qs_beta (Real temp, Real pval, Real& qs, Real& beta)
     {
         qs = 0.0_rt;
-        erf_qsatw(temp, 0.01 * pval, qs);
+        erf_qsatw(temp, 0.01_rt * pval, qs);
         qs = amrex::max(0.0_rt, qs);
         beta = (R_d / R_v) * (L_v / (R_d * temp)) * (L_v / (Cp_d * temp));
     }
@@ -234,11 +234,12 @@ namespace
         const Real pressure_term = std::exp((R_d / Cp_d) * std::log(pressure_ratio));
         const Real cthl = ((1.0_rt + beta * qw1) / (beta_qs * beta_qs))
                         * (Cp_d / L_v) * beta * qs * pressure_term;
-        const Real cqt = 1.0 / (1.0 + beta * qs);
-        std_s = std::sqrt(amrex::max(0.0_rt, cthl * cthl * thl2
-                                        + cqt * cqt * qw2
-                                        - 2.0 * cthl * sqrtthl2 * cqt * sqrtqw2 * r_qwthl));
-        s = qw1 - qs * ((1.0 + beta * qw1) / (1.0 + beta * qs));
+        const Real cqt = 1.0_rt / (1.0_rt + beta * qs);
+        const Real variance = cthl * cthl * thl2
+                            + cqt * cqt * qw2
+                            - 2.0_rt * cthl * sqrtthl2 * cqt * sqrtqw2 * r_qwthl;
+        std_s = std::sqrt(amrex::max(0.0_rt, variance));
+        s = qw1 - qs * ((1.0_rt + beta * qw1) / (1.0_rt + beta * qs));
 
         cfrac = 0.0_rt;
         qn = 0.0_rt;
