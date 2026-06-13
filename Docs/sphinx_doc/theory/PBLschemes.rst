@@ -233,18 +233,34 @@ ERF has two SHOC paths:
 Use ``NATIVE_SHOC`` for the native ERF implementation. Use ``EAMXX_SHOC`` only
 when you build and run the optional EAMxx path.
 
-Surface-layer and microphysics coupling
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Surface-flux and microphysics coupling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-SHOC uses surface fluxes from ERF's Monin-Obukhov similarity theory (MOST)
-surface-layer boundary condition. Set the lower boundary to ``surface_layer``
-for SHOC runs.
+SHOC needs lower-boundary heat, moisture, and momentum fluxes. It does not
+compute those exchanges directly from a land surface model. Instead, ERF computes
+the lower-boundary fluxes before SHOC runs and passes the resulting flux arrays
+to SHOC.
 
-SHOC-family PBL schemes suppress microphysics condensation adjustment where
-SHOC owns subgrid non-precipitating cloud partitioning. Microphysics still
-handles precipitating processes that lie outside SHOC's cloud macrophysics
-role. Choose a moisture model that matches the case. Do not assume SHOC
-replaces all microphysics.
+Those fluxes come through ERF's surface-layer infrastructure. They may come from
+Monin-Obukhov similarity theory (MOST), prescribed surface-layer inputs, or an
+active land or ocean surface model when that model provides fluxes. Native SHOC
+then consumes the ERF flux arrays. Internally it converts ERF's host
+density-weighted fluxes to kinematic surface fluxes.
+
+Set the lower boundary to ``surface_layer`` for SHOC runs:
+
+.. code-block:: text
+
+   zlo.type = "surface_layer"
+
+SHOC diagnoses subgrid non-precipitating cloud partitioning with its assumed
+PDF. This includes cloud fraction and non-precipitating liquid water. To avoid
+double counting, ERF disables the saturation-adjustment or condensation step in
+the microphysics package when a SHOC-family PBL scheme is active.
+
+This does not disable microphysics. Microphysics still handles precipitating
+processes outside SHOC's cloud macrophysics role. Choose a moisture model that
+matches the case.
 
 Transport modes
 ~~~~~~~~~~~~~~~
