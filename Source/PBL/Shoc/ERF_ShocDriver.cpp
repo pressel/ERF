@@ -34,7 +34,7 @@ namespace
         // spans a complete vertical column.
         if (!shoc_boxarray_spans_full_height(ba, domain)) {
             amrex::Abort(
-                "Native SHOC currently requires each BoxArray tile to span the full vertical domain; z-split boxes are not supported.");
+                "Native SHOC requires each BoxArray box on a SHOC-active level to span the full vertical domain. Z-split boxes are not supported. Increase the vertical max_grid_size/blocking size, or use full-column refined grids.");
         }
     }
 

@@ -230,6 +230,15 @@ ERF has two SHOC paths:
    * - ``SHOC``
      - Deprecated alias for ``EAMXX_SHOC``.
 
+Native SHOC is column based. Like ERF's other column physics, it requires each
+AMReX box on a SHOC-active level to span the full vertical domain. Do not use a
+grid decomposition that splits boxes in the vertical direction. If an input file
+sets vector-valued grid sizing controls, choose a vertical size at least as large
+as the level's vertical cell count. With AMR, SHOC-active refined grids must also
+cover full vertical columns.
+
+The implementation is AMReX-native and lives in ``Source/PBL/Shoc``.
+
 Use ``NATIVE_SHOC`` for the native ERF implementation. Use ``EAMXX_SHOC`` only
 when you build and run the optional EAMxx path.
 
@@ -252,11 +261,6 @@ Set the lower boundary to ``surface_layer`` for SHOC runs:
 .. code-block:: text
 
    zlo.type = "surface_layer"
-
-Native SHOC is column based. Each AMReX box on a SHOC-active level must span
-the full vertical domain. Do not split SHOC-active grids in the vertical
-direction. With AMR, SHOC-active refined grids must also cover full vertical
-columns.
 
 SHOC diagnoses subgrid non-precipitating cloud partitioning with its assumed
 PDF. This includes cloud fraction and non-precipitating liquid water. To avoid

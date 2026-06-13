@@ -166,9 +166,12 @@ ERF_ShocDriver.H
 
 ## Developer notes
 
-Native SHOC is column based. It expects boxes that span the full vertical column.
-Do not split SHOC-active grids in the vertical direction. Native SHOC checks
-this at startup and aborts if any box does not span the full vertical domain.
+Like ERF's other column physics, it requires each AMReX box on a SHOC-active
+level to span the full vertical domain. Do not use a grid decomposition that
+splits boxes in the vertical direction. If an input file sets vector-valued
+grid sizing controls, choose a vertical size at least as large as the level's
+vertical cell count. With AMR, SHOC-active refined grids must also cover full
+vertical columns.
 
 Keep compile-time availability separate from runtime behavior. Native SHOC may be
 built, but it must not change a non-SHOC simulation unless the runtime PBL type
