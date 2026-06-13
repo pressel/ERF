@@ -71,7 +71,7 @@ public:
     Define (SolverChoice& sc) override
     {
         m_rdOcp    = sc.rdOcp;
-        m_do_cond  = (!sc.pbl_suppresses_microphysics_condensation());
+        m_do_cond  = (!sc.uses_shoc_family());
     }
 
     // init

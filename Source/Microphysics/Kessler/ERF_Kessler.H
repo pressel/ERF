@@ -57,7 +57,7 @@ public:
         // Use one latent-over-cp factor for both the saturation solve and theta
         // update. L_v comes from ERF_Constants.H; c_p comes from SolverChoice.
         m_fac_cond = L_v / sc.c_p;
-        m_do_cond  = (!sc.pbl_suppresses_microphysics_condensation());
+        m_do_cond  = (!sc.uses_shoc_family());
     }
 
     // init

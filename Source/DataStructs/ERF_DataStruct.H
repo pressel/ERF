@@ -1,7 +1,6 @@
 #ifndef ERF_DATA_STRUCT_H_
 #define ERF_DATA_STRUCT_H_
 
-#include <algorithm>
 #include <string>
 #include <iostream>
 
@@ -1360,11 +1359,7 @@ struct SolverChoice {
 
     bool pbl_suppresses_microphysics_condensation () const noexcept
     {
-        return std::any_of(
-            turbChoice.begin(), turbChoice.end(),
-            [] (const TurbChoice& tc) {
-                return tc.pbl_suppresses_microphysics_condensation();
-            });
+        return uses_shoc_family();
     }
 
     bool any_perturbation () const
