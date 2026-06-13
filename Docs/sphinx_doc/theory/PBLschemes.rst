@@ -20,7 +20,8 @@ for any quantity :math:`\phi`). PBL schemes may be used in
 conjunction with an LES model that specifies horizontal turbulent transport, in
 which case the vertical component of the LES model is ignored.
 
-Right now, ERF supports several PBL schemes: MYNN Level 2.5, MYJ, SHOC, MRF, and YSU.
+Right now, ERF supports several PBL schemes: MYNN Level 2.5, MYJ, native SHOC,
+optional EAMxx SHOC, MRF, and YSU.
 
 The MYNN Level 2.5 model is the Mellor-Yamada-Nakanishi-Niino Level 2.5 model, largely matching the original forumulation proposed by Nakanishi and Niino in a series of papers from 2001 to 2009.
 
@@ -183,31 +184,210 @@ References
 SHOC PBL Model
 --------------
 
-.. warning::
+The Simplified Higher-Order Closure (SHOC) represents unresolved turbulence,
+shallow convection, and subgrid-scale cloud macrophysics. It uses prognostic
+turbulent kinetic energy (TKE), diagnostic higher-order moments, and an
+assumed probability density function (PDF) for thermodynamic variability. The
+PDF lets the scheme represent partial cloudiness within a grid cell.
 
-   Implementation is in progress with basic support.
+SHOC follows the approach described by `Bogenschutz and Krueger (2013)
+<https://doi.org/10.1002/jame.20018>`_. The ERF-native implementation is based
+on the E3SM/EAMxx SHOC algorithms and source structure. It is not a bit-for-bit
+port of EAMxx SHOC. It is adapted to ERF data structures, AMReX loops, ERF
+surface-flux coupling, diagnostics, and build systems.
 
-The Simplified Higher-Order Closure (SHOC) is a unified parameterization that represents
-both turbulent mixing and shallow convection in a single framework. Originally developed for
-the Community Atmosphere Model (CAM) and now used in E3SM, SHOC uses prognostic TKE with
-diagnostic second and third-order moments and assumed probability density functions (PDFs)
-to represent subgrid-scale variability.
+Selecting SHOC in a simulation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-SHOC computes vertical turbulent fluxes for momentum, heat, and moisture, along with
-subgrid-scale cloud fraction and liquid water content. The assumed PDFs allow the scheme
-to predict partial cloudiness and transitions between clear and cloudy conditions. The
-implementation uses higher-order closure equations to diagnose eddy diffusivities and
-turbulent fluxes, with special treatment for cloud-top entrainment.
+Native SHOC is built in tree. It needs no EAMxx, EKAT, or Kokkos setup. Select
+it at runtime with:
 
-References
-~~~~~~~~~~
+.. code-block:: text
 
-* Golaz, J.-C., et al. (2002): "A PDF-based model for boundary layer clouds. Part I:
-  Method and model description", *Journal of the Atmospheric Sciences*, 59(24), 3540-3551.
-* Bogenschutz, P. A., & Krueger, S. K. (2013): "A simplified PDF parameterization of
-  subgrid-scale clouds and turbulence for cloud-resolving models",
-  *Journal of Advances in Modeling Earth Systems*, 5(2), 195-211.
-* E3SM SHOC Documentation: https://github.com/E3SM-Project/E3SM/tree/master/components/eamxx/src/physics/shoc
+   zlo.type = "surface_layer"
+   erf.pbl_type = NATIVE_SHOC
+
+The ``surface_layer`` lower boundary condition supplies the surface fluxes used
+by SHOC. SHOC-family PBL schemes require this lower boundary type. ERF reads
+``erf.pbl_type`` with the usual one-or-per-level rule. A single value applies
+to every level. A list can specify one value per level.
+
+Native SHOC and EAMxx SHOC
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ERF has two SHOC paths:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Runtime value
+     - Meaning
+   * - ``NATIVE_SHOC``
+     - Selects the ERF-native implementation in ``Source/PBL/Shoc``.
+   * - ``EAMXX_SHOC``
+     - Selects the optional EAMxx interface in ``Source/PhysicsInterfaces/Shoc``.
+   * - ``SHOC``
+     - Deprecated alias for ``EAMXX_SHOC``.
+
+Use ``NATIVE_SHOC`` for the native ERF implementation. Use ``EAMXX_SHOC`` only
+when you build and run the optional EAMxx path.
+
+Surface-layer and microphysics coupling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+SHOC uses surface fluxes from ERF's Monin-Obukhov similarity theory (MOST)
+surface-layer boundary condition. Set the lower boundary to ``surface_layer``
+for SHOC runs.
+
+SHOC-family PBL schemes suppress microphysics condensation adjustment where
+SHOC owns subgrid non-precipitating cloud partitioning. Microphysics still
+handles precipitating processes that lie outside SHOC's cloud macrophysics
+role. Choose a moisture model that matches the case. Do not assume SHOC
+replaces all microphysics.
+
+Transport modes
+~~~~~~~~~~~~~~~
+
+Native SHOC has two transport modes:
+
+.. code-block:: text
+
+   erf.shoc.transport_mode = tendencies
+
+or:
+
+.. code-block:: text
+
+   erf.shoc.transport_mode = host_diffusion
+
+``tendencies`` is the default. In this mode, SHOC computes tendencies and ERF
+applies them to momentum, thermodynamic, moisture, and TKE fields.
+
+``host_diffusion`` is an advanced mode. In this mode, SHOC exports eddy
+diffusivities to ERF's host diffusion path. SHOC does not add overlapping
+explicit tendencies.
+
+Runtime options
+~~~~~~~~~~~~~~~
+
+Native SHOC reads options from the ``erf.shoc`` namespace. The defaults are the
+recommended starting point. Most options tune the closure or enable diagnostics.
+
+.. list-table:: Native SHOC runtime options
+   :header-rows: 1
+   :widths: 32 16 22 30
+
+   * - Option
+     - Default
+     - Values
+     - Notes
+   * - ``erf.shoc.transport_mode``
+     - ``tendencies``
+     - ``tendencies``, ``host_diffusion``
+     - Selects internal SHOC tendencies or ERF host diffusion.
+   * - ``erf.shoc.lambda_low``
+     - ``0.001``
+     - Real > 0
+     - Lower bound for the SHOC length-scale formula.
+   * - ``erf.shoc.lambda_high``
+     - ``0.04``
+     - Real >= ``lambda_low``
+     - Upper bound for the SHOC length-scale formula.
+   * - ``erf.shoc.lambda_slope``
+     - ``2.65``
+     - Real
+     - Slope used by the SHOC length-scale formula.
+   * - ``erf.shoc.lambda_thresh``
+     - ``0.02``
+     - Real
+     - Threshold used by the SHOC length-scale formula.
+   * - ``erf.shoc.thl2tune``
+     - ``1.0``
+     - Real
+     - Tuning factor for liquid-water potential-temperature variance.
+   * - ``erf.shoc.qw2tune``
+     - ``1.0``
+     - Real
+     - Tuning factor for total-water variance.
+   * - ``erf.shoc.qwthl2tune``
+     - ``1.0``
+     - Real
+     - Tuning factor for total-water and liquid-water potential-temperature covariance.
+   * - ``erf.shoc.w2tune``
+     - ``1.0``
+     - Real
+     - Tuning factor for vertical-velocity variance.
+   * - ``erf.shoc.length_fac``
+     - ``0.5``
+     - Real > 0
+     - Factor used in the SHOC turbulent length scale.
+   * - ``erf.shoc.c_diag_3rd_mom``
+     - ``7.0``
+     - Real
+     - Coefficient used by the diagnostic third-moment closure.
+   * - ``erf.shoc.coeff_kh``
+     - ``0.1``
+     - Real >= 0
+     - Scalar diffusivity coefficient.
+   * - ``erf.shoc.coeff_km``
+     - ``0.1``
+     - Real >= 0
+     - Momentum diffusivity coefficient.
+   * - ``erf.shoc.top_taper_depth``
+     - ``0.0``
+     - Real >= 0
+     - Depth of the upper taper for SHOC moments.
+   * - ``erf.shoc.top_taper_min_factor``
+     - ``0.0``
+     - Real in [0, 1]
+     - Minimum factor applied by the upper taper.
+   * - ``erf.shoc.shoc_1p5tke``
+     - ``false``
+     - Boolean
+     - Switches to the 1.5-TKE moment formulation.
+   * - ``erf.shoc.extra_shoc_diags``
+     - ``false``
+     - Boolean
+     - Writes extra cloud and flux diagnostics.
+   * - ``erf.shoc.apply_tms``
+     - ``false``
+     - Boolean
+     - Applies turbulent mountain stress.
+   * - ``erf.shoc.check_flux_state``
+     - ``false``
+     - Boolean
+     - Checks flux-state consistency in debug runs.
+   * - ``erf.shoc.column_conservation_check``
+     - ``false``
+     - Boolean
+     - Checks column-integrated conservation in debug runs.
+   * - ``erf.shoc.debug_summary``
+     - ``false``
+     - Boolean
+     - Prints a short runtime summary for each advance call.
+   * - ``erf.shoc.allow_tendency_microphysics_overlap``
+     - ``false``
+     - Boolean
+     - Allows host-applied tendencies to overlap microphysics coupling.
+   * - ``erf.shoc.signed_tke_production``
+     - ``false``
+     - Boolean
+     - Keeps signed buoyancy production in the TKE budget.
+
+Diagnostics
+~~~~~~~~~~~
+
+Native SHOC can write plotfile and 1D profile diagnostics when it runs in
+``tendencies`` mode. Common native SHOC fields include ``pblh``,
+``shoc_cldfrac``, ``shoc_ql``, ``shoc_ql2``, ``shoc_cond``, ``shoc_evap``,
+``wqls_sec``, ``wthv_sec``, ``w_sec``, ``thl_sec``, ``qw_sec``, ``qwthl_sec``,
+``wthl_sec``, ``wqw_sec``, ``w3``, ``brunt``, ``isotropy``, ``shear_prod``,
+``buoy_prod``, and ``diss_tke``.
+
+These diagnostics describe the diagnosed cloud field, second and third moments,
+and TKE budget terms. Enable ``erf.shoc.extra_shoc_diags`` for the extra cloud
+and flux fields.
 
 .. _MRFPBL:
 

@@ -34,8 +34,8 @@ ERF integrates external libraries for core functionality and advanced physics:
      - ``-DERF_ENABLE_HDF5=ON``
    * - **Native SHOC**
      - Turbulence and cloud macrophysics (:ref:`SHOC`)
-     - Built in tree
-     - Selected at runtime with ``erf.pbl_type = NATIVE_SHOC``
+     - Built in tree and on by default
+     - ``erf.pbl_type = NATIVE_SHOC``
    * - **EAMxx SHOC**
      - Optional EAMxx SHOC turbulence and cloud macrophysics
      - Optional
@@ -295,36 +295,40 @@ ERF integrates specialized libraries for advanced atmospheric physics modeling.
 SHOC (Turbulence)
 ~~~~~~~~~~~~~~~~~
 
-SHOC (Simplified Higher-Order Closure) provides turbulence and cloud macrophysics from the E3SM project. For theory and implementation details, see :ref:`SHOC` in the PBL schemes documentation.
+SHOC (Simplified Higher-Order Closure) provides turbulence and cloud
+macrophysics. ERF has two SHOC paths. Native SHOC ships in tree and is built by
+default. EAMxx SHOC is optional and uses the E3SM source tree.
 
-**Prerequisites:**
+For theory and runtime details, see :ref:`SHOC` in the PBL schemes
+documentation.
+
+Native SHOC
+^^^^^^^^^^^
+
+Native SHOC needs no EAMxx setup. It is selected at runtime with
+``erf.pbl_type = NATIVE_SHOC``.
+
+EAMxx SHOC
+^^^^^^^^^^
+
+EAMxx SHOC needs the E3SM setup scripts.
 
 .. code-block:: bash
 
-   # Initialize E3SM submodules
    export ERF_DIR=/path/to/ERF
    source $ERF_DIR/Build/GNU_Ekat/eamxx_clone.sh
 
-**Configuration:**
+Build with ``-DERF_ENABLE_EAMXX_SHOC=ON`` for CMake or ``USE_EAMXX_SHOC=TRUE``
+for GNU Make.
 
-.. tab-set::
+EAMxx SHOC also requires MPI and EKAT, which provides Kokkos support for GPU
+builds.
 
-   .. tab-item:: CMake
+Select EAMxx SHOC at runtime:
 
-      .. code-block:: bash
+.. code-block:: text
 
-         cmake -DERF_ENABLE_MPI=ON \
-               ..
-
-   .. tab-item:: GNU Make
-
-      .. code-block:: bash
-
-         source Build/GNU_Ekat/ekat_build_commands.sh
-         make USE_MPI=TRUE
-
-.. note::
-   Native SHOC requires no EAMxx dependencies. EAMxx SHOC requires MPI and automatically enables EKAT (provides Kokkos for GPU support).
+   erf.pbl_type = EAMXX_SHOC
 
 P3 (Microphysics)
 ~~~~~~~~~~~~~~~~~
@@ -335,7 +339,7 @@ P3 (Predicted Particle Properties) provides microphysics modeling from E3SM. For
 
 .. code-block:: bash
 
-   # Initialize E3SM submodules (same as SHOC)
+   # Initialize E3SM submodules (same as EAMxx SHOC)
    export ERF_DIR=/path/to/ERF
    source $ERF_DIR/Build/GNU_Ekat/eamxx_clone.sh
 
