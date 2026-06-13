@@ -253,6 +253,11 @@ Set the lower boundary to ``surface_layer`` for SHOC runs:
 
    zlo.type = "surface_layer"
 
+Native SHOC is column based. Each AMReX box on a SHOC-active level must span
+the full vertical domain. Do not split SHOC-active grids in the vertical
+direction. With AMR, SHOC-active refined grids must also cover full vertical
+columns.
+
 SHOC diagnoses subgrid non-precipitating cloud partitioning with its assumed
 PDF. This includes cloud fraction and non-precipitating liquid water. To avoid
 double counting, ERF disables the saturation-adjustment or condensation step in

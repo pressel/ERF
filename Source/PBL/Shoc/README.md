@@ -167,6 +167,8 @@ ERF_ShocDriver.H
 ## Developer notes
 
 Native SHOC is column based. It expects boxes that span the full vertical column.
+Do not split SHOC-active grids in the vertical direction. Native SHOC checks
+this at startup and aborts if any box does not span the full vertical domain.
 
 Keep compile-time availability separate from runtime behavior. Native SHOC may be
 built, but it must not change a non-SHOC simulation unless the runtime PBL type
