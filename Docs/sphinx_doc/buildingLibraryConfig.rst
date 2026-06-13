@@ -34,7 +34,7 @@ ERF integrates external libraries for core functionality and advanced physics:
      - ``-DERF_ENABLE_HDF5=ON``
    * - **Native SHOC**
      - Turbulence and cloud macrophysics (:ref:`SHOC`)
-     - Built in tree and on by default
+     - Always built
      - ``erf.pbl_type = NATIVE_SHOC``
    * - **EAMxx SHOC**
      - Optional EAMxx SHOC turbulence and cloud macrophysics
@@ -296,8 +296,8 @@ SHOC (Turbulence)
 ~~~~~~~~~~~~~~~~~
 
 SHOC (Simplified Higher-Order Closure) provides turbulence and cloud
-macrophysics. ERF has two SHOC paths. Native SHOC ships in tree and is built by
-default. EAMxx SHOC is optional and uses the E3SM source tree.
+macrophysics. ERF has two SHOC paths. Native SHOC is always built in tree.
+EAMxx SHOC is optional and uses the E3SM source tree.
 
 For theory and runtime details, see :ref:`SHOC` in the PBL schemes
 documentation.
@@ -305,7 +305,7 @@ documentation.
 Native SHOC
 ^^^^^^^^^^^
 
-Native SHOC needs no EAMxx setup. It is selected at runtime with
+Native SHOC is always built in tree and selected at runtime with
 ``erf.pbl_type = NATIVE_SHOC``.
 
 EAMxx SHOC

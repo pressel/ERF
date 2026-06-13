@@ -375,19 +375,76 @@ recommended starting point. Most options tune the closure or enable diagnostics.
      - Boolean
      - Keeps signed buoyancy production in the TKE budget.
 
+ERF checks these option ranges at startup:
+
+* ``erf.shoc.lambda_low > 0``
+* ``erf.shoc.lambda_high >= erf.shoc.lambda_low``
+* ``erf.shoc.length_fac > 0``
+* ``erf.shoc.coeff_kh >= 0``
+* ``erf.shoc.coeff_km >= 0``
+* ``erf.shoc.top_taper_depth >= 0``
+* ``erf.shoc.top_taper_min_factor`` is in ``[0, 1]``
+
 Diagnostics
 ~~~~~~~~~~~
 
 Native SHOC can write plotfile and 1D profile diagnostics when it runs in
-``tendencies`` mode. Common native SHOC fields include ``pblh``,
-``shoc_cldfrac``, ``shoc_ql``, ``shoc_ql2``, ``shoc_cond``, ``shoc_evap``,
-``wqls_sec``, ``wthv_sec``, ``w_sec``, ``thl_sec``, ``qw_sec``, ``qwthl_sec``,
-``wthl_sec``, ``wqw_sec``, ``w3``, ``brunt``, ``isotropy``, ``shear_prod``,
-``buoy_prod``, and ``diss_tke``.
+``tendencies`` mode. Request SHOC diagnostics through the normal plotfile
+variable lists. For example:
 
-These diagnostics describe the diagnosed cloud field, second and third moments,
-and TKE budget terms. Enable ``erf.shoc.extra_shoc_diags`` for the extra cloud
-and flux fields.
+.. code-block:: text
+
+   erf.plot_vars_1 = density rhotheta theta qv qc Kmv Khv Lturb shoc_cldfrac shoc_ql wthv_sec
+
+Standard turbulence diagnostics that can use SHOC eddy diffusivities include:
+
+* ``nut``
+* ``Kmv``
+* ``Khv``
+* ``Lturb``
+
+Native SHOC also provides these diagnostic plot variables:
+
+* ``shoc_cldfrac``
+* ``shoc_ql``
+* ``shoc_ql2``
+* ``shoc_cond``
+* ``wqls_sec``
+* ``wthv_sec``
+* ``w_sec``
+* ``thl_sec``
+* ``qw_sec``
+* ``qwthl_sec``
+* ``wthl_sec``
+* ``wqw_sec``
+* ``w3``
+* ``brunt``
+* ``isotropy``
+* ``shear_prod``
+* ``buoy_prod``
+* ``diss_tke``
+
+These diagnostics describe the diagnosed cloud field, second and third
+moments, and TKE budget terms. Native-only diagnostics are meaningful only when
+``erf.pbl_type = NATIVE_SHOC`` and the native driver has produced diagnostics.
+In other cases, these variables may be unavailable or may carry missing-value
+placeholders.
+
+``erf.shoc.extra_shoc_diags`` is a diagnostic and developer option. Do not rely
+on it as the only control for plotfile output. Request plotfile fields
+explicitly with ``erf.plot_vars_1`` or ``erf.plot_vars_2``.
+
+References
+~~~~~~~~~~
+
+* `Bogenschutz, P. A., and S. K. Krueger (2013): A simplified PDF
+  parameterization of subgrid-scale clouds and turbulence for cloud-resolving
+  models. Journal of Advances in Modeling Earth Systems, 5, 195-211.
+  <https://doi.org/10.1002/jame.20018>`_
+* `Golaz, J.-C., et al. (2002): A PDF-based model for boundary layer clouds.
+  Part I: Method and model description. Journal of the Atmospheric Sciences, 59,
+  3540-3551. <https://doi.org/10.1175/1520-0469(2002)059%3C3540:APBMFB%3E2.0.CO;2>`_
+* `E3SM Project <https://github.com/E3SM-Project/E3SM>`_
 
 .. _MRFPBL:
 
