@@ -3,6 +3,7 @@
 
 #include "ERF_ShocColumnData.H"
 #include "ERF_ShocConstants.H"
+#include "ERF_ShocThermoUtils.H"
 
 #include "ERF_Constants.H"
 
@@ -63,58 +64,6 @@ make_energy_fixer_view (ShocColumnData& col)
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-amrex::Real
-energy_fixer_temperature (amrex::Real thetal,
-                          amrex::Real ql,
-                          amrex::Real exner) noexcept
-{
-    return amrex::max(constants::min_temp(),
-                      thetal * amrex::max(exner, amrex::Real(1.0e-12))
-                      + (L_v / Cp_d) * amrex::max(amrex::Real(0.0), ql));
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-amrex::Real
-moist_energy (amrex::Real tabs,
-              amrex::Real z,
-              amrex::Real qv,
-              amrex::Real qc,
-              amrex::Real qi,
-              amrex::Real u,
-              amrex::Real v,
-              amrex::Real tke) noexcept
-{
-    const amrex::Real ql = amrex::max(amrex::Real(0.0), qc + qi);
-    return Cp_d * tabs
-         + CONST_GRAV * z
-            + amrex::Real(0.5) * (u * u + v * v)
-         + tke
-         + (L_v + constants::latent_ice()) * qv
-         + constants::latent_ice() * ql;
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-void
-reconstruct_pdf_state (amrex::Real thetal,
-                       amrex::Real qw,
-                       amrex::Real exner,
-                       amrex::Real qi_seed,
-                       amrex::Real pdf_ql,
-                       amrex::Real& tabs,
-                       amrex::Real& qv,
-                       amrex::Real& qc,
-                       amrex::Real& qi) noexcept
-{
-    const amrex::Real ql_total = shoc_clamp(pdf_ql, amrex::Real(0.0), amrex::max(amrex::Real(0.0), qw));
-    tabs = energy_fixer_temperature(thetal, ql_total, exner);
-
-    const bool use_ice = (tabs < constants::freezing_temp() && qi_seed > amrex::Real(0.0));
-    qc = use_ice ? amrex::Real(0.0) : ql_total;
-    qi = use_ice ? ql_total : amrex::Real(0.0);
-    qv = amrex::max(amrex::Real(0.0), qw - amrex::max(amrex::Real(0.0), ql_total));
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 int
 diagnose_active_top (const amrex::Array4<const amrex::Real>& tke,
                      int ic,
@@ -147,17 +96,18 @@ apply_energy_fix_column (const ShocEnergyFixerView& v,
 
     for (int k = 0; k <= shoc_top; ++k) {
         const amrex::Real mass = v.rho(ic,k,0) * v.dz(ic,k,0);
-        const amrex::Real tabs_old = energy_fixer_temperature(v.thetal_base(ic,k,0),
-                                                              v.qc_base(ic,k,0) + v.qi_base(ic,k,0),
-                                                              v.exner(ic,k,0));
+        const amrex::Real tabs_old = shoc::temperature_from_thetal(v.thetal_base(ic,k,0),
+                                                                    v.qc_base(ic,k,0),
+                                                                    v.qi_base(ic,k,0),
+                                                                    v.exner(ic,k,0));
 
         amrex::Real tabs_new = amrex::Real(0.0);
         amrex::Real qv_new = amrex::Real(0.0);
         amrex::Real qc_new = amrex::Real(0.0);
         amrex::Real qi_new = amrex::Real(0.0);
-        reconstruct_pdf_state(v.thetal(ic,k,0), v.qw(ic,k,0), v.exner(ic,k,0),
-                              v.qi_base(ic,k,0), v.shoc_ql(ic,k,0),
-                              tabs_new, qv_new, qc_new, qi_new);
+        shoc::reconstruct_pdf_state(v.thetal(ic,k,0), v.qw(ic,k,0), v.exner(ic,k,0),
+                                    v.qi_base(ic,k,0), v.shoc_ql(ic,k,0),
+                                    tabs_new, qv_new, qc_new, qi_new);
 
         energy_before += mass * moist_energy(tabs_old, v.zt(ic,k,0),
                                              v.qv_base(ic,k,0), v.qc_base(ic,k,0), v.qi_base(ic,k,0),

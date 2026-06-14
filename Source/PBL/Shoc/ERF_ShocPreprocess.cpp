@@ -3,6 +3,7 @@
 #include "ERF_Constants.H"
 #include "ERF_EOS.H"
 #include "ERF_MoistUtils.H"
+#include "ERF_ShocThermoUtils.H"
 
 using namespace amrex;
 
@@ -107,7 +108,7 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
             const Real exner = tabs / amrex::max(theta, 1.0e-12_rt);
             // SHOC carries liquid-water potential temperature. E3SM's
             // "inv_exner" is 1/exner, so theta = theta_l + Lv/Cp*q_l/exner.
-            const Real thetal = theta - (L_v / Cp_d) * ql_np / amrex::max(exner, 1.0e-12_rt);
+            const Real thetal = shoc::thetal_from_theta(theta, qc, qi, exner);
             const Real theta_v = theta * (1.0_rt + 0.61_rt * qv - ql_np);
             const Real qke = cons_arr(i,j,k,RhoKE_comp) / rho;
 

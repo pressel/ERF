@@ -2,6 +2,7 @@
 
 #include "ERF_Constants.H"
 #include "ERF_ShocEnergyFixer.H"
+#include "ERF_ShocThermoUtils.H"
 #include "ERF_SolveTridiag.H"
 
 #include <AMReX_BLProfiler.H>
@@ -20,9 +21,6 @@ namespace
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_tke () noexcept { return 4.0e-4_rt; }
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_max_tke () noexcept { return 50.0_rt; }
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_qw () noexcept { return 0.0_rt; }
-    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_min_temp () noexcept { return 180.0_rt; }
-    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE Real shoc_freezing_temp () noexcept { return 273.15_rt; }
-
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     Real weighted_linear_interp (Real x0, Real x1, Real y0, Real y1, Real x)
     {
@@ -31,27 +29,6 @@ namespace
             return 0.5_rt * (y0 + y1);
         }
         return y0 + (y1 - y0) * (x - x0) / denom;
-    }
-
-    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-    void reconstruct_moisture_from_pdf_and_mean_state (Real thetal,
-                                                       Real qw,
-                                                       Real exner,
-                                                       Real qi_seed,
-                                                       Real pdf_ql,
-                                                       Real& tabs,
-                                                       Real& qv,
-                                                       Real& qc,
-                                                       Real& qi)
-    {
-        const Real ql_total = shoc_clamp(pdf_ql, 0.0_rt, amrex::max(0.0_rt, qw));
-        tabs = amrex::max(shoc_min_temp(),
-                          thetal * amrex::max(exner, 1.0e-12_rt) + (L_v / Cp_d) * ql_total);
-
-        const bool use_ice = (tabs < shoc_freezing_temp() && qi_seed > 0.0_rt);
-        qc = use_ice ? 0.0_rt : ql_total;
-        qi = use_ice ? ql_total : 0.0_rt;
-        qv = amrex::max(0.0_rt, qw - amrex::max(0.0_rt, ql_total));
     }
 
     void interpolate_cc_to_iface (const ShocColumnData& col,
@@ -174,8 +151,7 @@ ShocImplicit::compute_temperature (Real thetal,
                                    Real ql,
                                    Real exner)
 {
-    return amrex::max(shoc_min_temp(),
-                      thetal * amrex::max(exner, 1.0e-12_rt) + (L_v / Cp_d) * ql);
+    return shoc::temperature_from_thetal(thetal, ql, 0.0_rt, exner);
 }
 
 AMREX_GPU_HOST_DEVICE
@@ -405,9 +381,9 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
             Real qv_new_loc = 0.0_rt;
             Real qc_new_loc = 0.0_rt;
             Real qi_new_loc = 0.0_rt;
-            reconstruct_moisture_from_pdf_and_mean_state(thetal(ic,k,0), qw_new_loc,
-                                                         exner(ic,k,0), qi_base(ic,k,0), pdf_ql,
-                                                         tabs_new, qv_new_loc, qc_new_loc, qi_new_loc);
+            shoc::reconstruct_pdf_state(thetal(ic,k,0), qw_new_loc,
+                                        exner(ic,k,0), qi_base(ic,k,0), pdf_ql,
+                                        tabs_new, qv_new_loc, qc_new_loc, qi_new_loc);
 
             const Real ql_total = qc_new_loc + qi_new_loc;
             tabs(ic,k,0) = tabs_new;

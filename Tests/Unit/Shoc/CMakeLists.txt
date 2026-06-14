@@ -19,6 +19,7 @@ add_executable(erf_shoc_unit_tests
   ERF_ShocImplicitTests.cpp
   ERF_ShocDriverTests.cpp
   ERF_ShocPhysicalPropertyTests.cpp
+  ERF_ShocThermoTests.cpp
 )
 
 target_include_directories(erf_shoc_unit_tests PRIVATE
