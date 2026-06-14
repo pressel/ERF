@@ -2426,19 +2426,19 @@ namespace MORRInd {
                 // hm add, wrf-chem, add tendencies for c2prec
                 // c2prec = pra + prc + psacws + qmults + qmultg + psacwg + pgsacw + mnuccc + psacwi;
 
-                // CALCULATE SATURATION ADJUSTMENT TO CONDENSE EXTRA VAPOR ABOVE
-                // WATER SATURATION
-                dumt = morr_arr(i,j,k,MORRInd::t3d) + dt * morr_arr(i,j,k,MORRInd::t3dten);
-                dumqv = morr_arr(i,j,k,MORRInd::qv3d) + dt * morr_arr(i,j,k,MORRInd::qv3dten);
-
-                // hm, add fix for low pressure, 5/12/10
-                dum = std::min(Real(0.99) * morr_arr(i,j,k,MORRInd::pres), calc_saturation_vapor_pressure(dumt, 0));
-                dumqss = m_ep_2 * dum / (morr_arr(i,j,k,MORRInd::pres) - dum);
-
-                dumqc = morr_arr(i,j,k,MORRInd::qc3d) + dt * morr_arr(i,j,k,MORRInd::qc3dten);
-                dumqc = std::max(dumqc, Real(0));
-
                 if (do_cond) {
+                  // CALCULATE SATURATION ADJUSTMENT TO CONDENSE EXTRA VAPOR ABOVE
+                  // WATER SATURATION
+                  dumt = morr_arr(i,j,k,MORRInd::t3d) + dt * morr_arr(i,j,k,MORRInd::t3dten);
+                  dumqv = morr_arr(i,j,k,MORRInd::qv3d) + dt * morr_arr(i,j,k,MORRInd::qv3dten);
+
+                  // hm, add fix for low pressure, 5/12/10
+                  dum = std::min(Real(0.99) * morr_arr(i,j,k,MORRInd::pres), calc_saturation_vapor_pressure(dumt, 0));
+                  dumqss = m_ep_2 * dum / (morr_arr(i,j,k,MORRInd::pres) - dum);
+
+                  dumqc = morr_arr(i,j,k,MORRInd::qc3d) + dt * morr_arr(i,j,k,MORRInd::qc3dten);
+                  dumqc = std::max(dumqc, Real(0));
+
                   // SATURATION ADJUSTMENT FOR LIQUID
                   dums = dumqv - dumqss;
 
