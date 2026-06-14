@@ -106,8 +106,9 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
             const Real tabs = getTgivenRandRTh(rho, cons_arr(i,j,k,RhoTheta_comp), qv);
             const Real ql_np = qc + qi;
             const Real exner = tabs / amrex::max(theta, 1.0e-12_rt);
-            // SHOC carries liquid-water potential temperature. E3SM's
-            // "inv_exner" is 1/exner, so theta = theta_l + Lv/Cp*q_l/exner.
+            // SHOC carries a liquid-water potential temperature-like variable.
+            // For native SHOC coupling, include phase-aware condensate
+            // heating so theta = theta_l + (Lv*qc + Ls*qi)/(Cp*exner).
             const Real thetal = shoc::thetal_from_theta(theta, qc, qi, exner);
             const Real theta_v = theta * (1.0_rt + 0.61_rt * qv - ql_np);
             const Real qke = cons_arr(i,j,k,RhoKE_comp) / rho;

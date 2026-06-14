@@ -58,6 +58,9 @@ moist_energy (amrex::Real tabs,
               amrex::Real v,
               amrex::Real tke) noexcept
 {
+    // Ice-reference moist energy has no explicit qi term; qi is retained in
+    // the signature so callers pass a complete vapor/liquid/ice state.
+    amrex::ignore_unused(qi);
     return Cp_d * tabs
          + CONST_GRAV * z
          + amrex::Real(0.5) * (u * u + v * v)
