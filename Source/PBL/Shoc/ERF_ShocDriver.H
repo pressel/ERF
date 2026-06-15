@@ -11,6 +11,13 @@
 bool shoc_boxarray_spans_full_height (const amrex::BoxArray& ba,
                                       const amrex::Box& domain);
 
+inline bool
+shoc_layout_requires_number_closure (const MoistureComponentIndices& indices,
+                                     int ncomp) noexcept
+{
+    return shoc_valid_comp(indices.nc, ncomp) || shoc_valid_comp(indices.ni, ncomp);
+}
+
 class ShocDriver
 {
 public:
