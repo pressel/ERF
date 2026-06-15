@@ -157,7 +157,6 @@ TEST(ShocStructure, SurfaceLayerThermodynamicMappingUsesExner)
 
     const amrex::Real qc_sfc = 1.0e-3;
     const amrex::Real qi_sfc = 2.0e-4;
-    const amrex::Real cldliq = qc_sfc + qi_sfc;
     const amrex::Real theta_sfc = 298.0 + (L_v * qc_sfc + shoc::latent_sublimation() * qi_sfc) /
                                              (Cp_d * 0.8);
     const amrex::Real kbfs = 0.02 + 0.61 * theta_sfc * 2.0e-4;
