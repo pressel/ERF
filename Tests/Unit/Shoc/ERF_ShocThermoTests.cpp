@@ -49,7 +49,34 @@ TEST(ShocThermo, ThetaAndThetalRoundTripIsConsistent)
     expect_round_trip(302.0_rt, exner, 0.7e-3_rt, 0.3e-3_rt);
 }
 
-TEST(ShocThermo, ColdReconstructionPreservesIceSeedAndUsesSublimationHeat)
+TEST(ShocThermo, ColdNoIceSeedReconstructionDoesNotCreateIce)
+{
+    const amrex::Real thetal = 260.0_rt;
+    const amrex::Real qw = 0.010_rt;
+    const amrex::Real exner = 1.0_rt;
+    const amrex::Real pdf_ql = 0.001_rt;
+    const amrex::Real qi_seed = 0.0_rt;
+
+    amrex::Real tabs = 0.0_rt;
+    amrex::Real qv = 0.0_rt;
+    amrex::Real qc = 0.0_rt;
+    amrex::Real qi = 0.0_rt;
+
+    shoc::reconstruct_pdf_state(thetal, qw, exner, qi_seed, pdf_ql,
+                                tabs, qv, qc, qi);
+
+    EXPECT_LT(shoc::temperature_from_thetal(thetal, pdf_ql, 0.0_rt, exner),
+              shoc::constants::freezing_temp());
+    EXPECT_NEAR(qc, pdf_ql, 1.0e-14_rt);
+    EXPECT_NEAR(qi, 0.0_rt, 1.0e-14_rt);
+    EXPECT_NEAR(qv, qw - pdf_ql, 1.0e-14_rt);
+    EXPECT_NEAR(tabs, thetal + L_v * pdf_ql / Cp_d, 1.0e-12_rt);
+    EXPECT_NEAR(tabs, shoc::temperature_from_thetal(thetal, pdf_ql, qi_seed, exner),
+                1.0e-12_rt);
+    EXPECT_LT(tabs, shoc::constants::freezing_temp());
+}
+
+TEST(ShocThermo, ExistingIceSeedContributesSublimationHeatWithoutNewIceSource)
 {
     const amrex::Real thetal = 260.0_rt;
     const amrex::Real qw = 0.010_rt;
@@ -65,14 +92,16 @@ TEST(ShocThermo, ColdReconstructionPreservesIceSeedAndUsesSublimationHeat)
     shoc::reconstruct_pdf_state(thetal, qw, exner, qi_seed, pdf_ql,
                                 tabs, qv, qc, qi);
 
-    EXPECT_LT(shoc::temperature_from_thetal(thetal, pdf_ql, 0.0_rt, exner),
+    EXPECT_LT(shoc::temperature_from_thetal(thetal, pdf_ql, qi_seed, exner),
               shoc::constants::freezing_temp());
     EXPECT_NEAR(qc, pdf_ql, 1.0e-14_rt);
     EXPECT_NEAR(qi, qi_seed, 1.0e-14_rt);
-    EXPECT_NEAR(qv, qw - pdf_ql - qi_seed, 1.0e-14_rt);
-    EXPECT_NEAR(tabs, shoc::temperature_from_thetal(thetal, pdf_ql, qi_seed, exner),
+    EXPECT_NEAR(qv, qw - qc - qi, 1.0e-14_rt);
+    EXPECT_NEAR(tabs, shoc::temperature_from_thetal(thetal, qc, qi, exner),
                 1.0e-12_rt);
-    EXPECT_LT(tabs, shoc::constants::freezing_temp());
+    EXPECT_NEAR(tabs,
+                thetal + (L_v * pdf_ql + shoc::latent_sublimation() * qi_seed) / Cp_d,
+                1.0e-12_rt);
 }
 
 TEST(ShocThermo, WarmReconstructionRemainsLiquidWhenIceSeedIsZero)

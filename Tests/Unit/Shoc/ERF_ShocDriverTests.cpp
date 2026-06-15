@@ -989,6 +989,88 @@ TEST(ShocDriver, TendencyModeRejectsNumberAwareMoistureLayoutsWithoutNumberClosu
         "number-aware microphysics layouts");
 }
 
+TEST(ShocDriver, TendencyModeAllowsMassOnlyIceCapableMoistureLayouts)
+{
+    Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
+    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
+                            500.0_rt, 100.0_rt, 900.0_rt);
+    int is_periodic[AMREX_SPACEDIM] = {1, 1, 0};
+    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
+    const FixtureMap fixture = load_driver_fixture();
+
+    amrex::BoxArray ba(domain);
+    // The current SHOC driver path maps each MFIter tile to a full-height
+    // column workspace, so keep tiling in x only here.
+    ba.maxSize(IntVect(3, ny, nz));
+    DistributionMapping dm(ba);
+
+    MultiFab cons(ba, dm, NVAR_max, 0);
+    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
+    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
+    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
+    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
+    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+
+    MultiFab xvel(xba, dm, 1, 0);
+    MultiFab yvel(yba, dm, 1, 0);
+    MultiFab zvel(zba, dm, 1, 0);
+    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab hfx3(ba, dm, 1, 0);
+    MultiFab qfx3(ba, dm, 1, 0);
+    MultiFab tau13(xzba, dm, 1, 0);
+    MultiFab tau23(yzba, dm, 1, 0);
+    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
+
+    initialize_state(cons, fixture);
+    initialize_velocity(xvel, yvel, zvel, fixture);
+    initialize_geometry(z_phys_nd, fixture);
+    initialize_surface_fluxes(hfx3, qfx3, tau13, tau23, fixture);
+    initialize_eddy_diffs(eddy_diffs, fixture);
+    shoc_test::sync();
+
+    SolverChoice solver_choice;
+    solver_choice.moisture_type = MoistureType::WSM6;
+    solver_choice.moisture_indices = MoistureComponentIndices(
+        RhoQ1_comp, RhoQ2_comp, RhoQ3_comp, RhoQ4_comp, RhoQ5_comp, RhoQ6_comp);
+
+    ShocDriver driver(0, solver_choice);
+    EXPECT_TRUE(driver.uses_shoc_tendencies());
+    EXPECT_FALSE(driver.uses_host_diffusion());
+
+    shoc_test::run_and_sync([&] {
+        driver.advance(cons, xvel, yvel, zvel,
+                       &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
+                       z_phys_nd, geom, 10.0_rt);
+    });
+
+    amrex::Vector<MultiFab> rhs(IntVars::NumTypes);
+    rhs[IntVars::cons].define(ba, dm, NVAR_max, 0);
+    rhs[IntVars::xmom].define(xba, dm, 1, 0);
+    rhs[IntVars::ymom].define(yba, dm, 1, 0);
+    rhs[IntVars::zmom].define(zba, dm, 1, 0);
+    reset_rhs(rhs);
+
+    shoc_test::run_and_sync([&] {
+        driver.add_fast_tend(rhs);
+        for (MFIter mfi(rhs[IntVars::cons], false); mfi.isValid(); ++mfi) {
+            driver.add_slow_tend(mfi, mfi.validbox(), rhs[IntVars::cons].array(mfi));
+        }
+    });
+
+    expect_multifab_finite(rhs[IntVars::cons], RhoTheta_comp, 1, "mass-only theta rhs");
+    expect_multifab_finite(rhs[IntVars::cons], RhoQ1_comp, 6, "mass-only qv-through-qg rhs");
+    expect_component_between(rhs[IntVars::cons], RhoQ7_comp, 0.0_rt, 0.0_rt,
+                             "mass-only nc rhs stays zero");
+    expect_component_between(rhs[IntVars::cons], RhoQ8_comp, 0.0_rt, 0.0_rt,
+                             "mass-only ni rhs stays zero");
+    expect_component_between(rhs[IntVars::cons], RhoQ9_comp, 0.0_rt, 0.0_rt,
+                             "mass-only nr rhs stays zero");
+    expect_component_between(rhs[IntVars::cons], RhoQ10_comp, 0.0_rt, 0.0_rt,
+                             "mass-only ns rhs stays zero");
+    expect_component_between(rhs[IntVars::cons], RhoQ11_comp, 0.0_rt, 0.0_rt,
+                             "mass-only ng rhs stays zero");
+}
+
 TEST(ShocDriver, MultiStepTendenciesModeKeepsColumnDiagnosticsStable)
 {
     Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
