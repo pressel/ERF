@@ -22,6 +22,8 @@ add_executable(erf_shoc_unit_tests
   ERF_ShocThermoTests.cpp
 )
 
+build_erf_exe(erf_shoc_unit_tests NO_ERF_MAIN)
+
 target_include_directories(erf_shoc_unit_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/Source
   ${CMAKE_SOURCE_DIR}/Source/DataStructs
@@ -36,10 +38,7 @@ target_compile_definitions(erf_shoc_unit_tests PRIVATE
   ERF_HAS_SHOC_FAMILY
 )
 
-target_link_libraries(erf_shoc_unit_tests PRIVATE
-  GTest::gtest
-  erf_srclib
-)
+target_link_libraries(erf_shoc_unit_tests PRIVATE GTest::gtest)
 
 gtest_add_tests(TARGET erf_shoc_unit_tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
