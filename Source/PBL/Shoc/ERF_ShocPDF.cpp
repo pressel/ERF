@@ -277,6 +277,9 @@ ShocPDF::diagnose_pdf (ShocColumnData& col,
                        const ShocRuntimeOptions& opts,
                        Real dt)
 {
+    // Interim native-SHOC contract: this PDF remains liquid-cloud
+    // macrophysics. It may carry pre-existing ice through the thermodynamic
+    // state, but it does not create or repartition cloud ice here.
     FArrayBox w3_zt, thl_sec_zt, qw_sec_zt, wthl_zt, wqw_zt, qwthl_zt;
     const auto layout = col.layout;
     const Box cell_box(IntVect(0,0,0), IntVect(layout.ncell - 1, layout.nlev - 1, 0));

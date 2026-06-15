@@ -267,9 +267,15 @@ PDF. This includes cloud fraction and non-precipitating liquid water. To avoid
 double counting, ERF disables the saturation-adjustment or condensation step in
 the microphysics package when a SHOC-family PBL scheme is active.
 
+Native SHOC remains a liquid-cloud macrophysics closure under this interim
+contract. It may use pre-existing cloud ice for phase-aware thermodynamics and
+buoyancy, but it does not create or repartition cloud ice.
+
 This does not disable microphysics. Microphysics still handles precipitating
 processes outside SHOC's cloud macrophysics role. Choose a moisture model that
-matches the case.
+matches the case. Number-aware microphysics layouts with cloud-droplet or ice
+number concentrations need an explicit number closure before SHOC tendencies
+mode can couple to them.
 
 Transport modes
 ~~~~~~~~~~~~~~~

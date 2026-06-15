@@ -158,7 +158,8 @@ set_uniform_implicit_column (ShocColumnData& col,
     const auto zt = col.zt.const_array();
 
     const amrex::Real ql_total = qc_val + qi_val;
-    const amrex::Real tabs_val = thetal_val * exner_val + (L_v / Cp_d) * ql_total;
+    const amrex::Real tabs_val = thetal_val * exner_val
+                               + (L_v * qc_val + shoc::latent_sublimation() * qi_val) / Cp_d;
     const amrex::Real theta_val = tabs_val / amrex::max(exner_val, 1.0e-12_rt);
     const amrex::Real qw_val = qv_val + ql_total;
 
@@ -323,7 +324,7 @@ TEST(ShocPhysical, TwoSmallStepsTrackOneLargeStep)
     }
 }
 
-TEST(ShocPhysical, SubfreezingCondensatePartitionsIntoQi)
+TEST(ShocPhysical, SubfreezingCondensatePreservesIceSeed)
 {
     auto col = shoc_test::make_column(5);
     ShocRuntimeOptions opts;
@@ -358,7 +359,8 @@ TEST(ShocPhysical, SubfreezingCondensatePartitionsIntoQi)
     const auto qc_new = col.qc.const_array();
     const auto qi_new = col.qi.const_array();
     for (int k = 0; k < col.layout.nlev; ++k) {
-        EXPECT_GE(qi_new(0,k,0), qc_new(0,k,0));
+        EXPECT_NEAR(qi_new(0,k,0), 1.0e-3_rt, 1.0e-14_rt);
+        EXPECT_GE(qc_new(0,k,0), 0.0_rt);
     }
 }
 
@@ -577,9 +579,11 @@ TEST(ShocPhysical, PdfStateReconstructionConservesWaterAndLiquidWaterPotentialTe
                                     tabs, qv, qc, qi);
 
         EXPECT_NEAR(qv + qc + qi, qw, 1.0e-14_rt);
-        EXPECT_GT(qi, 0.0_rt);
-        EXPECT_NEAR(qc, 0.0_rt, 1.0e-14_rt);
-        EXPECT_GT(qv, 0.0_rt);
+        EXPECT_NEAR(qc, pdf_ql, 1.0e-14_rt);
+        EXPECT_NEAR(qi, qi_seed, 1.0e-14_rt);
+        EXPECT_NEAR(qv, qw - pdf_ql - qi_seed, 1.0e-14_rt);
+        EXPECT_NEAR(tabs, shoc::temperature_from_thetal(thetal, pdf_ql, qi_seed, exner),
+                    1.0e-12_rt);
     }
 }
 

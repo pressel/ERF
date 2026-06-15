@@ -649,10 +649,19 @@ ShocDriver::add_slow_tend (const MFIter& mfi,
     const int qv_comp = m_moisture_indices.qv;
     const int qc_comp = m_moisture_indices.qc;
     const int qi_comp = m_moisture_indices.qi;
+    const int nc_comp = m_moisture_indices.nc;
+    const int ni_comp = m_moisture_indices.ni;
     const bool has_qv = shoc_valid_comp(qv_comp, m_cons_ptr->nComp());
     const bool has_qc = shoc_valid_comp(qc_comp, m_cons_ptr->nComp());
     const bool has_qi = shoc_valid_comp(qi_comp, m_cons_ptr->nComp());
+    const bool has_nc = shoc_valid_comp(nc_comp, m_cons_ptr->nComp());
+    const bool has_ni = shoc_valid_comp(ni_comp, m_cons_ptr->nComp());
     const bool add_moisture = apply_shoc_moisture_tendencies();
+
+    if (has_nc || has_ni) {
+        amrex::Abort(
+            "Native SHOC tendencies mode does not support number-aware microphysics layouts with nc/ni. Use a mass-only moisture layout or add an explicit number closure.");
+    }
 
     ParallelFor(tbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
         cell_rhs(i,j,k,RhoKE_comp) += rho(i,j,k,Rho_comp) * tke_tend(i,j,k);
