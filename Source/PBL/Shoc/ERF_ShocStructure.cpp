@@ -1,6 +1,7 @@
 #include "ERF_ShocStructure.H"
 
 #include "ERF_Constants.H"
+#include "ERF_ShocThermoUtils.H"
 
 #include <algorithm>
 #include <cmath>
@@ -47,15 +48,16 @@ namespace
     }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-    Real theta_from_shoc_state (Real thetal, Real ql, Real exner)
+    Real theta_from_shoc_state (Real thetal, Real qc, Real qi, Real exner)
     {
-        return thetal + (L_v / Cp_d) * ql / amrex::max(exner, 1.0e-12_rt);
+        return shoc::theta_from_thetal(thetal, qc, qi, exner);
     }
 
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-    Real virtual_theta_from_shoc_state (Real thetal, Real ql, Real qv, Real exner)
+    Real virtual_theta_from_shoc_state (Real thetal, Real qc, Real qi, Real qv, Real exner)
     {
-        const Real theta = theta_from_shoc_state(thetal, ql, exner);
+        const Real theta = theta_from_shoc_state(thetal, qc, qi, exner);
+        const Real ql = qc + qi;
         return theta * (1.0_rt + shoc_zvir() * qv - ql);
     }
 }
@@ -83,7 +85,7 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
         const Real cldliq_sfc = qc(ic,0,0) + qi(ic,0,0);
-        const Real th_sfc = theta_from_shoc_state(thetal(ic,0,0), cldliq_sfc, exner(ic,0,0));
+        const Real th_sfc = theta_from_shoc_state(thetal(ic,0,0), qc(ic,0,0), qi(ic,0,0), exner(ic,0,0));
         const Real thv_sfc = th_sfc * (1.0_rt + shoc_zvir() * qv(ic,0,0) - cldliq_sfc);
         const Real stress_mag = std::sqrt(tauu(ic,0,0) * tauu(ic,0,0) +
                                           tauv(ic,0,0) * tauv(ic,0,0));
@@ -129,14 +131,14 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
     {
         const int npbl = diagnose_npbl(p_mid, layout, ic);
         const Real ustar_loc = ustar(ic,0,0);
-        const Real thv0 = virtual_theta_from_shoc_state(thetal(ic,0,0), qc(ic,0,0) + qi(ic,0,0),
+        const Real thv0 = virtual_theta_from_shoc_state(thetal(ic,0,0), qc(ic,0,0), qi(ic,0,0),
                                                         qv(ic,0,0), exner(ic,0,0));
         Real pblh_loc = zt(ic,npbl-1,0);
         Real prev_rino = 0.0_rt;
         bool found_pblh = false;
 
         for (int k = 1; k < npbl; ++k) {
-            const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
+            const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0), qi(ic,k,0),
                                                             qv(ic,k,0), exner(ic,k,0));
             const Real du = u(ic,k,0) - u(ic,0,0);
             const Real dv = v(ic,k,0) - v(ic,0,0);
@@ -172,7 +174,7 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
                                    (amrex::max(ustar_loc, shoc_u_star_min()) * phiminv);
             prev_rino = 0.0_rt;
             for (int k = 1; k < npbl; ++k) {
-                const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
+                const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0), qi(ic,k,0),
                                                                 qv(ic,k,0), exner(ic,k,0));
                 const Real du = u(ic,k,0) - u(ic,0,0);
                 const Real dv = v(ic,k,0) - v(ic,0,0);
@@ -236,18 +238,18 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
         const Real l_inf = (denom > 0.0_rt) ? 0.1_rt * numerator / denom : shoc_min_len();
 
         for (int k = 0; k < layout.nlev; ++k) {
-            const Real theta_v_k = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0) + qi(ic,k,0),
+            const Real theta_v_k = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0), qi(ic,k,0),
                                                                  qv(ic,k,0), exner(ic,k,0));
             Real theta_v_lo = theta_v_k;
             Real theta_v_hi = theta_v_k;
             if (layout.nlev > 1) {
                 if (k == 0) {
-                    const Real theta_v_kp1 = virtual_theta_from_shoc_state(thetal(ic,1,0), qc(ic,1,0) + qi(ic,1,0),
+                    const Real theta_v_kp1 = virtual_theta_from_shoc_state(thetal(ic,1,0), qc(ic,1,0), qi(ic,1,0),
                                                                            qv(ic,1,0), exner(ic,1,0));
                     theta_v_lo = weighted_linear_interp(zt(ic,0,0), zt(ic,1,0),
                                                         theta_v_k, theta_v_kp1, zi(ic,0,0));
                 } else {
-                    const Real theta_v_km1 = virtual_theta_from_shoc_state(thetal(ic,k-1,0), qc(ic,k-1,0) + qi(ic,k-1,0),
+                    const Real theta_v_km1 = virtual_theta_from_shoc_state(thetal(ic,k-1,0), qc(ic,k-1,0), qi(ic,k-1,0),
                                                                            qv(ic,k-1,0), exner(ic,k-1,0));
                     theta_v_lo = weighted_linear_interp(zt(ic,k-1,0), zt(ic,k,0),
                                                         theta_v_km1, theta_v_k, zi(ic,k,0));
@@ -255,12 +257,12 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
 
                 if (k == layout.nlev - 1) {
                     const Real theta_v_km1 = virtual_theta_from_shoc_state(thetal(ic,layout.nlev-2,0),
-                                                                           qc(ic,layout.nlev-2,0) + qi(ic,layout.nlev-2,0),
+                                                                           qc(ic,layout.nlev-2,0), qi(ic,layout.nlev-2,0),
                                                                            qv(ic,layout.nlev-2,0), exner(ic,layout.nlev-2,0));
                     theta_v_hi = weighted_linear_interp(zt(ic,layout.nlev-2,0), zt(ic,layout.nlev-1,0),
                                                         theta_v_km1, theta_v_k, zi(ic,layout.nlev,0));
                 } else {
-                    const Real theta_v_kp1 = virtual_theta_from_shoc_state(thetal(ic,k+1,0), qc(ic,k+1,0) + qi(ic,k+1,0),
+                    const Real theta_v_kp1 = virtual_theta_from_shoc_state(thetal(ic,k+1,0), qc(ic,k+1,0), qi(ic,k+1,0),
                                                                            qv(ic,k+1,0), exner(ic,k+1,0));
                     theta_v_hi = weighted_linear_interp(zt(ic,k,0), zt(ic,k+1,0),
                                                         theta_v_k, theta_v_kp1, zi(ic,k+1,0));

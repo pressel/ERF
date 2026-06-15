@@ -1,4 +1,5 @@
 #include "ERF_ShocStructure.H"
+#include "ERF_ShocThermoUtils.H"
 #include "ERF_ShocTestUtils.H"
 #include "ERF_ShocTypes.H"
 
@@ -96,8 +97,8 @@ TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
     thetal(0,0,0) = 298.0;
     qv(0,0,0) = 0.010;
     qc(0,0,0) = 1.0e-3;
-    qi(0,0,0) = 0.0;
-    qw(0,0,0) = 0.011;
+    qi(0,0,0) = 2.0e-4;
+    qw(0,0,0) = qv(0,0,0) + qc(0,0,0) + qi(0,0,0);
     for (int k = 1; k < col.layout.nlev; ++k) {
         col.wthv_sec.array()(0,k,0) = 5.0e-4 * k;
     }
@@ -110,8 +111,10 @@ TEST(ShocStructure, SurfaceLayerUsesShocThermodynamicMapping)
         ShocStructure::diagnose_surface_layer(col);
     });
 
-    const amrex::Real cldliq = 1.0e-3;
-    const amrex::Real th_sfc = 298.0 + (L_v / Cp_d) * cldliq;
+    const amrex::Real qc_sfc = 1.0e-3;
+    const amrex::Real qi_sfc = 2.0e-4;
+    const amrex::Real cldliq = qc_sfc + qi_sfc;
+    const amrex::Real th_sfc = 298.0 + (L_v * qc_sfc + shoc::latent_sublimation() * qi_sfc) / Cp_d;
     const amrex::Real thv_sfc = th_sfc * (1.0 + 0.61 * 0.010 - cldliq);
     const amrex::Real ustar_raw = std::sqrt(std::sqrt(0.04 * 0.04 + 0.03 * 0.03));
     const amrex::Real ustar = amrex::max(amrex::Real(0.01), ustar_raw);
@@ -140,8 +143,8 @@ TEST(ShocStructure, SurfaceLayerThermodynamicMappingUsesExner)
     thetal(0,0,0) = 298.0;
     qv(0,0,0) = 0.010;
     qc(0,0,0) = 1.0e-3;
-    qi(0,0,0) = 0.0;
-    qw(0,0,0) = 0.011;
+    qi(0,0,0) = 2.0e-4;
+    qw(0,0,0) = qv(0,0,0) + qc(0,0,0) + qi(0,0,0);
     exner(0,0,0) = 0.8;
     shoc::set_fab_val(col.surf_tau_u, 0.04, shoc::InitRunOn::Host);
     shoc::set_fab_val(col.surf_tau_v, 0.03, shoc::InitRunOn::Host);
@@ -152,8 +155,11 @@ TEST(ShocStructure, SurfaceLayerThermodynamicMappingUsesExner)
         ShocStructure::diagnose_surface_layer(col);
     });
 
-    const amrex::Real cldliq = 1.0e-3;
-    const amrex::Real theta_sfc = 298.0 + (L_v / Cp_d) * cldliq / 0.8;
+    const amrex::Real qc_sfc = 1.0e-3;
+    const amrex::Real qi_sfc = 2.0e-4;
+    const amrex::Real cldliq = qc_sfc + qi_sfc;
+    const amrex::Real theta_sfc = 298.0 + (L_v * qc_sfc + shoc::latent_sublimation() * qi_sfc) /
+                                             (Cp_d * 0.8);
     const amrex::Real kbfs = 0.02 + 0.61 * theta_sfc * 2.0e-4;
 
     EXPECT_NEAR(col.wthv_sec.const_array()(0,0,0), kbfs, 1.0e-12)

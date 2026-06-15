@@ -25,6 +25,18 @@ condensate_latent_heat (amrex::Real qc,
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 amrex::Real
+theta_from_thetal (amrex::Real thetal,
+                   amrex::Real qc,
+                   amrex::Real qi,
+                   amrex::Real exner) noexcept
+{
+    return thetal
+         + condensate_latent_heat(qc, qi)
+           / (Cp_d * amrex::max(exner, amrex::Real(1.0e-12)));
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real
 temperature_from_thetal (amrex::Real thetal,
                          amrex::Real qc,
                          amrex::Real qi,
@@ -81,14 +93,15 @@ reconstruct_pdf_state (amrex::Real thetal,
                        amrex::Real& qc,
                        amrex::Real& qi) noexcept
 {
-    const amrex::Real ql_total = shoc_clamp(pdf_ql, amrex::Real(0.0), amrex::max(amrex::Real(0.0), qw));
-    const amrex::Real tabs_liquid = temperature_from_thetal(thetal, ql_total, amrex::Real(0.0), exner);
-    const bool use_ice = (tabs_liquid < constants::freezing_temp() && qi_seed > amrex::Real(0.0));
+    // Interim native-SHOC contract: preserve any existing ice seed for
+    // phase-aware thermodynamics, but do not create or repartition cloud ice.
+    const amrex::Real qi_total = shoc_clamp(qi_seed, amrex::Real(0.0), amrex::max(amrex::Real(0.0), qw));
+    const amrex::Real ql_total = shoc_clamp(pdf_ql, amrex::Real(0.0), amrex::max(amrex::Real(0.0), qw - qi_total));
 
-    qc = use_ice ? amrex::Real(0.0) : ql_total;
-    qi = use_ice ? ql_total : amrex::Real(0.0);
+    qc = ql_total;
+    qi = qi_total;
     tabs = temperature_from_thetal(thetal, qc, qi, exner);
-    qv = amrex::max(amrex::Real(0.0), qw - ql_total);
+    qv = amrex::max(amrex::Real(0.0), qw - qc - qi);
 }
 
 } // namespace shoc

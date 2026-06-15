@@ -92,11 +92,17 @@ density-weighted fluxes to kinematic surface fluxes.
 SHOC diagnoses subgrid non-precipitating cloud partitioning with its assumed PDF.
 This includes cloud fraction and non-precipitating liquid water.
 
+Native SHOC remains a liquid-cloud macrophysics closure under the interim ice
+contract. It may use pre-existing cloud ice for phase-aware thermodynamics and
+buoyancy, but it does not create or repartition cloud ice.
+
 To avoid double counting, ERF disables the saturation-adjustment or condensation
 step in the microphysics package when a SHOC-family PBL scheme is active.
 
 This does not disable microphysics. Microphysics still handles precipitating
-processes outside SHOC's cloud macrophysics role.
+processes outside SHOC's cloud macrophysics role. Number-aware microphysics
+layouts with cloud-droplet or ice number concentrations need an explicit number
+closure before SHOC tendencies mode can couple to them.
 
 ## Transport modes
 
