@@ -348,7 +348,6 @@ ERF::derive_diag_profiles_stag (double /*time*/,
 #ifdef ERF_USE_NATIVE_SHOC
         solverChoice.turbChoice[lev].uses_native_shoc() &&
         native_shoc_driver[lev] &&
-        native_shoc_driver[lev]->uses_shoc_tendencies() &&
         native_shoc_driver[lev]->has_native_diagnostics();
 #else
         false;

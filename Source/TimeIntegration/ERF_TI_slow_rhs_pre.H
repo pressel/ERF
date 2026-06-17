@@ -252,9 +252,9 @@
         }
 #endif
 #ifdef ERF_USE_NATIVE_SHOC
-        if (solverChoice.turbChoice[level].uses_native_shoc() && native_shoc_driver[level] &&
-            native_shoc_driver[level]->uses_shoc_tendencies()) {
-            native_shoc_driver[level]->add_fast_tend(S_rhs);
+        if (solverChoice.turbChoice[level].uses_native_shoc() && native_shoc_driver[level]) {
+            // Native SHOC applies its increment directly to state; ERF no
+            // longer adds a separate fast RHS contribution.
         }
 #endif
 

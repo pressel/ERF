@@ -42,8 +42,9 @@ public:
     void add_slow_tend (const amrex::MFIter& mfi,
                         const amrex::Box& tbx,
                         const amrex::Array4<amrex::Real>& cell_rhs) const;
-    bool uses_shoc_tendencies () const;
+    bool uses_state_update () const;
     bool uses_host_diffusion () const;
+    bool owns_surface_fluxes () const;
     bool debug_summary_enabled () const { return m_opts.debug_summary; }
     bool has_native_diagnostics () const { return m_eddy_coeffs_cc.isDefined(); }
     const amrex::MultiFab& native_diagnostics () const { return m_eddy_coeffs_cc; }
@@ -70,7 +71,6 @@ public:
 private:
     int m_lev;
     ShocRuntimeOptions m_opts;
-    MoistureType m_moisture_type;
     MoistureComponentIndices m_moisture_indices;
 
     amrex::MultiFab m_theta_tend_cc;
@@ -127,8 +127,10 @@ private:
                                      const amrex::MFIter& mfi) const;
     void store_carried_buoyancy_flux (const ShocColumnData& col,
                                       const amrex::MFIter& mfi);
-    bool external_microphysics_active () const;
-    bool apply_shoc_moisture_tendencies () const;
+    void apply_state_update (amrex::MultiFab& cons,
+                             amrex::MultiFab& xvel,
+                             amrex::MultiFab& yvel,
+                             amrex::Real dt) const;
     void print_debug_summary (amrex::Real dt) const;
 };
 #endif

@@ -417,56 +417,6 @@ reset_rhs (amrex::Vector<MultiFab>& rhs)
 }
 
 void
-apply_driver_rhs_to_state (MultiFab& cons,
-                           MultiFab& xvel,
-                           MultiFab& yvel,
-                           const amrex::Vector<MultiFab>& rhs,
-                           Real dt)
-{
-    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
-        const Box& ccbx = mfi.validbox();
-        const int ilo = ccbx.smallEnd(0);
-        const int ihi = ccbx.bigEnd(0);
-        const int jlo = ccbx.smallEnd(1);
-        const int jhi = ccbx.bigEnd(1);
-
-        auto cons_arr = cons.array(mfi);
-        const auto cons_rhs = rhs[IntVars::cons].const_array(mfi);
-        const auto rho = cons.const_array(mfi);
-        auto xvel_arr = xvel.array(mfi);
-        auto yvel_arr = yvel.array(mfi);
-        const auto x_rhs = rhs[IntVars::xmom].const_array(mfi);
-        const auto y_rhs = rhs[IntVars::ymom].const_array(mfi);
-
-        amrex::ParallelFor(ccbx, cons.nComp(),
-        [=] AMREX_GPU_DEVICE (int i, int j, int k, int n) noexcept
-        {
-            cons_arr(i,j,k,n) += dt * cons_rhs(i,j,k,n);
-        });
-
-        amrex::ParallelFor(amrex::convert(ccbx, IntVect(1,0,0)),
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-        {
-            const int il = amrex::max(i - 1, ilo);
-            const int ir = amrex::min(i, ihi);
-            const Real rho_face = amrex::max(0.5_rt * (rho(il,j,k,Rho_comp) + rho(ir,j,k,Rho_comp)),
-                                             1.0e-12_rt);
-            xvel_arr(i,j,k) += dt * x_rhs(i,j,k) / rho_face;
-        });
-
-        amrex::ParallelFor(amrex::convert(ccbx, IntVect(0,1,0)),
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-        {
-            const int jb = amrex::max(j - 1, jlo);
-            const int jt = amrex::min(j, jhi);
-            const Real rho_face = amrex::max(0.5_rt * (rho(i,jb,k,Rho_comp) + rho(i,jt,k,Rho_comp)),
-                                             1.0e-12_rt);
-            yvel_arr(i,j,k) += dt * y_rhs(i,j,k) / rho_face;
-        });
-    }
-}
-
-void
 expect_driver_diagnostics_stable (const ShocDriver& driver,
                                   Real max_mix_len)
 {
@@ -498,7 +448,7 @@ expect_driver_diagnostics_stable (const ShocDriver& driver,
 }
 }
 
-TEST(ShocDriver, AdvanceProducesFiniteDiagnosticsAndTendencies)
+TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
 {
     Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
     amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
@@ -546,8 +496,22 @@ TEST(ShocDriver, AdvanceProducesFiniteDiagnosticsAndTendencies)
     solver_choice.moisture_indices = MoistureComponentIndices(RhoQ1_comp, RhoQ2_comp);
 
     ShocDriver driver(0, solver_choice);
+    EXPECT_TRUE(driver.uses_state_update());
+    EXPECT_FALSE(driver.uses_host_diffusion());
+    EXPECT_TRUE(driver.owns_surface_fluxes());
     const Real dt = 10.0_rt;
     const Real max_mix_len = std::sqrt(geom.CellSizeArray()[0] * geom.CellSizeArray()[1]);
+
+    MultiFab cons_before(ba, dm, NVAR_max, 0);
+    MultiFab xvel_before(xba, dm, 1, 0);
+    MultiFab yvel_before(yba, dm, 1, 0);
+    MultiFab zvel_before(zba, dm, 1, 0);
+    MultiFab scalar_before(ba, dm, 1, 0);
+    MultiFab::Copy(cons_before, cons, 0, 0, NVAR_max, 0);
+    MultiFab::Copy(xvel_before, xvel, 0, 0, 1, 0);
+    MultiFab::Copy(yvel_before, yvel, 0, 0, 1, 0);
+    MultiFab::Copy(zvel_before, zvel, 0, 0, 1, 0);
+    MultiFab::Copy(scalar_before, cons, RhoScalar_comp, 0, 1, 0);
 
     shoc_test::run_and_sync([&] {
         driver.advance(cons, xvel, yvel, zvel,
@@ -555,7 +519,7 @@ TEST(ShocDriver, AdvanceProducesFiniteDiagnosticsAndTendencies)
                        z_phys_nd, geom, dt);
     });
     EXPECT_TRUE(driver.has_native_diagnostics());
-    EXPECT_TRUE(driver.uses_shoc_tendencies());
+    EXPECT_TRUE(driver.uses_state_update());
 
     expect_multifab_finite(driver.native_diagnostics(), 0, EddyDiff::NumDiffs, "native_diagnostics");
     expect_component_nonnegative(driver.native_diagnostics(), EddyDiff::Mom_v, "native Kmv");
@@ -581,6 +545,16 @@ TEST(ShocDriver, AdvanceProducesFiniteDiagnosticsAndTendencies)
     expect_multifab_finite(driver.wthv_sec_diagnostics(), 0, 1, "wthv_sec");
     EXPECT_LT(component_max_abs(driver.wthv_sec_diagnostics(), 0), 10.0_rt)
         << "wthv_sec leaves the bounded range already enforced in SHOC PDF property tests";
+
+    EXPECT_EQ(component_max_abs_difference(cons, Rho_comp, cons_before, Rho_comp), 0.0_rt);
+    EXPECT_GT(component_max_abs_difference(cons, RhoTheta_comp, cons_before, RhoTheta_comp), 0.0_rt);
+    EXPECT_GT(component_max_abs_difference(cons, RhoQ1_comp, cons_before, RhoQ1_comp), 0.0_rt);
+    expect_component_nonnegative(cons, RhoQ1_comp, "state-update qv");
+    expect_component_nonnegative(cons, RhoKE_comp, "state-update tke");
+    EXPECT_GT(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
+    EXPECT_GT(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(zvel, 0, zvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(cons, RhoScalar_comp, scalar_before, 0), 0.0_rt);
 
     shoc_test::run_and_sync([&] {
         driver.set_eddy_diffs();
@@ -622,14 +596,12 @@ TEST(ShocDriver, AdvanceProducesFiniteDiagnosticsAndTendencies)
         }
     });
 
-    expect_multifab_finite(rhs[IntVars::cons], RhoTheta_comp, 1, "theta rhs");
-    expect_multifab_finite(rhs[IntVars::cons], RhoQ1_comp, 1, "qv rhs");
-    expect_multifab_finite(rhs[IntVars::xmom], 0, 1, "xmom rhs");
-    expect_multifab_finite(rhs[IntVars::ymom], 0, 1, "ymom rhs");
-    expect_multifab_finite(rhs[IntVars::zmom], 0, 1, "zmom rhs");
-    EXPECT_GT(component_max_abs(rhs[IntVars::cons], RhoTheta_comp), 0.0_rt);
-    EXPECT_GT(component_max_abs(rhs[IntVars::xmom], 0), 0.0_rt);
-    EXPECT_GT(component_max_abs(rhs[IntVars::ymom], 0), 0.0_rt);
+    expect_component_between(rhs[IntVars::cons], RhoTheta_comp, 0.0_rt, 0.0_rt, "theta rhs");
+    expect_component_between(rhs[IntVars::cons], RhoQ1_comp, 0.0_rt, 0.0_rt, "qv rhs");
+    expect_component_between(rhs[IntVars::cons], RhoKE_comp, 0.0_rt, 0.0_rt, "tke rhs");
+    expect_component_between(rhs[IntVars::xmom], 0, 0.0_rt, 0.0_rt, "xmom rhs");
+    expect_component_between(rhs[IntVars::ymom], 0, 0.0_rt, 0.0_rt, "ymom rhs");
+    expect_component_between(rhs[IntVars::zmom], 0, 0.0_rt, 0.0_rt, "zmom rhs");
 }
 
 TEST(ShocDriver, FullHeightBoxPredicateRejectsVerticallySplitBoxes)
@@ -647,8 +619,8 @@ TEST(ShocDriver, FullHeightBoxPredicateRejectsVerticallySplitBoxes)
 
 TEST(ShocDriver, PassiveScalarIsNotModifiedByNativeShoc)
 {
-    // Native SHOC transports heat, moisture, momentum, and TKE through its
-    // explicit tendency hooks. It should not create tendencies for passive scalar
+    // Native SHOC applies its coupled heat, moisture, momentum, and TKE
+    // increment directly to the state. It should not modify passive scalar
     // state components.
     ASSERT_LT(RhoScalar_comp, NVAR_max);
 
@@ -867,17 +839,25 @@ TEST(ShocDriver, HostDiffusionModeExportsDiffusivitiesWithoutInternalTransport)
     MultiFab qfx3_before(ba, dm, 1, 0);
     MultiFab tau13_before(xzba, dm, 1, 0);
     MultiFab tau23_before(yzba, dm, 1, 0);
+    MultiFab cons_before(ba, dm, NVAR_max, 0);
+    MultiFab xvel_before(xba, dm, 1, 0);
+    MultiFab yvel_before(yba, dm, 1, 0);
+    MultiFab zvel_before(zba, dm, 1, 0);
     MultiFab::Copy(hfx3_before, hfx3, 0, 0, 1, 0);
     MultiFab::Copy(qfx3_before, qfx3, 0, 0, 1, 0);
     MultiFab::Copy(tau13_before, tau13, 0, 0, 1, 0);
     MultiFab::Copy(tau23_before, tau23, 0, 0, 1, 0);
+    MultiFab::Copy(cons_before, cons, 0, 0, NVAR_max, 0);
+    MultiFab::Copy(xvel_before, xvel, 0, 0, 1, 0);
+    MultiFab::Copy(yvel_before, yvel, 0, 0, 1, 0);
+    MultiFab::Copy(zvel_before, zvel, 0, 0, 1, 0);
 
     SolverChoice solver_choice;
     solver_choice.moisture_type = MoistureType::SAM_NoPrecip_NoIce;
     solver_choice.moisture_indices = MoistureComponentIndices(RhoQ1_comp, RhoQ2_comp);
 
     ShocDriver driver(0, solver_choice);
-    EXPECT_FALSE(driver.uses_shoc_tendencies());
+    EXPECT_FALSE(driver.uses_state_update());
     EXPECT_TRUE(driver.uses_host_diffusion());
 
     shoc_test::run_and_sync([&] {
@@ -916,6 +896,13 @@ TEST(ShocDriver, HostDiffusionModeExportsDiffusivitiesWithoutInternalTransport)
         }
     });
 
+    EXPECT_EQ(component_max_abs_difference(cons, Rho_comp, cons_before, Rho_comp), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(cons, RhoTheta_comp, cons_before, RhoTheta_comp), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(cons, RhoQ1_comp, cons_before, RhoQ1_comp), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(zvel, 0, zvel_before, 0), 0.0_rt);
+
     expect_component_between(rhs[IntVars::cons], RhoTheta_comp, 0.0_rt, 0.0_rt, "host-diffusion theta rhs");
     expect_component_between(rhs[IntVars::cons], RhoQ1_comp, 0.0_rt, 0.0_rt, "host-diffusion qv rhs");
     expect_component_between(rhs[IntVars::cons], RhoKE_comp, 0.0_rt, 0.0_rt, "host-diffusion tke rhs");
@@ -923,7 +910,7 @@ TEST(ShocDriver, HostDiffusionModeExportsDiffusivitiesWithoutInternalTransport)
     expect_component_between(rhs[IntVars::ymom], 0, 0.0_rt, 0.0_rt, "host-diffusion ymom rhs");
 }
 
-TEST(ShocDriver, TendencyModeRequiresNumberClosureForNumberAwareMoistureLayouts)
+TEST(ShocDriver, NumberAwareMoistureLayoutHelperRecognizesNcAndNi)
 {
     EXPECT_TRUE(shoc_layout_requires_number_closure(
         MoistureComponentIndices(
@@ -952,7 +939,7 @@ TEST(ShocDriver, TendencyModeRequiresNumberClosureForNumberAwareMoistureLayouts)
         NVAR_max));
 }
 
-TEST(ShocDriver, TendencyModeAllowsMassOnlyIceCapableMoistureLayouts)
+TEST(ShocDriver, StateUpdateModeSupportsIceCapableMoistureLayouts)
 {
     Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
     amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
@@ -997,7 +984,7 @@ TEST(ShocDriver, TendencyModeAllowsMassOnlyIceCapableMoistureLayouts)
         RhoQ1_comp, RhoQ2_comp, RhoQ3_comp, RhoQ4_comp, RhoQ5_comp, RhoQ6_comp);
 
     ShocDriver driver(0, solver_choice);
-    EXPECT_TRUE(driver.uses_shoc_tendencies());
+    EXPECT_TRUE(driver.uses_state_update());
     EXPECT_FALSE(driver.uses_host_diffusion());
 
     shoc_test::run_and_sync([&] {
@@ -1020,21 +1007,21 @@ TEST(ShocDriver, TendencyModeAllowsMassOnlyIceCapableMoistureLayouts)
         }
     });
 
-    expect_multifab_finite(rhs[IntVars::cons], RhoTheta_comp, 1, "mass-only theta rhs");
-    expect_multifab_finite(rhs[IntVars::cons], RhoQ1_comp, 6, "mass-only qv-through-qg rhs");
+    expect_component_between(rhs[IntVars::cons], RhoTheta_comp, 0.0_rt, 0.0_rt, "state-update theta rhs");
+    expect_component_between(rhs[IntVars::cons], RhoQ1_comp, 0.0_rt, 0.0_rt, "state-update qv rhs");
     expect_component_between(rhs[IntVars::cons], RhoQ7_comp, 0.0_rt, 0.0_rt,
-                             "mass-only nc rhs stays zero");
+                             "state-update nc rhs stays zero");
     expect_component_between(rhs[IntVars::cons], RhoQ8_comp, 0.0_rt, 0.0_rt,
-                             "mass-only ni rhs stays zero");
+                             "state-update ni rhs stays zero");
     expect_component_between(rhs[IntVars::cons], RhoQ9_comp, 0.0_rt, 0.0_rt,
-                             "mass-only nr rhs stays zero");
+                             "state-update nr rhs stays zero");
     expect_component_between(rhs[IntVars::cons], RhoQ10_comp, 0.0_rt, 0.0_rt,
-                             "mass-only ns rhs stays zero");
+                             "state-update ns rhs stays zero");
     expect_component_between(rhs[IntVars::cons], RhoQ11_comp, 0.0_rt, 0.0_rt,
-                             "mass-only ng rhs stays zero");
+                             "state-update ng rhs stays zero");
 }
 
-TEST(ShocDriver, MultiStepTendenciesModeKeepsColumnDiagnosticsStable)
+TEST(ShocDriver, MultiStepStateUpdateModeKeepsColumnDiagnosticsStable)
 {
     Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
     amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
@@ -1081,7 +1068,7 @@ TEST(ShocDriver, MultiStepTendenciesModeKeepsColumnDiagnosticsStable)
     solver_choice.moisture_indices = MoistureComponentIndices(RhoQ1_comp, RhoQ2_comp);
 
     ShocDriver driver(0, solver_choice);
-    EXPECT_TRUE(driver.uses_shoc_tendencies());
+    EXPECT_TRUE(driver.uses_state_update());
 
     amrex::Vector<MultiFab> rhs(IntVars::NumTypes);
     rhs[IntVars::cons].define(ba, dm, NVAR_max, 0);
@@ -1106,7 +1093,6 @@ TEST(ShocDriver, MultiStepTendenciesModeKeepsColumnDiagnosticsStable)
             for (MFIter mfi(rhs[IntVars::cons], false); mfi.isValid(); ++mfi) {
                 driver.add_slow_tend(mfi, mfi.validbox(), rhs[IntVars::cons].array(mfi));
             }
-            apply_driver_rhs_to_state(cons, xvel, yvel, rhs, dt);
         });
 
         expect_multifab_finite(cons, Rho_comp, 1, "multistep cons rho");
@@ -1167,7 +1153,7 @@ TEST(ShocDriver, MultiStepHostDiffusionModeKeepsExportsStable)
     solver_choice.moisture_indices = MoistureComponentIndices(RhoQ1_comp, RhoQ2_comp);
 
     ShocDriver driver(0, solver_choice);
-    EXPECT_FALSE(driver.uses_shoc_tendencies());
+    EXPECT_FALSE(driver.uses_state_update());
     EXPECT_TRUE(driver.uses_host_diffusion());
 
     amrex::Vector<MultiFab> rhs(IntVars::NumTypes);
@@ -1180,10 +1166,18 @@ TEST(ShocDriver, MultiStepHostDiffusionModeKeepsExportsStable)
     MultiFab qfx3_before(ba, dm, 1, 0);
     MultiFab tau13_before(xzba, dm, 1, 0);
     MultiFab tau23_before(yzba, dm, 1, 0);
+    MultiFab cons_before(ba, dm, NVAR_max, 0);
+    MultiFab xvel_before(xba, dm, 1, 0);
+    MultiFab yvel_before(yba, dm, 1, 0);
+    MultiFab zvel_before(zba, dm, 1, 0);
     MultiFab::Copy(hfx3_before, hfx3, 0, 0, 1, 0);
     MultiFab::Copy(qfx3_before, qfx3, 0, 0, 1, 0);
     MultiFab::Copy(tau13_before, tau13, 0, 0, 1, 0);
     MultiFab::Copy(tau23_before, tau23, 0, 0, 1, 0);
+    MultiFab::Copy(cons_before, cons, 0, 0, NVAR_max, 0);
+    MultiFab::Copy(xvel_before, xvel, 0, 0, 1, 0);
+    MultiFab::Copy(yvel_before, yvel, 0, 0, 1, 0);
+    MultiFab::Copy(zvel_before, zvel, 0, 0, 1, 0);
 
     for (int step = 0; step < nsteps; ++step) {
         shoc_test::run_and_sync([&] {
@@ -1199,6 +1193,12 @@ TEST(ShocDriver, MultiStepHostDiffusionModeKeepsExportsStable)
             }
         });
 
+        EXPECT_EQ(component_max_abs_difference(cons, Rho_comp, cons_before, Rho_comp), 0.0_rt);
+        EXPECT_EQ(component_max_abs_difference(cons, RhoTheta_comp, cons_before, RhoTheta_comp), 0.0_rt);
+        EXPECT_EQ(component_max_abs_difference(cons, RhoQ1_comp, cons_before, RhoQ1_comp), 0.0_rt);
+        EXPECT_EQ(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
+        EXPECT_EQ(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
+        EXPECT_EQ(component_max_abs_difference(zvel, 0, zvel_before, 0), 0.0_rt);
         expect_driver_diagnostics_stable(driver, max_mix_len);
         for (int comp = 0; comp < EddyDiff::NumDiffs; ++comp) {
             expect_component_minmax_match(eddy_diffs, driver.native_diagnostics(), comp,

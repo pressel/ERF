@@ -101,8 +101,8 @@ step in the microphysics package when a SHOC-family PBL scheme is active.
 
 This does not disable microphysics. Microphysics still handles precipitating
 processes outside SHOC's cloud macrophysics role. Number-aware microphysics
-layouts with cloud-droplet or ice number concentrations need an explicit number
-closure before SHOC tendencies mode can couple to them.
+layouts with cloud-droplet or ice number concentrations still need an explicit
+number closure in their own microphysics pathways if they are coupled to SHOC.
 
 ## Transport modes
 
@@ -111,20 +111,21 @@ Native SHOC has two transport modes.
 The default mode is:
 
 ```text
-erf.shoc.transport_mode = tendencies
+erf.shoc.transport_mode = state_update
 ```
 
-In this mode, SHOC computes tendencies and ERF applies them to momentum,
-thermodynamic, moisture, and TKE fields.
+In this mode, SHOC applies its coupled column increment before the dycore sees
+the state. This avoids splitting theta and momentum from moisture across ERF's
+fast and slow update channels.
 
-The advanced mode is:
+The host-diffusion mode is:
 
 ```text
 erf.shoc.transport_mode = host_diffusion
 ```
 
-In this mode, SHOC exports eddy diffusivities to ERF's host diffusion path. SHOC
-does not add overlapping explicit tendencies.
+In this mode, SHOC exports eddy diffusivities to ERF's host diffusion path.
+SHOC does not apply the pre-dycore state update.
 
 ## Runtime options
 
