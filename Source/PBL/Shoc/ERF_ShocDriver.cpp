@@ -134,10 +134,16 @@ namespace
 
 ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
     : m_lev(lev),
+      m_moisture_type(solver_choice.moisture_type),
       m_moisture_indices(solver_choice.moisture_indices)
 {
     read_shoc_runtime_options(m_opts);
     validate_shoc_runtime_options(m_opts);
+
+    if (uses_host_diffusion() && m_moisture_type != MoistureType::None) {
+        amrex::Abort(
+            "Native SHOC host_diffusion with moisture is not yet supported because SHOC does not own cloud macrophysics in this mode while SHOC-family microphysics condensation is suppressed. Use state_update for moist SHOC runs, or run host_diffusion only for dry cases until a transport-aware microphysics ownership predicate is implemented.");
+    }
 }
 
 void
@@ -301,6 +307,12 @@ ShocDriver::advance (MultiFab& cons,
     {
         BL_PROFILE("SHOC::advance::ensure_storage");
         ensure_storage(cons, xvel, yvel, *eddy_diffs);
+    }
+
+    if (uses_state_update() &&
+        shoc_layout_requires_number_closure(m_moisture_indices, cons.nComp())) {
+        amrex::Abort(
+            "Native SHOC state_update does not yet support number-aware microphysics layouts with cloud/ice number concentrations. A number closure is required before SHOC can update cloud mass in these layouts.");
     }
 
     // Reused across the current host-serial MFIter loop to avoid repeated

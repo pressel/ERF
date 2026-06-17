@@ -103,6 +103,8 @@ This does not disable microphysics. Microphysics still handles precipitating
 processes outside SHOC's cloud macrophysics role. Number-aware microphysics
 layouts with cloud-droplet or ice number concentrations still need an explicit
 number closure in their own microphysics pathways if they are coupled to SHOC.
+Native SHOC `state_update` rejects those number-aware layouts until that
+number closure exists.
 
 ## Transport modes
 
@@ -125,7 +127,8 @@ erf.shoc.transport_mode = host_diffusion
 ```
 
 In this mode, SHOC exports eddy diffusivities to ERF's host diffusion path.
-SHOC does not apply the pre-dycore state update.
+SHOC does not apply the pre-dycore state update. At present this mode is only
+supported for dry/no-moisture configurations.
 
 ## Runtime options
 
@@ -158,7 +161,7 @@ ERF_ShocTKE.cpp          TKE and eddy diffusivity diagnostics
 ERF_ShocMoments.cpp      Second- and third-moment diagnostics
 ERF_ShocPDF.cpp          Assumed-PDF cloud diagnostics
 ERF_ShocEnergyFixer.cpp  Energy and consistency fixes
-ERF_ShocImplicit.cpp     Implicit tendency-mode updates
+ERF_ShocImplicit.cpp     Implicit state-update reconstruction
 ERF_ShocDiagnostics.cpp  Diagnostic sequencing
 ERF_ShocCoupling.cpp     ERF coupling helpers
 ```

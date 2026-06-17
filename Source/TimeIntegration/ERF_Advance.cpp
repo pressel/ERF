@@ -170,6 +170,27 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
                                            SFS_hfx3_lev[lev].get()       , SFS_q1fx3_lev[lev].get()      ,
                                            eddyDiffs_lev[lev].get()      , z_phys_nd[lev].get()          ,
                                            dt_lev);
+
+            if (native_shoc_driver[lev] && native_shoc_driver[lev]->uses_state_update()) {
+                // Native SHOC updates the old-time state before the dycore reads it.
+                // Re-fill the updated state, velocities, and momenta now so the
+                // pre-dycore checks and strain calculation see coherent fields.
+                Vector<MultiFab*> mfs_vel = {&S_old, &U_old, &V_old, &W_old};
+                if (lev == 0) {
+                    FillPatchCrseLevel(lev, time, mfs_vel, false);
+                    VelocityToMomentum(U_old, U_old.nGrowVect(),
+                                       V_old, V_old.nGrowVect(),
+                                       W_old, W_old.nGrowVect(),
+                                       S_old, rU_old[lev], rV_old[lev], rW_old[lev],
+                                       Geom(lev).Domain(),
+                                       domain_bcs_type, c_vfrac);
+                } else {
+                    Vector<MultiFab*> mfs_mom = {&S_old, &rU_old[lev], &rV_old[lev], &rW_old[lev]};
+                    FillPatchFineLevel(lev, time, mfs_vel, mfs_mom,
+                                       base_state[lev], base_state[lev],
+                                       true, false);
+                }
+            }
 #endif
         }
     }
