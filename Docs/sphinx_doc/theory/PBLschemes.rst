@@ -275,7 +275,8 @@ This does not disable microphysics. Microphysics still handles precipitating
 processes outside SHOC's cloud macrophysics role. Choose a moisture model that
 matches the case. Number-aware microphysics layouts with cloud-droplet or ice
 number concentrations still need an explicit number closure in their own
-microphysics pathways if they are coupled to SHOC.
+microphysics pathways if they are coupled to SHOC. Native SHOC ``state_update``
+rejects those number-aware layouts until a number closure is implemented.
 
 Transport modes
 ~~~~~~~~~~~~~~~
@@ -298,7 +299,8 @@ momentum from moisture across ERF's fast and slow update channels.
 
 ``host_diffusion`` remains available. In this mode, SHOC exports eddy
 diffusivities to ERF's host diffusion path. SHOC does not apply the
-pre-dycore state update.
+pre-dycore state update. This mode is currently limited to dry/no-moisture
+configurations.
 
 Runtime options
 ~~~~~~~~~~~~~~~
@@ -318,6 +320,7 @@ recommended starting point. Most options tune the closure or enable diagnostics.
      - ``state_update``
      - ``state_update``, ``host_diffusion``
      - Selects the native SHOC pre-dycore state update or ERF host diffusion.
+       Host diffusion is currently dry/no-moisture only.
    * - ``erf.shoc.lambda_low``
      - ``0.001``
      - Real > 0

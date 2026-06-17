@@ -71,6 +71,7 @@ public:
 private:
     int m_lev;
     ShocRuntimeOptions m_opts;
+    MoistureType m_moisture_type;
     MoistureComponentIndices m_moisture_indices;
 
     amrex::MultiFab m_theta_tend_cc;
