@@ -274,8 +274,8 @@ buoyancy, but it does not create or repartition cloud ice.
 This does not disable microphysics. Microphysics still handles precipitating
 processes outside SHOC's cloud macrophysics role. Choose a moisture model that
 matches the case. Number-aware microphysics layouts with cloud-droplet or ice
-number concentrations need an explicit number closure before SHOC tendencies
-mode can couple to them.
+number concentrations still need an explicit number closure in their own
+microphysics pathways if they are coupled to SHOC.
 
 Transport modes
 ~~~~~~~~~~~~~~~
@@ -284,7 +284,7 @@ Native SHOC has two transport modes:
 
 .. code-block:: text
 
-   erf.shoc.transport_mode = tendencies
+   erf.shoc.transport_mode = state_update
 
 or:
 
@@ -292,12 +292,13 @@ or:
 
    erf.shoc.transport_mode = host_diffusion
 
-``tendencies`` is the default. In this mode, SHOC computes tendencies and ERF
-applies them to momentum, thermodynamic, moisture, and TKE fields.
+``state_update`` is the default. In this mode, SHOC applies its coupled column
+increment before the dycore sees the state. This avoids splitting theta and
+momentum from moisture across ERF's fast and slow update channels.
 
-``host_diffusion`` is an advanced mode. In this mode, SHOC exports eddy
-diffusivities to ERF's host diffusion path. SHOC does not add overlapping
-explicit tendencies.
+``host_diffusion`` remains available. In this mode, SHOC exports eddy
+diffusivities to ERF's host diffusion path. SHOC does not apply the
+pre-dycore state update.
 
 Runtime options
 ~~~~~~~~~~~~~~~
@@ -314,9 +315,9 @@ recommended starting point. Most options tune the closure or enable diagnostics.
      - Values
      - Notes
    * - ``erf.shoc.transport_mode``
-     - ``tendencies``
-     - ``tendencies``, ``host_diffusion``
-     - Selects internal SHOC tendencies or ERF host diffusion.
+     - ``state_update``
+     - ``state_update``, ``host_diffusion``
+     - Selects the native SHOC pre-dycore state update or ERF host diffusion.
    * - ``erf.shoc.lambda_low``
      - ``0.001``
      - Real > 0
@@ -400,7 +401,7 @@ recommended starting point. Most options tune the closure or enable diagnostics.
    * - ``erf.shoc.allow_tendency_microphysics_overlap``
      - ``false``
      - Boolean
-     - Allows host-applied tendencies to overlap microphysics coupling.
+     - Allows host-applied source terms to overlap microphysics coupling.
    * - ``erf.shoc.signed_tke_production``
      - ``false``
      - Boolean
@@ -420,7 +421,7 @@ Diagnostics
 ~~~~~~~~~~~
 
 Native SHOC can write plotfile and 1D profile diagnostics when it runs in
-``tendencies`` mode. Request SHOC diagnostics through the normal plotfile
+``state_update`` mode. Request SHOC diagnostics through the normal plotfile
 variable lists. For example:
 
 .. code-block:: text

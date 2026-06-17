@@ -237,10 +237,10 @@ void erf_slow_rhs_pre (int level, int finest_level,
 #ifdef ERF_USE_NATIVE_SHOC
         if (tc.uses_native_shoc()) {
             AMREX_ALWAYS_ASSERT(native_shoc_lev != nullptr);
-            if (native_shoc_lev->uses_shoc_tendencies()) {
-                // SHOC has already consumed the lower-boundary fluxes inside
-                // its own tendency solve, so prevent the host diffusion path
-                // from applying them a second time.
+            if (native_shoc_lev->owns_surface_fluxes()) {
+                // Native SHOC has already consumed the lower-boundary fluxes
+                // in its pre-dycore state update, so prevent the host
+                // diffusion path from applying them a second time.
                 native_shoc_lev->set_diff_stresses();
                 surface_layer_handled = true;
             } else if (native_shoc_lev->uses_host_diffusion()) {

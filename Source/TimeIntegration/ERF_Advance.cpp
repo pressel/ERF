@@ -153,7 +153,7 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
                                                     z_phys_nd[lev].get());
         }
 
-        // Get SHOC tendencies and update the state
+        // Apply SHOC before the dycore so it sees a coherent state.
         Real* w_sub = (solverChoice.custom_w_subsidence) ? d_w_subsid[lev].data() : nullptr;
         if (solverChoice.turbChoice[lev].uses_eamxx_shoc()) {
 #ifdef ERF_USE_EAMXX_SHOC

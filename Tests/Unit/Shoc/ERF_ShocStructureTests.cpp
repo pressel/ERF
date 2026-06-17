@@ -15,16 +15,57 @@ TEST(ShocRuntimeOptions, DefaultsValidate)
     EXPECT_GE(opts.coeff_km, 0.0);
     EXPECT_GE(opts.coeff_kh, 0.0);
     EXPECT_FALSE(opts.debug_summary);
-    EXPECT_EQ(opts.transport_mode, ShocTransportMode::Tendencies);
+    EXPECT_EQ(opts.transport_mode, ShocTransportMode::StateUpdate);
 }
 
 TEST(ShocRuntimeOptions, TransportModeHelpersMatchIntent)
 {
-    EXPECT_TRUE(shoc_uses_internal_transport(ShocTransportMode::Tendencies));
-    EXPECT_FALSE(shoc_uses_host_diffusion(ShocTransportMode::Tendencies));
+    EXPECT_TRUE(shoc_uses_state_update(ShocTransportMode::StateUpdate));
+    EXPECT_FALSE(shoc_uses_host_diffusion(ShocTransportMode::StateUpdate));
 
-    EXPECT_FALSE(shoc_uses_internal_transport(ShocTransportMode::HostDiffusion));
+    EXPECT_FALSE(shoc_uses_state_update(ShocTransportMode::HostDiffusion));
     EXPECT_TRUE(shoc_uses_host_diffusion(ShocTransportMode::HostDiffusion));
+}
+
+class ScopedParmParseString
+{
+public:
+    ScopedParmParseString (const char* prefix,
+                           const char* name,
+                           const std::string& value)
+        : m_pp(prefix),
+          m_name(name)
+    {
+        m_had_previous = m_pp.query(m_name, m_previous);
+        m_pp.remove(m_name);
+        m_pp.add(m_name, value);
+    }
+
+    ~ScopedParmParseString ()
+    {
+        m_pp.remove(m_name);
+        if (m_had_previous) {
+            m_pp.add(m_name, m_previous);
+        }
+    }
+
+private:
+    amrex::ParmParse m_pp;
+    std::string m_name;
+    std::string m_previous;
+    bool m_had_previous = false;
+};
+
+TEST(ShocRuntimeOptions, LegacyTendenciesTransportModeIsRejected)
+{
+    ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "tendencies");
+
+    EXPECT_DEATH(
+        {
+            ShocRuntimeOptions opts;
+            read_shoc_runtime_options(opts);
+        },
+        "removed for native SHOC");
 }
 
 TEST(ShocStructure, SurfaceLayerUsesUstarFloorAndFiniteObukhov)

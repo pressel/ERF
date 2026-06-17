@@ -15,7 +15,7 @@
 
 enum class ShocTransportMode
 {
-    Tendencies,
+    StateUpdate,
     HostDiffusion
 };
 
@@ -23,16 +23,16 @@ inline const char*
 shoc_transport_mode_name (ShocTransportMode mode)
 {
     switch (mode) {
-    case ShocTransportMode::Tendencies:   return "tendencies";
+    case ShocTransportMode::StateUpdate:   return "state_update";
     case ShocTransportMode::HostDiffusion:return "host_diffusion";
     }
     return "unknown";
 }
 
 inline bool
-shoc_uses_internal_transport (ShocTransportMode mode)
+shoc_uses_state_update (ShocTransportMode mode)
 {
-    return mode == ShocTransportMode::Tendencies;
+    return mode == ShocTransportMode::StateUpdate;
 }
 
 inline bool
@@ -68,7 +68,7 @@ struct ShocRuntimeOptions
     bool debug_summary = false;
     bool allow_tendency_microphysics_overlap = false;
     bool signed_tke_production = false;
-    ShocTransportMode transport_mode = ShocTransportMode::Tendencies;
+    ShocTransportMode transport_mode = ShocTransportMode::StateUpdate;
 };
 
 struct ShocColumnLayout
@@ -192,12 +192,15 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
     if (pp.query("transport_mode", transport_mode)) {
         std::transform(transport_mode.begin(), transport_mode.end(), transport_mode.begin(),
                        [] (unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (transport_mode == "tendencies") {
-            opts.transport_mode = ShocTransportMode::Tendencies;
+        if (transport_mode == "state_update") {
+            opts.transport_mode = ShocTransportMode::StateUpdate;
         } else if (transport_mode == "host_diffusion") {
             opts.transport_mode = ShocTransportMode::HostDiffusion;
+        } else if (transport_mode == "tendencies") {
+            amrex::Abort(
+                "erf.shoc.transport_mode = tendencies has been removed for native SHOC. Use erf.shoc.transport_mode = state_update. Native SHOC now applies its coupled column increment before the dycore to avoid splitting theta and momentum from moisture.");
         } else {
-            amrex::Abort("erf.shoc.transport_mode must be 'tendencies' or 'host_diffusion'");
+            amrex::Abort("erf.shoc.transport_mode must be 'state_update' or 'host_diffusion'");
         }
     }
 }
