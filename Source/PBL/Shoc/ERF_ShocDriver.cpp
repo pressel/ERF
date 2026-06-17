@@ -140,7 +140,7 @@ ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
     read_shoc_runtime_options(m_opts);
     validate_shoc_runtime_options(m_opts);
 
-    if (uses_host_diffusion() && external_microphysics_active()) {
+    if (uses_host_diffusion() && m_moisture_type != MoistureType::None) {
         amrex::Abort(
             "Native SHOC host_diffusion with moisture is not yet supported because SHOC does not own cloud macrophysics in this mode while SHOC-family microphysics condensation is suppressed. Use state_update for moist SHOC runs, or run host_diffusion only for dry cases until a transport-aware microphysics ownership predicate is implemented.");
     }
@@ -309,6 +309,12 @@ ShocDriver::advance (MultiFab& cons,
         ensure_storage(cons, xvel, yvel, *eddy_diffs);
     }
 
+    if (uses_state_update() &&
+        shoc_layout_requires_number_closure(m_moisture_indices, cons.nComp())) {
+        amrex::Abort(
+            "Native SHOC state_update does not yet support number-aware microphysics layouts with cloud/ice number concentrations. A number closure is required before SHOC can update cloud mass in these layouts.");
+    }
+
     // Reused across the current host-serial MFIter loop to avoid repeated
     // SHOC scratch allocation. If this loop is parallelized on the host,
     // make the workspace thread-private.
@@ -338,17 +344,17 @@ ShocDriver::advance (MultiFab& cons,
             seed_carried_turbulence(col, mfi, cons, *eddy_diffs);
         }
         const auto dx = geom.CellSizeArray();
-        if (uses_shoc_tendencies()) {
+        if (uses_state_update()) {
             BL_PROFILE("SHOC::advance::cache_baseline_state");
             ShocImplicit::cache_baseline_state(col);
         }
         ShocDiagnostics::diagnose_pre_implicit(col, m_opts, dx[0], dx[1], dt);
-        if (uses_shoc_tendencies()) {
+        if (uses_state_update()) {
             BL_PROFILE("SHOC::advance::implicit");
             ShocImplicit::advance_implicit_state(col, m_opts, dt);
         }
         ShocDiagnostics::diagnose_post_implicit(col, m_opts, dt);
-        if (uses_shoc_tendencies()) {
+        if (uses_state_update()) {
             BL_PROFILE("SHOC::advance::finalize");
             ShocImplicit::finalize_from_pdf(col, m_opts, dt);
         }
@@ -480,7 +486,7 @@ ShocDriver::advance (MultiFab& cons,
                     buoy_prod_arr(i,j,k) = buoy_prod(ic,kk,0);
                     diss_tke_arr(i,j,k) = diss_tke(ic,kk,0);
                 }
-            });
+                });
         }
 
     }
@@ -523,6 +529,16 @@ ShocDriver::advance (MultiFab& cons,
         }
     }
 
+    if (uses_state_update()) {
+        BL_PROFILE("SHOC::advance::state_update");
+        apply_state_update(cons, xvel, yvel, dt);
+    }
+
+    if (uses_state_update()) {
+        xvel.FillBoundary(geom.periodicity());
+        yvel.FillBoundary(geom.periodicity());
+    }
+
     m_prev_turb_valid = true;
     ++m_advance_calls;
     if (m_opts.debug_summary) {
@@ -554,7 +570,7 @@ ShocDriver::set_diff_stresses () const
 {
     BL_PROFILE("SHOC::set_diff_stresses");
 
-    if (!uses_shoc_tendencies()) {
+    if (!owns_surface_fluxes()) {
         // In host_diffusion mode the host diffusion path owns the overlapping
         // surface fluxes and stresses, so SHOC must not clear them here.
         return;
@@ -592,45 +608,7 @@ ShocDriver::add_fast_tend (Vector<MultiFab>& S_rhs) const
 {
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
 
-    if (!uses_shoc_tendencies()) {
-        // In host_diffusion mode SHOC exports diffusivities only; it does not
-        // add overlapping explicit fast tendencies on top of host transport.
-        return;
-    }
-
-    for (MFIter mfi(*m_cons_ptr, false); mfi.isValid(); ++mfi) {
-        const Box& vbx = mfi.validbox();
-        const int ilo = vbx.smallEnd(0);
-        const int ihi = vbx.bigEnd(0);
-        const int jlo = vbx.smallEnd(1);
-        const int jhi = vbx.bigEnd(1);
-        const auto rho = m_cons_ptr->const_array(mfi);
-        const auto theta_tend = m_theta_tend_cc.const_array(mfi);
-        const auto u_tend = m_u_tend_fc.const_array(mfi);
-        const auto v_tend = m_v_tend_fc.const_array(mfi);
-        const auto cc_rhs = S_rhs[IntVars::cons].array(mfi);
-        const auto x_rhs = S_rhs[IntVars::xmom].array(mfi);
-        const auto y_rhs = S_rhs[IntVars::ymom].array(mfi);
-
-        ParallelFor(mfi.validbox(),
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            cc_rhs(i,j,k,RhoTheta_comp) += rho(i,j,k,Rho_comp) * theta_tend(i,j,k);
-        });
-        ParallelFor(convert(vbx, IntVect(1,0,0)),
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            const int il = amrex::max(i - 1, ilo);
-            const int ir = amrex::min(i, ihi);
-            const Real rho_face = 0.5 * (rho(il,j,k,Rho_comp) + rho(ir,j,k,Rho_comp));
-            x_rhs(i,j,k) += rho_face * u_tend(i,j,k);
-        });
-        ParallelFor(convert(vbx, IntVect(0,1,0)),
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            const int jb = amrex::max(j - 1, jlo);
-            const int jt = amrex::min(j, jhi);
-            const Real rho_face = 0.5 * (rho(i,jb,k,Rho_comp) + rho(i,jt,k,Rho_comp));
-            y_rhs(i,j,k) += rho_face * v_tend(i,j,k);
-        });
-    }
+    amrex::ignore_unused(S_rhs);
 }
 
 void
@@ -639,38 +617,7 @@ ShocDriver::add_slow_tend (const MFIter& mfi,
                            const Array4<Real>& cell_rhs) const
 {
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
-
-    if (!uses_shoc_tendencies()) {
-        // In host_diffusion mode SHOC leaves the overlapping slow transport on
-        // the host diffusion path rather than adding internal RHS terms here.
-        return;
-    }
-
-    const auto rho = m_cons_ptr->const_array(mfi);
-    const auto qv_tend = m_qv_tend_cc.const_array(mfi);
-    const auto qc_tend = m_qc_tend_cc.const_array(mfi);
-    const auto qi_tend = m_qi_tend_cc.const_array(mfi);
-    const auto tke_tend = m_tke_tend_cc.const_array(mfi);
-    const int qv_comp = m_moisture_indices.qv;
-    const int qc_comp = m_moisture_indices.qc;
-    const int qi_comp = m_moisture_indices.qi;
-    const bool has_qv = shoc_valid_comp(qv_comp, m_cons_ptr->nComp());
-    const bool has_qc = shoc_valid_comp(qc_comp, m_cons_ptr->nComp());
-    const bool has_qi = shoc_valid_comp(qi_comp, m_cons_ptr->nComp());
-    const bool add_moisture = apply_shoc_moisture_tendencies();
-
-    ParallelFor(tbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-        cell_rhs(i,j,k,RhoKE_comp) += rho(i,j,k,Rho_comp) * tke_tend(i,j,k);
-        if (add_moisture && has_qv) cell_rhs(i,j,k,qv_comp) += rho(i,j,k,Rho_comp) * qv_tend(i,j,k);
-        if (add_moisture && has_qc) cell_rhs(i,j,k,qc_comp) += rho(i,j,k,Rho_comp) * qc_tend(i,j,k);
-        if (add_moisture && has_qi) cell_rhs(i,j,k,qi_comp) += rho(i,j,k,Rho_comp) * qi_tend(i,j,k);
-    });
-}
-
-bool
-ShocDriver::uses_shoc_tendencies () const
-{
-    return shoc_uses_internal_transport(m_opts.transport_mode);
+    amrex::ignore_unused(mfi, tbx, cell_rhs);
 }
 
 bool
@@ -680,19 +627,76 @@ ShocDriver::uses_host_diffusion () const
 }
 
 bool
-ShocDriver::external_microphysics_active () const
+ShocDriver::uses_state_update () const
 {
-    return m_moisture_type != MoistureType::None;
+    return shoc_uses_state_update(m_opts.transport_mode);
 }
 
 bool
-ShocDriver::apply_shoc_moisture_tendencies () const
+ShocDriver::owns_surface_fluxes () const
 {
-    if (!uses_shoc_tendencies()) {
-        return false;
+    return uses_state_update();
+}
+
+void
+ShocDriver::apply_state_update (MultiFab& cons,
+                                MultiFab& xvel,
+                                MultiFab& yvel,
+                                Real dt) const
+{
+    AMREX_ALWAYS_ASSERT(dt > 0.0);
+
+    const int qv_comp = m_moisture_indices.qv;
+    const int qc_comp = m_moisture_indices.qc;
+    const int qi_comp = m_moisture_indices.qi;
+    const bool has_qv = shoc_valid_comp(qv_comp, cons.nComp());
+    const bool has_qc = shoc_valid_comp(qc_comp, cons.nComp());
+    const bool has_qi = shoc_valid_comp(qi_comp, cons.nComp());
+
+    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+        const auto rho = cons.const_array(mfi);
+        auto cc = cons.array(mfi);
+        const auto theta_tend = m_theta_tend_cc.const_array(mfi);
+        const auto qv_tend = m_qv_tend_cc.const_array(mfi);
+        const auto qc_tend = m_qc_tend_cc.const_array(mfi);
+        const auto qi_tend = m_qi_tend_cc.const_array(mfi);
+        const auto tke_tend = m_tke_tend_cc.const_array(mfi);
+
+        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const Real rho_val = rho(i,j,k,Rho_comp);
+            cc(i,j,k,RhoTheta_comp) += rho_val * dt * theta_tend(i,j,k);
+            if (has_qv) {
+                cc(i,j,k,qv_comp) = amrex::max(
+                    cc(i,j,k,qv_comp) + rho_val * dt * qv_tend(i,j,k), 0.0_rt);
+            }
+            if (has_qc) {
+                cc(i,j,k,qc_comp) = amrex::max(
+                    cc(i,j,k,qc_comp) + rho_val * dt * qc_tend(i,j,k), 0.0_rt);
+            }
+            if (has_qi) {
+                cc(i,j,k,qi_comp) = amrex::max(
+                    cc(i,j,k,qi_comp) + rho_val * dt * qi_tend(i,j,k), 0.0_rt);
+            }
+            cc(i,j,k,RhoKE_comp) = amrex::max(
+                cc(i,j,k,RhoKE_comp) + rho_val * dt * tke_tend(i,j,k), 0.0_rt);
+        });
     }
 
-    return true;
+    for (MFIter mfi(m_u_tend_fc, false); mfi.isValid(); ++mfi) {
+        auto x = xvel.array(mfi);
+        const auto u_tend = m_u_tend_fc.const_array(mfi);
+        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            x(i,j,k) += dt * u_tend(i,j,k);
+        });
+    }
+
+    for (MFIter mfi(m_v_tend_fc, false); mfi.isValid(); ++mfi) {
+        auto y = yvel.array(mfi);
+        const auto v_tend = m_v_tend_fc.const_array(mfi);
+        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            y(i,j,k) += dt * v_tend(i,j,k);
+        });
+    }
 }
 
 void
@@ -711,7 +715,7 @@ ShocDriver::print_debug_summary (Real dt) const
                    << " call=" << m_advance_calls
                    << " dt=" << dt
                    << " transport_mode=" << shoc_transport_mode_name(m_opts.transport_mode)
-                   << " moisture_tendencies=" << (apply_shoc_moisture_tendencies() ? "on" : "off")
+                   << " state_update=" << (uses_state_update() ? "on" : "off")
                    << "\n";
 
     print_minmax("Kmv", m_eddy_coeffs_cc, EddyDiff::Mom_v);
