@@ -993,7 +993,7 @@ TEST(ShocDriver, HostDiffusionWithMoistureIsRejected)
     ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "host_diffusion");
 
     SolverChoice solver_choice;
-    solver_choice.moisture_type = MoistureType::None;
+    solver_choice.moisture_type = MoistureType::Morrison;
 
     EXPECT_DEATH(
         {
