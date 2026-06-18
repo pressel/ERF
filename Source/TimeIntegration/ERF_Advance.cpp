@@ -178,9 +178,9 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
                 Vector<MultiFab*> mfs_vel = {&S_old, &U_old, &V_old, &W_old};
                 if (lev == 0) {
                     FillPatchCrseLevel(lev, time, mfs_vel, false);
-                    VelocityToMomentum(U_old, U_old.nGrowVect(),
-                                       V_old, V_old.nGrowVect(),
-                                       W_old, W_old.nGrowVect(),
+                    VelocityToMomentum(U_old, rU_old[lev].nGrowVect(),
+                                       V_old, rV_old[lev].nGrowVect(),
+                                       W_old, rW_old[lev].nGrowVect(),
                                        S_old, rU_old[lev], rV_old[lev], rW_old[lev],
                                        Geom(lev).Domain(),
                                        domain_bcs_type, c_vfrac);
