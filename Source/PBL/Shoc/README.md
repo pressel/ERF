@@ -130,79 +130,215 @@ In this mode, SHOC exports eddy diffusivities to ERF's host diffusion path.
 SHOC does not apply the pre-dycore state update. At present this mode is only
 supported for dry/no-moisture configurations.
 
+## Preferred baseline input settings
+
+Use `state_update` as the baseline native SHOC coupling mode. In this mode,
+native SHOC runs its column physics before the ERF dycore. SHOC performs its
+implicit vertical turbulence solve, reconstructs one coupled heat, moisture,
+cloud, turbulent-kinetic-energy, and horizontal-momentum update, and applies
+that update to the old-time ERF state before acoustic and Runge-Kutta dycore
+integration starts.
+
+A minimal preferred native SHOC block is:
+
+```text
+# Native SHOC selection.
+zlo.type = "surface_layer"
+erf.pbl_type = NATIVE_SHOC
+
+# Native SHOC coupling.
+erf.shoc.transport_mode = state_update
+
+# Preferred TKE-production behavior.
+erf.shoc.signed_tke_production = true
+
+# Useful during development and case bring-up.
+erf.shoc.extra_shoc_diags = true
+```
+
+`state_update` is the preferred coupled mode for moist native SHOC runs. It
+keeps SHOC's thermodynamic, moisture, cloud, TKE, and horizontal-momentum
+increments together before the dycore sees the state. This avoids splitting one
+SHOC column update across ERF's fast and slow right-hand-side paths.
+
+`erf.shoc.signed_tke_production = true` keeps the buoyancy contribution signed in
+the TKE production term. Use it for the baseline unless a case has a specific
+reason to use the clipped behavior.
+
+Do not use `erf.shoc.transport_mode = tendencies` for native SHOC. That legacy
+mode has been removed and should be rejected by the runtime parser.
+
+`host_diffusion` remains available for dry/no-moisture configurations. In that
+mode, SHOC exports vertical eddy diffusivities to ERF's host diffusion path, but
+it does not apply the coupled pre-dycore state update. Do not use
+`host_diffusion` for moist SHOC runs until microphysics and cloud-macrophysics
+ownership is made transport-mode-aware.
+
+The snippet above does not choose a microphysics package, radiation scheme, land
+surface model, terrain option, grid, or timestep. Those remain case choices.
+
+## Recommended native SHOC plotfile variables
+
+Request SHOC diagnostics through the normal ERF plotfile variable lists. Use the
+plotfile stream that matches the case. For example, use `erf.plot_vars_2` instead
+of `erf.plot_vars_1` when the SHOC diagnostics should go to the second plotfile
+stream.
+
+A compact bring-up list is:
+
+```text
+erf.plot_vars_1 = density rhotheta theta qv qc Kmv Khv Lturb shoc_cldfrac shoc_ql shoc_ql2 shoc_cond wqls_sec wthv_sec w_sec thl_sec qw_sec qwthl_sec wthl_sec wqw_sec w3 brunt isotropy shear_prod buoy_prod diss_tke
+```
+
+The recommended variables cover these groups:
+
+| Variable | Purpose |
+| --- | --- |
+| `density`, `rhotheta`, `theta`, `qv`, `qc` | State context for checking the SHOC thermodynamic and moisture update. |
+| `Kmv`, `Khv`, `Lturb` | SHOC vertical momentum diffusivity, heat diffusivity, and turbulent length scale. |
+| `shoc_cldfrac`, `shoc_ql`, `shoc_ql2`, `shoc_cond` | Assumed-PDF cloud fraction, liquid water, liquid-water variance, and condensation diagnostic. |
+| `wqls_sec`, `wthv_sec`, `w_sec` | Vertical flux and vertical-velocity variance diagnostics. |
+| `thl_sec`, `qw_sec`, `qwthl_sec`, `wthl_sec`, `wqw_sec`, `w3` | Higher-order thermodynamic, moisture, and velocity moments. |
+| `brunt`, `isotropy`, `shear_prod`, `buoy_prod`, `diss_tke` | Stability, isotropy, and TKE-budget diagnostics. |
+
+When combining native SHOC with host LES diagnostics, also consider adding
+`Kmh`, `Khh`, and `nut`. `Kmh` and `Khh` come from the host horizontal eddy
+diffusivity fields. `nut` is the cell-centered eddy viscosity diagnostic derived
+from the momentum diffusivity.
+
+Native-only SHOC diagnostics are meaningful only after the native driver has run.
+If the user requests those variables in a non-native-SHOC run, the plotfile path
+may write missing-value placeholders.
+
+`erf.shoc.extra_shoc_diags` helps during development, but it is not the plotfile
+selection mechanism. Always request plotfile fields explicitly with
+`erf.plot_vars_1` or `erf.plot_vars_2`.
+
+## Native SHOC coupling invariants
+
+Preserve these invariants unless the design changes deliberately:
+
+1. Select native SHOC with the runtime PBL type. Do not use compile-time macros
+   as a substitute for runtime checks.
+2. Native SHOC requires full-height AMReX boxes on SHOC-active levels. Do not
+   use a vertical box split on those levels.
+3. `state_update` is the default native SHOC transport mode.
+4. In `state_update`, SHOC applies one coupled pre-dycore update to heat,
+   moisture, non-precipitating cloud liquid, carried cloud ice, TKE, and
+   horizontal velocity.
+5. The `state_update` update does not change density, vertical velocity, passive
+   scalars, or precipitating species.
+6. In `state_update`, SHOC consumes lower-boundary heat, moisture, and momentum
+   flux arrays and clears them after use.
+7. In `state_update`, SHOC must not also add fast or slow RHS tendencies.
+8. After native SHOC updates the old-time state, ERF must synchronize boundary
+   and halo data before pre-dycore checks, strain, turbulent viscosity, momentum
+   conversion, primitive variables, pressure, or fast coefficients read the
+   fields.
+9. `host_diffusion` is dry/no-moisture only until microphysics and cloud
+   macrophysics ownership is transport-mode-aware.
+10. Number-aware microphysics layouts with cloud or ice number concentrations
+    must abort until a number closure exists.
+11. Microphysics remains active after SHOC. SHOC owns only non-precipitating
+    liquid-cloud macrophysics under the interim cloud contract. Microphysics owns
+    precipitation formation, precipitation sinks and sources, sedimentation,
+    deposition, sublimation, freezing, melting, and other phase-change processes
+    outside that contract.
+
+The interim cloud contract means native SHOC may read a pre-existing cloud-ice
+field for thermodynamics and buoyancy. It may carry that bounded ice field
+through the coupled reconstruction. It does not create, destroy, or repartition
+cloud ice as a microphysics process.
+
 ## ERF time-step integration
 
 Native SHOC runs inside `ERF::Advance()` once per ERF time step on each
-SHOC-active level. At the start of the step, ERF swaps old and new state
-pointers, fill-patches level data when needed, and converts old velocities to
-old momenta. If the lower boundary uses the surface-layer boundary condition,
-ERF updates the surface-layer state and computes the lower-boundary heat,
-moisture, and momentum flux arrays before SHOC runs. Those fluxes may come from
-Monin-Obukhov similarity theory (MOST), prescribed surface-layer inputs, or an
-active land or ocean surface model when that model provides fluxes. Radiation
-sources are also updated on the old state before SHOC runs.
+SHOC-active level. The broad order is:
+
+```text
+old/new state swap
+-> fill-patch old state and velocities when needed
+-> convert old velocities to old momenta
+-> update surface-layer state and lower-boundary fluxes
+-> update radiation sources on the old state
+-> impose surface-layer boundary conditions for SHOC flux arrays
+-> run native SHOC
+-> synchronize old-state boundaries, halos, and momenta after SHOC state_update
+-> run pre-dycore checks
+-> run the dycore and multirate integrator
+-> run microphysics, unless tight coupling moves it into the slow post-RHS path
+-> run the land-surface model
+-> impose new-state boundary conditions needed for later fill-patching
+```
+
+At the start of the step, ERF swaps old and new state pointers. On refined
+levels, ERF fill-patches the old conserved state and velocities. ERF then
+rebuilds old momenta from the old velocities and density.
+
+If the lower boundary uses the surface-layer boundary condition, ERF updates the
+surface-layer state and computes lower-boundary heat, moisture, and momentum
+fluxes before SHOC runs. These fluxes may come from Monin-Obukhov similarity
+theory (MOST), prescribed surface-layer inputs, or an active land or ocean
+surface model when that model provides fluxes. ERF also updates radiation sources
+on the old state before SHOC runs.
 
 When `erf.pbl_type = NATIVE_SHOC`, ERF calls `compute_native_shoc_tendencies()`
 before `advance_dycore()`. The coupling call passes the old conserved state,
 face velocities, vertical velocity, surface stress and flux arrays,
 eddy-diffusivity storage, terrain metrics, optional subsidence data, and `dt` to
-`ShocDriver::advance()`. The driver preprocesses each full-height AMReX box into
-SHOC column data. It reads density, potential temperature, water species,
-pressure and temperature diagnostics, velocities, geometry, carried turbulence
-state, and lower-boundary fluxes. It converts ERF's density-weighted surface
-fluxes and stresses to the kinematic quantities used by the SHOC column solve.
+`ShocDriver::advance()`.
 
-The coupling then depends on `erf.shoc.transport_mode`.
+`ShocDriver::advance()` preprocesses each full-height AMReX box into SHOC column
+data. It reads density, potential temperature, moisture species, pressure and
+temperature diagnostics, velocities, geometry, carried turbulence state, and
+lower-boundary fluxes. It converts ERF's density-weighted surface fluxes and
+stresses to the kinematic quantities used by SHOC.
 
-In the default `state_update` mode, SHOC computes one coupled column increment
-for potential temperature, water vapor, non-precipitating cloud liquid,
-pre-existing cloud ice, turbulent kinetic energy, and horizontal velocity. It
-applies that increment directly to the old ERF state before the dycore sees the
-state. This update does not change density, vertical velocity, passive scalars,
-or precipitating species. After SHOC consumes the lower-boundary fluxes and
-stresses, it clears the corresponding ERF arrays so the host diffusion path does
-not apply the same surface terms a second time. The native SHOC fast and slow
-right-hand-side hooks remain no-ops in this mode. This prevents double
-application and avoids splitting SHOC's coupled thermodynamic and momentum
-update across ERF's fast and slow integrator channels.
+The coupling then follows `erf.shoc.transport_mode`.
 
-After the `state_update` increment, `ERF::Advance()` immediately refreshes
-boundary and halo data before any pre-dycore checks or dycore precomputations.
-On level 0, `FillPatchCrseLevel()` refills `S_old`, `U_old`, `V_old`, and
-`W_old`, and `VelocityToMomentum()` rebuilds `rU_old`, `rV_old`, and `rW_old`
-from the synchronized velocities and density. On refined levels,
-`FillPatchFineLevel()` refills conserved state, velocities, and momenta through
-the coarse/fine fill-patch machinery. This synchronization happens before the
+In `state_update`, SHOC caches the baseline state, diagnoses structure and TKE,
+runs the implicit column update, diagnoses moments and the assumed-PDF cloud
+state, reconstructs the updated ERF thermodynamic state, and forms tendencies
+relative to the baseline state. It then applies those tendencies directly to the
+old conserved state and horizontal velocities. This is a state update, not an ERF
+RHS tendency path.
+
+After the `state_update` increment, `ERF::Advance()` immediately refreshes the
+fields the dycore will read. On level 0, `FillPatchCrseLevel()` refills `S_old`,
+`U_old`, `V_old`, and `W_old`, and `VelocityToMomentum()` rebuilds `rU_old`,
+`rV_old`, and `rW_old` from the synchronized velocities and density. On refined
+levels, `FillPatchFineLevel()` refills conserved state, velocities, and momenta
+through the coarse/fine fill-patch path. This synchronization happens before the
 pre-dycore NaN and temperature checks and before `advance_dycore()` computes
 strain, eddy viscosity, primitive variables, Exner pressure, fast coefficients,
 and the multirate time integrator.
 
 During the dycore step, native SHOC in `state_update` mode does not add fast or
-slow RHS source terms. ERF still builds host turbulence and diffusion terms as
-needed. `ShocDriver::set_eddy_diffs()` clears the SHOC-owned vertical
-diffusivity components from the host eddy-diffusivity arrays, except for
-non-transport diagnostics such as the SHOC length scale, so the host does not
-reapply SHOC vertical transport. `ShocDriver::set_diff_stresses()` clears the
-SHOC-consumed lower-boundary surface terms when `owns_surface_fluxes()` is true.
+slow RHS source terms. `ShocDriver::set_eddy_diffs()` clears the SHOC-owned
+vertical diffusivity components from the host eddy-diffusivity arrays, except for
+non-transport diagnostics such as the SHOC length scale. This prevents the host
+from reapplying SHOC vertical transport. `ShocDriver::set_diff_stresses()` clears
+the lower-boundary surface terms that SHOC already consumed when
+`owns_surface_fluxes()` is true.
 
-In `host_diffusion` mode, SHOC does not apply the pre-dycore state update and
-does not own the surface fluxes. Instead, SHOC exports vertical eddy-diffusivity
+In `host_diffusion`, SHOC does not apply the pre-dycore state update and does not
+own the surface fluxes. Instead, SHOC exports vertical eddy-diffusivity
 coefficients to ERF's host diffusion path. This mode is currently limited to
 dry/no-moisture configurations because SHOC-family microphysics suppresses
-saturation-adjustment or condensation while host-diffusion SHOC does not own the
+saturation adjustment or condensation while host-diffusion SHOC does not own the
 cloud-macrophysics mass update.
 
-Microphysics runs after the dycore unless `erf.moisture_tight_coupling = true`.
-With the default loose coupling, `ERF::Advance()` calls `advance_microphysics()`
-after `advance_dycore()` produces `S_new`. With tight coupling, ERF calls
-microphysics inside the slow post-RHS path. In both cases, SHOC-family PBL
-selection disables the microphysics saturation-adjustment or condensation step to
-avoid double-counting SHOC's non-precipitating liquid-cloud macrophysics.
-Microphysics still handles precipitating processes outside SHOC's cloud
-macrophysics role. After loose-coupled microphysics, ERF advances the land-surface
-model. That land-surface update affects fluxes used by later surface-layer
-updates; it is not a second SHOC surface-flux application in the same pre-dycore
-state update.
+Microphysics runs after the dycore with the default loose coupling. In that mode,
+`ERF::Advance()` calls `advance_microphysics()` after `advance_dycore()` produces
+`S_new`. If `erf.moisture_tight_coupling = true`, ERF calls microphysics inside
+the slow post-RHS path instead. In both cases, SHOC-family PBL selection disables
+the microphysics saturation-adjustment or condensation step to avoid double
+counting SHOC's non-precipitating liquid-cloud macrophysics. Microphysics still
+handles precipitating processes outside SHOC's cloud macrophysics role.
+
+After loose-coupled microphysics, ERF advances the land-surface model. That
+land-surface update affects fluxes used by later surface-layer updates. It is not
+a second SHOC surface-flux application in the same pre-dycore state update.
 
 ## Runtime options
 
