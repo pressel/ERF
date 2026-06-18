@@ -1198,6 +1198,11 @@ private:
                                                     "Khv","Khh",
                                                     // turbulence lengthscale
                                                     "Lturb",
+                                                    // native SHOC diagnostics
+                                                    "pblh", "shoc_cldfrac", "shoc_ql", "shoc_ql2", "shoc_cond",
+                                                    "wqls_sec", "wthv_sec", "w_sec",
+                                                    "thl_sec", "qw_sec", "qwthl_sec", "wthl_sec", "wqw_sec", "w3",
+                                                    "brunt", "isotropy", "shear_prod", "buoy_prod", "diss_tke",
                                                     // wall distance
                                                     "walldist",
                                                     // dissipation

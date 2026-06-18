@@ -1131,6 +1131,11 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             }
             mf_comp ++;
         };
+        if (containerHasElement(plot_var_names, "pblh")) {
+            copy_native_shoc_diagnostic(have_native_shoc_diagnostics
+                                        ? &native_shoc_driver[lev]->pblh_diagnostics()
+                                        : nullptr);
+        }
         if (containerHasElement(plot_var_names, "shoc_cldfrac")) {
             copy_native_shoc_diagnostic(have_native_shoc_diagnostics
                                         ? &native_shoc_driver[lev]->shoc_cldfrac_diagnostics()
