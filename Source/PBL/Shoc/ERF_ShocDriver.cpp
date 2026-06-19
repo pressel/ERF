@@ -130,6 +130,64 @@ namespace
             }
         });
     }
+
+    void apply_state_update_cons_impl (MultiFab& cons,
+                                       const MultiFab& theta_tend_cc,
+                                       const MultiFab& qv_tend_cc,
+                                       const MultiFab& qc_tend_cc,
+                                       const MultiFab& qi_tend_cc,
+                                       const MultiFab& tke_tend_cc,
+                                       int qv_comp,
+                                       int qc_comp,
+                                       int qi_comp,
+                                       Real dt)
+    {
+        const bool has_qv = shoc_valid_comp(qv_comp, cons.nComp());
+        const bool has_qc = shoc_valid_comp(qc_comp, cons.nComp());
+        const bool has_qi = shoc_valid_comp(qi_comp, cons.nComp());
+
+        for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+            const auto rho = cons.const_array(mfi);
+            auto cc = cons.array(mfi);
+            const auto theta_tend = theta_tend_cc.const_array(mfi);
+            const auto qv_tend = qv_tend_cc.const_array(mfi);
+            const auto qc_tend = qc_tend_cc.const_array(mfi);
+            const auto qi_tend = qi_tend_cc.const_array(mfi);
+            const auto tke_tend = tke_tend_cc.const_array(mfi);
+
+            ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const Real rho_val = rho(i,j,k,Rho_comp);
+                cc(i,j,k,RhoTheta_comp) += rho_val * dt * theta_tend(i,j,k);
+                if (has_qv) {
+                    cc(i,j,k,qv_comp) = amrex::max(
+                        cc(i,j,k,qv_comp) + rho_val * dt * qv_tend(i,j,k), 0.0_rt);
+                }
+                if (has_qc) {
+                    cc(i,j,k,qc_comp) = amrex::max(
+                        cc(i,j,k,qc_comp) + rho_val * dt * qc_tend(i,j,k), 0.0_rt);
+                }
+                if (has_qi) {
+                    cc(i,j,k,qi_comp) = amrex::max(
+                        cc(i,j,k,qi_comp) + rho_val * dt * qi_tend(i,j,k), 0.0_rt);
+                }
+                cc(i,j,k,RhoKE_comp) = amrex::max(
+                    cc(i,j,k,RhoKE_comp) + rho_val * dt * tke_tend(i,j,k), 0.0_rt);
+            });
+        }
+    }
+
+    void apply_state_update_face_velocity_impl (MultiFab& vel,
+                                                const MultiFab& vel_tend,
+                                                Real dt)
+    {
+        for (MFIter mfi(vel_tend, false); mfi.isValid(); ++mfi) {
+            auto v = vel.array(mfi);
+            const auto tend = vel_tend.const_array(mfi);
+            ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                v(i,j,k) += dt * tend(i,j,k);
+            });
+        }
+    }
 }
 
 ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
@@ -646,57 +704,19 @@ ShocDriver::apply_state_update (MultiFab& cons,
 {
     AMREX_ALWAYS_ASSERT(dt > 0.0);
 
-    const int qv_comp = m_moisture_indices.qv;
-    const int qc_comp = m_moisture_indices.qc;
-    const int qi_comp = m_moisture_indices.qi;
-    const bool has_qv = shoc_valid_comp(qv_comp, cons.nComp());
-    const bool has_qc = shoc_valid_comp(qc_comp, cons.nComp());
-    const bool has_qi = shoc_valid_comp(qi_comp, cons.nComp());
+    apply_state_update_cons_impl(cons,
+                                 m_theta_tend_cc,
+                                 m_qv_tend_cc,
+                                 m_qc_tend_cc,
+                                 m_qi_tend_cc,
+                                 m_tke_tend_cc,
+                                 m_moisture_indices.qv,
+                                 m_moisture_indices.qc,
+                                 m_moisture_indices.qi,
+                                 dt);
 
-    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
-        const auto rho = cons.const_array(mfi);
-        auto cc = cons.array(mfi);
-        const auto theta_tend = m_theta_tend_cc.const_array(mfi);
-        const auto qv_tend = m_qv_tend_cc.const_array(mfi);
-        const auto qc_tend = m_qc_tend_cc.const_array(mfi);
-        const auto qi_tend = m_qi_tend_cc.const_array(mfi);
-        const auto tke_tend = m_tke_tend_cc.const_array(mfi);
-
-        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            const Real rho_val = rho(i,j,k,Rho_comp);
-            cc(i,j,k,RhoTheta_comp) += rho_val * dt * theta_tend(i,j,k);
-            if (has_qv) {
-                cc(i,j,k,qv_comp) = amrex::max(
-                    cc(i,j,k,qv_comp) + rho_val * dt * qv_tend(i,j,k), 0.0_rt);
-            }
-            if (has_qc) {
-                cc(i,j,k,qc_comp) = amrex::max(
-                    cc(i,j,k,qc_comp) + rho_val * dt * qc_tend(i,j,k), 0.0_rt);
-            }
-            if (has_qi) {
-                cc(i,j,k,qi_comp) = amrex::max(
-                    cc(i,j,k,qi_comp) + rho_val * dt * qi_tend(i,j,k), 0.0_rt);
-            }
-            cc(i,j,k,RhoKE_comp) = amrex::max(
-                cc(i,j,k,RhoKE_comp) + rho_val * dt * tke_tend(i,j,k), 0.0_rt);
-        });
-    }
-
-    for (MFIter mfi(m_u_tend_fc, false); mfi.isValid(); ++mfi) {
-        auto x = xvel.array(mfi);
-        const auto u_tend = m_u_tend_fc.const_array(mfi);
-        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            x(i,j,k) += dt * u_tend(i,j,k);
-        });
-    }
-
-    for (MFIter mfi(m_v_tend_fc, false); mfi.isValid(); ++mfi) {
-        auto y = yvel.array(mfi);
-        const auto v_tend = m_v_tend_fc.const_array(mfi);
-        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            y(i,j,k) += dt * v_tend(i,j,k);
-        });
-    }
+    apply_state_update_face_velocity_impl(xvel, m_u_tend_fc, dt);
+    apply_state_update_face_velocity_impl(yvel, m_v_tend_fc, dt);
 }
 
 void
