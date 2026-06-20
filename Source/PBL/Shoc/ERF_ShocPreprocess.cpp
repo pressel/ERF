@@ -88,8 +88,12 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
         // boundary fluxes. SHOC consumes kinematic surface fluxes.
         if (hfx3) sflux_arr(ic,0,0) = hfx_arr(i,j,klo) / rho_sfc;
         if (qfx3) lflux_arr(ic,0,0) = qfx_arr(i,j,klo) / rho_sfc;
-        if (tau13) tauu_arr(ic,0,0) = t13_arr(i,j,klo) / rho_sfc;
-        if (tau23) tauv_arr(ic,0,0) = t23_arr(i,j,klo) / rho_sfc;
+        if (tau13) {
+            tauu_arr(ic,0,0) = 0.5_rt * (t13_arr(i,j,klo) + t13_arr(i+1,j,klo)) / rho_sfc;
+        }
+        if (tau23) {
+            tauv_arr(ic,0,0) = 0.5_rt * (t23_arr(i,j,klo) + t23_arr(i,j+1,klo)) / rho_sfc;
+        }
 
         for (int k = klo; k <= khi; ++k) {
             const int kk = k - klo;

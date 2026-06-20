@@ -131,6 +131,15 @@ namespace
         });
     }
 
+    void sync_face_multifab_impl (MultiFab& mf, const Geometry& geom)
+    {
+        // OverrideSync reconciles duplicate values on overlapping face-centered
+        // tiles before SHOC reads or writes them. It is a no-op for cell-centered
+        // MultiFabs, so the helper can be reused for the face-centered state and
+        // tendency fields without special casing the index type.
+        mf.OverrideSync(geom.periodicity());
+    }
+
     void apply_state_update_cons_impl (MultiFab& cons,
                                        const MultiFab& theta_tend_cc,
                                        const MultiFab& qv_tend_cc,
@@ -362,6 +371,15 @@ ShocDriver::advance (MultiFab& cons,
     m_tau23_ptr = tau23;
     m_eddy_diffs_ptr = eddy_diffs;
 
+    sync_face_multifab_impl(xvel, geom);
+    sync_face_multifab_impl(yvel, geom);
+    if (m_tau13_ptr) {
+        sync_face_multifab_impl(*m_tau13_ptr, geom);
+    }
+    if (m_tau23_ptr) {
+        sync_face_multifab_impl(*m_tau23_ptr, geom);
+    }
+
     {
         BL_PROFILE("SHOC::advance::ensure_storage");
         ensure_storage(cons, xvel, yvel, *eddy_diffs);
@@ -588,13 +606,18 @@ ShocDriver::advance (MultiFab& cons,
     }
 
     if (uses_state_update()) {
+        sync_face_multifab_impl(m_u_tend_fc, geom);
+        sync_face_multifab_impl(m_v_tend_fc, geom);
+    }
+
+    if (uses_state_update()) {
         BL_PROFILE("SHOC::advance::state_update");
         apply_state_update(cons, xvel, yvel, dt);
     }
 
     if (uses_state_update()) {
-        xvel.FillBoundary(geom.periodicity());
-        yvel.FillBoundary(geom.periodicity());
+        sync_face_multifab_impl(xvel, geom);
+        sync_face_multifab_impl(yvel, geom);
     }
 
     m_prev_turb_valid = true;

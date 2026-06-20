@@ -231,6 +231,241 @@ set_eddy_diff_sentinel (MultiFab& eddy_diffs,
     }
 }
 
+void
+initialize_basic_column_state (MultiFab& cons,
+                               MultiFab& zvel,
+                               MultiFab& z_phys_nd,
+                               MultiFab& hfx3,
+                               MultiFab& qfx3,
+                               MultiFab& eddy_diffs)
+{
+    fill_multifab(cons, 0.0_rt);
+    fill_multifab(zvel, 0.0_rt);
+    fill_multifab(z_phys_nd, 0.0_rt);
+    fill_multifab(hfx3, 0.0_rt);
+    fill_multifab(qfx3, 0.0_rt);
+    fill_multifab(eddy_diffs, 0.0_rt);
+
+    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = cons.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            const Real rho = 1.0_rt + 0.05_rt * k;
+            const Real theta = 300.0_rt + 0.5_rt * k;
+            const Real qv = 0.010_rt - 0.001_rt * k;
+            const Real qc = 0.0_rt;
+
+            arr(i,j,k,Rho_comp) = rho;
+            arr(i,j,k,RhoTheta_comp) = rho * theta;
+            arr(i,j,k,RhoKE_comp) = rho * (0.2_rt + 0.01_rt * k);
+            arr(i,j,k,RhoQ1_comp) = rho * qv;
+            arr(i,j,k,RhoQ2_comp) = rho * qc;
+        });
+    }
+
+    for (MFIter mfi(zvel, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = zvel.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = 0.0_rt;
+        });
+    }
+
+    for (MFIter mfi(z_phys_nd, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = z_phys_nd.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = 100.0_rt * k;
+        });
+    }
+
+    for (MFIter mfi(hfx3, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = hfx3.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = (k == 0) ? 0.02_rt : 0.0_rt;
+        });
+    }
+
+    for (MFIter mfi(qfx3, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = qfx3.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = (k == 0) ? 1.0e-4_rt : 0.0_rt;
+        });
+    }
+
+    for (MFIter mfi(eddy_diffs, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = eddy_diffs.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            const Real coeff = 0.5_rt + 0.05_rt * k;
+            arr(i,j,k,EddyDiff::Mom_v) = coeff;
+            arr(i,j,k,EddyDiff::Theta_v) = coeff;
+            arr(i,j,k,EddyDiff::KE_v) = coeff;
+            arr(i,j,k,EddyDiff::Scalar_v) = coeff;
+            arr(i,j,k,EddyDiff::Q_v) = coeff;
+            arr(i,j,k,EddyDiff::Turb_lengthscale) = 10.0_rt;
+        });
+    }
+}
+
+void
+initialize_face_velocities_with_seam_offsets (MultiFab& xvel,
+                                              MultiFab& yvel,
+                                              const Box& domain,
+                                              Real seam_delta_x,
+                                              Real seam_delta_y)
+{
+    for (MFIter mfi(xvel, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        const bool is_left = bx.smallEnd(0) == domain.smallEnd(0);
+        const int seam_x = is_left ? bx.bigEnd(0) : bx.smallEnd(0);
+        const Real seam_sign = is_left ? 1.0_rt : -1.0_rt;
+        auto arr = xvel.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            Real value = 2.0_rt + 0.1_rt * k;
+            if (i == seam_x) {
+                value += seam_sign * seam_delta_x;
+            }
+            arr(i,j,k) = value;
+        });
+    }
+
+    for (MFIter mfi(yvel, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        const bool is_bottom = bx.smallEnd(1) == domain.smallEnd(1);
+        const int seam_y = is_bottom ? bx.bigEnd(1) : bx.smallEnd(1);
+        const Real seam_sign = is_bottom ? 1.0_rt : -1.0_rt;
+        auto arr = yvel.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            Real value = 1.0_rt + 0.05_rt * k;
+            if (j == seam_y) {
+                value += seam_sign * seam_delta_y;
+            }
+            arr(i,j,k) = value;
+        });
+    }
+}
+
+void
+initialize_face_stresses_with_seam_offsets (MultiFab& tau13,
+                                            MultiFab& tau23,
+                                            const Box& domain,
+                                            Real seam_delta_x,
+                                            Real seam_delta_y)
+{
+    for (MFIter mfi(tau13, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        const bool is_left = bx.smallEnd(0) == domain.smallEnd(0);
+        const int seam_x = is_left ? bx.bigEnd(0) : bx.smallEnd(0);
+        const Real seam_sign = is_left ? 1.0_rt : -1.0_rt;
+        auto arr = tau13.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            Real value = 0.04_rt;
+            if (i == seam_x) {
+                value += seam_sign * seam_delta_x;
+            }
+            arr(i,j,k) = (k == 0) ? value : 0.0_rt;
+        });
+    }
+
+    for (MFIter mfi(tau23, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        const bool is_bottom = bx.smallEnd(1) == domain.smallEnd(1);
+        const int seam_y = is_bottom ? bx.bigEnd(1) : bx.smallEnd(1);
+        const Real seam_sign = is_bottom ? 1.0_rt : -1.0_rt;
+        auto arr = tau23.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            Real value = 0.03_rt;
+            if (j == seam_y) {
+                value += seam_sign * seam_delta_y;
+            }
+            arr(i,j,k) = (k == 0) ? value : 0.0_rt;
+        });
+    }
+}
+
+void
+initialize_face_stress_gradients (MultiFab& tau13,
+                                  MultiFab& tau23)
+{
+    for (MFIter mfi(tau13, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = tau13.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = (k == 0) ? (10.0_rt + static_cast<Real>(i)) : 0.0_rt;
+        });
+    }
+
+    for (MFIter mfi(tau23, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = tau23.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = (k == 0) ? (20.0_rt + static_cast<Real>(j)) : 0.0_rt;
+        });
+    }
+}
+
+void
+expect_face_overlap_matches (const MultiFab& mf,
+                             const Box& domain,
+                             int seam_dir,
+                             int seam_index,
+                             int fixed_i,
+                             int fixed_j,
+                             int fixed_k,
+                             const char* name)
+{
+    Real a = 0.0_rt;
+    Real b = 0.0_rt;
+    bool have_a = false;
+    bool have_b = false;
+
+    for (MFIter mfi(mf, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        const auto arr = mf.const_array(mfi);
+
+        if (seam_dir == 0) {
+            if (bx.smallEnd(0) == domain.smallEnd(0) &&
+                bx.smallEnd(1) == domain.smallEnd(1)) {
+                a = arr(seam_index, fixed_j, fixed_k);
+                have_a = true;
+            } else if (bx.smallEnd(0) == seam_index &&
+                       bx.smallEnd(1) == domain.smallEnd(1)) {
+                b = arr(seam_index, fixed_j, fixed_k);
+                have_b = true;
+            }
+        } else {
+            if (bx.smallEnd(0) == domain.smallEnd(0) &&
+                bx.smallEnd(1) == domain.smallEnd(1)) {
+                a = arr(fixed_i, seam_index, fixed_k);
+                have_a = true;
+            } else if (bx.smallEnd(0) == domain.smallEnd(0) &&
+                       bx.smallEnd(1) == seam_index) {
+                b = arr(fixed_i, seam_index, fixed_k);
+                have_b = true;
+            }
+        }
+    }
+
+    EXPECT_TRUE(have_a) << name << " missing first seam copy";
+    EXPECT_TRUE(have_b) << name << " missing second seam copy";
+    EXPECT_NEAR(a, b, tol) << name << " seam copies diverged";
+}
+
 FixtureMap
 load_driver_fixture ()
 {
@@ -446,6 +681,128 @@ expect_driver_diagnostics_stable (const ShocDriver& driver,
     EXPECT_LT(component_max_abs(driver.wthv_sec_diagnostics(), 0), 10.0_rt)
         << "multistep wthv_sec leaves the bounded range already enforced in SHOC PDF property tests";
 }
+}
+
+TEST(ShocPreprocess, SurfaceStressAveragesFaceValuesToColumnCenters)
+{
+    Box domain(IntVect(0,0,0), IntVect(1,1,1));
+    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
+                            200.0_rt, 200.0_rt, 200.0_rt);
+    int is_periodic[AMREX_SPACEDIM] = {1, 1, 0};
+    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(IntVect(2, 2, 2));
+    DistributionMapping dm(ba);
+
+    MultiFab cons(ba, dm, NVAR_max, 0);
+    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
+    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
+    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
+    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
+    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+
+    MultiFab xvel(xba, dm, 1, 0);
+    MultiFab yvel(yba, dm, 1, 0);
+    MultiFab zvel(zba, dm, 1, 0);
+    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab hfx3(ba, dm, 1, 0);
+    MultiFab qfx3(ba, dm, 1, 0);
+    MultiFab tau13(xzba, dm, 1, 0);
+    MultiFab tau23(yzba, dm, 1, 0);
+    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
+
+    initialize_basic_column_state(cons, zvel, z_phys_nd, hfx3, qfx3, eddy_diffs);
+    initialize_face_velocities_with_seam_offsets(xvel, yvel, domain, 0.0_rt, 0.0_rt);
+    initialize_face_stress_gradients(tau13, tau23);
+    shoc_test::sync();
+
+    ShocColumnWorkspace workspace;
+    const MoistureComponentIndices moisture_indices(RhoQ1_comp, RhoQ2_comp);
+
+    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+        const ShocColumnLayout active_layout = make_shoc_layout(mfi.validbox(), geom);
+        workspace.ensure_capacity(active_layout, shoc_test::test_arena(), shoc::InitRunOn::Host);
+
+        shoc_test::run_and_sync([&] {
+            ShocPreprocess::fill_columns(workspace.col, mfi, cons, xvel, yvel, zvel,
+                                         &hfx3, &qfx3, &tau13, &tau23, z_phys_nd, geom,
+                                         moisture_indices);
+        });
+
+        const auto tauu = workspace.col.surf_tau_u.const_array();
+        const auto tauv = workspace.col.surf_tau_v.const_array();
+        const auto layout = workspace.col.layout;
+
+        for (int j = 0; j < layout.ny; ++j) {
+            for (int i = 0; i < layout.nx; ++i) {
+                const int ic = shoc_column_index(layout, layout.imin + i, layout.jmin + j);
+                EXPECT_NEAR(tauu(ic,0,0), 10.5_rt + static_cast<Real>(i), tol);
+                EXPECT_NEAR(tauv(ic,0,0), 20.5_rt + static_cast<Real>(j), tol);
+            }
+        }
+    }
+}
+
+TEST(ShocDriver, FaceSyncKeepsSeamCopiesAlignedAfterStateUpdate)
+{
+    Box domain(IntVect(0,0,0), IntVect(3,3,4));
+    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
+                            400.0_rt, 400.0_rt, 500.0_rt);
+    int is_periodic[AMREX_SPACEDIM] = {1, 1, 0};
+    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(IntVect(2, 2, nz));
+    DistributionMapping dm(ba);
+
+    MultiFab cons(ba, dm, NVAR_max, 0);
+    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
+    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
+    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
+    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
+    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+
+    MultiFab xvel(xba, dm, 1, 0);
+    MultiFab yvel(yba, dm, 1, 0);
+    MultiFab zvel(zba, dm, 1, 0);
+    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab hfx3(ba, dm, 1, 0);
+    MultiFab qfx3(ba, dm, 1, 0);
+    MultiFab tau13(xzba, dm, 1, 0);
+    MultiFab tau23(yzba, dm, 1, 0);
+    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
+
+    initialize_basic_column_state(cons, zvel, z_phys_nd, hfx3, qfx3, eddy_diffs);
+    initialize_face_velocities_with_seam_offsets(xvel, yvel, domain, 0.25_rt, 0.15_rt);
+    initialize_face_stresses_with_seam_offsets(tau13, tau23, domain, 0.02_rt, 0.01_rt);
+    shoc_test::sync();
+
+    SolverChoice solver_choice;
+    solver_choice.moisture_type = MoistureType::Morrison;
+    solver_choice.moisture_indices = MoistureComponentIndices(RhoQ1_comp, RhoQ2_comp);
+
+    ShocDriver driver(0, solver_choice);
+    EXPECT_TRUE(driver.uses_state_update());
+    EXPECT_FALSE(driver.uses_host_diffusion());
+
+    shoc_test::run_and_sync([&] {
+        driver.advance(cons, xvel, yvel, zvel,
+                       &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
+                       z_phys_nd, geom, 5.0_rt);
+    });
+
+    const int seam_x = domain.smallEnd(0) + 2;
+    const int seam_y = domain.smallEnd(1) + 2;
+
+    expect_face_overlap_matches(xvel, domain, 0, seam_x, 0, domain.smallEnd(1), 0,
+                                "xvel");
+    expect_face_overlap_matches(yvel, domain, 1, seam_y, domain.smallEnd(0), 0, 0,
+                                "yvel");
+    expect_face_overlap_matches(tau13, domain, 0, seam_x, 0, domain.smallEnd(1), 0,
+                                "tau13");
+    expect_face_overlap_matches(tau23, domain, 1, seam_y, domain.smallEnd(0), 0, 0,
+                                "tau23");
 }
 
 TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
