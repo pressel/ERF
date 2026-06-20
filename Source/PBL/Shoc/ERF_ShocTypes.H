@@ -106,6 +106,14 @@ struct ShocRuntimeOptions
     bool signed_tke_production = false;
     ShocTransportMode transport_mode = ShocTransportMode::StateUpdate;
     ShocMomentumTransport momentum_transport = ShocMomentumTransport::HostDiffusion;
+    bool debug_bad_column = false;
+    bool debug_bad_column_abort = true;
+    int debug_bad_column_max_reports = 8;
+    amrex::Real debug_bad_column_theta_tend_threshold = 10.0;
+    amrex::Real debug_bad_column_q_tend_threshold = 1.0e-2;
+    amrex::Real debug_bad_column_brunt_threshold = 1.0;
+    amrex::Real debug_bad_column_min_dz = 1.0;
+    amrex::Real debug_bad_column_scalar_moment_threshold = 1.0e4;
 };
 
 struct ShocColumnLayout
@@ -224,6 +232,14 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
     pp.query("debug_summary", opts.debug_summary);
     pp.query("allow_tendency_microphysics_overlap", opts.allow_tendency_microphysics_overlap);
     pp.query("signed_tke_production", opts.signed_tke_production);
+    pp.query("debug_bad_column", opts.debug_bad_column);
+    pp.query("debug_bad_column_abort", opts.debug_bad_column_abort);
+    pp.query("debug_bad_column_max_reports", opts.debug_bad_column_max_reports);
+    pp.query("debug_bad_column_theta_tend_threshold", opts.debug_bad_column_theta_tend_threshold);
+    pp.query("debug_bad_column_q_tend_threshold", opts.debug_bad_column_q_tend_threshold);
+    pp.query("debug_bad_column_brunt_threshold", opts.debug_bad_column_brunt_threshold);
+    pp.query("debug_bad_column_min_dz", opts.debug_bad_column_min_dz);
+    pp.query("debug_bad_column_scalar_moment_threshold", opts.debug_bad_column_scalar_moment_threshold);
 
     std::string transport_mode = shoc_transport_mode_name(opts.transport_mode);
     if (pp.query("transport_mode", transport_mode)) {
@@ -271,6 +287,18 @@ validate_shoc_runtime_options (const ShocRuntimeOptions& opts)
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.top_taper_min_factor >= 0.0 &&
                                      opts.top_taper_min_factor <= 1.0,
                                      "erf.shoc.top_taper_min_factor must be in [0, 1]");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_max_reports > 0,
+                                     "erf.shoc.debug_bad_column_max_reports must be positive");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_theta_tend_threshold > 0.0,
+                                     "erf.shoc.debug_bad_column_theta_tend_threshold must be positive");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_q_tend_threshold > 0.0,
+                                     "erf.shoc.debug_bad_column_q_tend_threshold must be positive");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_brunt_threshold > 0.0,
+                                     "erf.shoc.debug_bad_column_brunt_threshold must be positive");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_min_dz > 0.0,
+                                     "erf.shoc.debug_bad_column_min_dz must be positive");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_scalar_moment_threshold > 0.0,
+                                     "erf.shoc.debug_bad_column_scalar_moment_threshold must be positive");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
         !(shoc_uses_host_diffusion(opts.transport_mode) &&
           !shoc_uses_momentum_host_diffusion(opts.momentum_transport)),

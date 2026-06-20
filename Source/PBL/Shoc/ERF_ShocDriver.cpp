@@ -5,7 +5,11 @@
 
 #include <AMReX_BLProfiler.H>
 
+#include <algorithm>
 #include <iomanip>
+#include <limits>
+#include <sstream>
+#include <vector>
 
 using namespace amrex;
 
@@ -27,6 +31,27 @@ namespace
 {
     constexpr int k_shoc_vertical_diff_comp = EddyDiff::Mom_v;
     constexpr int k_shoc_vertical_diff_count = EddyDiff::Q_v - EddyDiff::Mom_v + 1;
+
+    struct ShocBadColumnReport
+    {
+        amrex::Real score = 0.0_rt;
+        std::string reason;
+        int mfi_index = -1;
+        int i = -1;
+        int j = -1;
+        int k = -1;
+        int kk = -1;
+        int ic = -1;
+    };
+
+    template <typename Fab>
+    FArrayBox
+    copy_fab_to_host (const Fab& src)
+    {
+        FArrayBox dst(src.box(), src.nComp());
+        dst.template copy<RunOn::Host>(src);
+        return dst;
+    }
 
     void require_full_height_shoc_boxes (const BoxArray& ba, const Box& domain)
     {
@@ -433,6 +458,8 @@ ShocDriver::advance (MultiFab& cons,
         if (uses_state_update()) {
             BL_PROFILE("SHOC::advance::finalize");
             ShocImplicit::finalize_from_pdf(col, m_opts, dt);
+            BL_PROFILE("SHOC::advance::debug_bad_column");
+            debug_check_bad_column(col, mfi, z_phys_nd, hfx3, qfx3, tau13, tau23, geom, dt);
         }
         {
             BL_PROFILE("SHOC::advance::store_carried_buoyancy_flux");
@@ -783,6 +810,450 @@ ShocDriver::apply_state_update (MultiFab& cons,
     if (uses_momentum_state_update()) {
         apply_state_update_face_velocity_impl(xvel, m_u_tend_fc, dt);
         apply_state_update_face_velocity_impl(yvel, m_v_tend_fc, dt);
+    }
+}
+
+void
+ShocDriver::debug_check_bad_column (const ShocColumnData& col,
+                                    const MFIter& mfi,
+                                    const MultiFab& z_phys_nd,
+                                    const MultiFab* hfx3,
+                                    const MultiFab* qfx3,
+                                    const MultiFab* tau13,
+                                    const MultiFab* tau23,
+                                    const Geometry& geom,
+                                    Real dt) const
+{
+    amrex::ignore_unused(geom, dt);
+
+    if (!m_opts.debug_bad_column) {
+        return;
+    }
+
+    AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
+
+    const auto cons_host = copy_fab_to_host((*m_cons_ptr)[mfi]);
+    const auto z_host = copy_fab_to_host(z_phys_nd[mfi]);
+    const auto theta_tend_host = copy_fab_to_host(col.theta_tend);
+    const auto qv_tend_host = copy_fab_to_host(col.qv_tend);
+    const auto qc_tend_host = copy_fab_to_host(col.qc_tend);
+    const auto qi_tend_host = copy_fab_to_host(col.qi_tend);
+    const auto tke_tend_host = copy_fab_to_host(col.tke_tend);
+    const auto u_tend_host = copy_fab_to_host(col.u_tend);
+    const auto v_tend_host = copy_fab_to_host(col.v_tend);
+    const auto p_mid_host = copy_fab_to_host(col.p_mid);
+    const auto p_int_host = copy_fab_to_host(col.p_int);
+    const auto zt_host = copy_fab_to_host(col.zt);
+    const auto zi_host = copy_fab_to_host(col.zi);
+    const auto dz_host = copy_fab_to_host(col.dz);
+    const auto rho_host = copy_fab_to_host(col.rho);
+    const auto theta_host = copy_fab_to_host(col.theta);
+    const auto thetal_host = copy_fab_to_host(col.thetal);
+    const auto theta_v_host = copy_fab_to_host(col.theta_v);
+    const auto qv_host = copy_fab_to_host(col.qv);
+    const auto qc_host = copy_fab_to_host(col.qc);
+    const auto qi_host = copy_fab_to_host(col.qi);
+    const auto qw_host = copy_fab_to_host(col.qw);
+    const auto tabs_host = copy_fab_to_host(col.tabs);
+    const auto exner_host = copy_fab_to_host(col.exner);
+    const auto host_dse_host = copy_fab_to_host(col.host_dse);
+    const auto pblh_host = copy_fab_to_host(col.pblh);
+    const auto obklen_host = copy_fab_to_host(col.obklen);
+    const auto ustar_host = copy_fab_to_host(col.ustar);
+    const auto shoc_mix_host = copy_fab_to_host(col.shoc_mix);
+    const auto brunt_host = copy_fab_to_host(col.brunt);
+    const auto isotropy_host = copy_fab_to_host(col.isotropy);
+    const auto tk_host = copy_fab_to_host(col.tk);
+    const auto tkh_host = copy_fab_to_host(col.tkh);
+    const auto shear_prod_host = copy_fab_to_host(col.shear_prod);
+    const auto buoy_prod_host = copy_fab_to_host(col.buoy_prod);
+    const auto diss_tke_host = copy_fab_to_host(col.diss_tke);
+    const auto w_sec_host = copy_fab_to_host(col.w_sec);
+    const auto wthv_sec_host = copy_fab_to_host(col.wthv_sec);
+    const auto shoc_cldfrac_host = copy_fab_to_host(col.shoc_cldfrac);
+    const auto shoc_ql_host = copy_fab_to_host(col.shoc_ql);
+    const auto shoc_ql2_host = copy_fab_to_host(col.shoc_ql2);
+    const auto shoc_cond_host = copy_fab_to_host(col.shoc_cond);
+    const auto shoc_evap_host = copy_fab_to_host(col.shoc_evap);
+    const auto wqls_sec_host = copy_fab_to_host(col.wqls_sec);
+    const auto thl_sec_host = copy_fab_to_host(col.thl_sec);
+    const auto qw_sec_host = copy_fab_to_host(col.qw_sec);
+    const auto qwthl_sec_host = copy_fab_to_host(col.qwthl_sec);
+    const auto wthl_sec_host = copy_fab_to_host(col.wthl_sec);
+    const auto wqw_sec_host = copy_fab_to_host(col.wqw_sec);
+    const auto uw_sec_host = copy_fab_to_host(col.uw_sec);
+    const auto vw_sec_host = copy_fab_to_host(col.vw_sec);
+    const auto wtke_sec_host = copy_fab_to_host(col.wtke_sec);
+    const auto w3_host = copy_fab_to_host(col.w3);
+    const auto surf_sens_flux_host = copy_fab_to_host(col.surf_sens_flux);
+    const auto surf_lat_flux_host = copy_fab_to_host(col.surf_lat_flux);
+    const auto surf_tau_u_host = copy_fab_to_host(col.surf_tau_u);
+    const auto surf_tau_v_host = copy_fab_to_host(col.surf_tau_v);
+    const auto hfx3_host = hfx3 ? copy_fab_to_host((*hfx3)[mfi]) : FArrayBox();
+    const auto qfx3_host = qfx3 ? copy_fab_to_host((*qfx3)[mfi]) : FArrayBox();
+    const auto tau13_host = tau13 ? copy_fab_to_host((*tau13)[mfi]) : FArrayBox();
+    const auto tau23_host = tau23 ? copy_fab_to_host((*tau23)[mfi]) : FArrayBox();
+
+    const auto z_arr = z_host.const_array();
+    const auto cons_arr = cons_host.const_array();
+    const auto theta_tend_arr = theta_tend_host.const_array();
+    const auto qv_tend_arr = qv_tend_host.const_array();
+    const auto qc_tend_arr = qc_tend_host.const_array();
+    const auto qi_tend_arr = qi_tend_host.const_array();
+    const auto tke_tend_arr = tke_tend_host.const_array();
+    const auto u_tend_arr = u_tend_host.const_array();
+    const auto v_tend_arr = v_tend_host.const_array();
+    const auto dz_arr = dz_host.const_array();
+
+    std::vector<ShocBadColumnReport> reports;
+    reports.reserve(static_cast<std::size_t>(col.layout.ncell * col.layout.nlev));
+
+    auto maybe_add = [&] (int i, int j, int k, int kk, int ic,
+                          const char* name, Real value, Real threshold) {
+        if (!std::isfinite(value)) {
+            reports.push_back(ShocBadColumnReport{
+                std::numeric_limits<Real>::infinity(),
+                std::string(name) + " nonfinite",
+                mfi.index(), i, j, k, kk, ic
+            });
+            return;
+        }
+        const Real abs_value = amrex::Math::abs(value);
+        const Real ratio = abs_value / threshold;
+        if (ratio > 1.0_rt) {
+            std::ostringstream oss;
+            oss << name << " |value|=" << abs_value << " threshold=" << threshold;
+            reports.push_back(ShocBadColumnReport{ratio, oss.str(), mfi.index(), i, j, k, kk, ic});
+        }
+    };
+
+    auto maybe_add_geom = [&] (int i, int j, int k, int kk, int ic, Real dz_val) {
+        if (!std::isfinite(dz_val)) {
+            reports.push_back(ShocBadColumnReport{
+                std::numeric_limits<Real>::infinity(),
+                "dz nonfinite",
+                mfi.index(), i, j, k, kk, ic
+            });
+        } else if (dz_val <= 0.0_rt) {
+            reports.push_back(ShocBadColumnReport{
+                std::numeric_limits<Real>::infinity(),
+                "dz <= 0",
+                mfi.index(), i, j, k, kk, ic
+            });
+        } else if (dz_val < m_opts.debug_bad_column_min_dz) {
+            std::ostringstream oss;
+            oss << "dz below minimum |dz|=" << dz_val
+                << " min_dz=" << m_opts.debug_bad_column_min_dz;
+            reports.push_back(ShocBadColumnReport{
+                m_opts.debug_bad_column_min_dz / dz_val,
+                oss.str(),
+                mfi.index(), i, j, k, kk, ic
+            });
+        }
+    };
+
+    for (int j = col.layout.jmin; j < col.layout.jmin + col.layout.ny; ++j) {
+        for (int i = col.layout.imin; i < col.layout.imin + col.layout.nx; ++i) {
+            const int ic = shoc_column_index(col.layout, i, j);
+            for (int kk = 0; kk < col.layout.nlev; ++kk) {
+                const int k = col.layout.kmin + kk;
+                const Real dz_val = dz_arr(ic, kk, 0);
+                maybe_add_geom(i, j, k, kk, ic, dz_val);
+
+                maybe_add(i, j, k, kk, ic, "theta_tend", theta_tend_arr(ic, kk, 0), m_opts.debug_bad_column_theta_tend_threshold);
+                maybe_add(i, j, k, kk, ic, "qv_tend", qv_tend_arr(ic, kk, 0), m_opts.debug_bad_column_q_tend_threshold);
+                maybe_add(i, j, k, kk, ic, "qc_tend", qc_tend_arr(ic, kk, 0), m_opts.debug_bad_column_q_tend_threshold);
+                maybe_add(i, j, k, kk, ic, "qi_tend", qi_tend_arr(ic, kk, 0), m_opts.debug_bad_column_q_tend_threshold);
+                maybe_add(i, j, k, kk, ic, "brunt", brunt_host.const_array()(ic, kk, 0), m_opts.debug_bad_column_brunt_threshold);
+                maybe_add(i, j, k, kk, ic, "thl_sec", thl_sec_host.const_array()(ic, kk, 0), m_opts.debug_bad_column_scalar_moment_threshold);
+                maybe_add(i, j, k, kk, ic, "qw_sec", qw_sec_host.const_array()(ic, kk, 0), m_opts.debug_bad_column_scalar_moment_threshold);
+                maybe_add(i, j, k, kk, ic, "qwthl_sec", qwthl_sec_host.const_array()(ic, kk, 0), m_opts.debug_bad_column_scalar_moment_threshold);
+                maybe_add(i, j, k, kk, ic, "wthl_sec", wthl_sec_host.const_array()(ic, kk, 0), m_opts.debug_bad_column_scalar_moment_threshold);
+                maybe_add(i, j, k, kk, ic, "wqw_sec", wqw_sec_host.const_array()(ic, kk, 0), m_opts.debug_bad_column_scalar_moment_threshold);
+
+                // Treat NaN/Inf in the key state and diagnostic fields as bad.
+                const Real key_values[] = {
+                    rho_host.const_array()(ic, kk, 0),
+                    theta_host.const_array()(ic, kk, 0),
+                    thetal_host.const_array()(ic, kk, 0),
+                    theta_v_host.const_array()(ic, kk, 0),
+                    qv_host.const_array()(ic, kk, 0),
+                    qc_host.const_array()(ic, kk, 0),
+                    qi_host.const_array()(ic, kk, 0),
+                    qw_host.const_array()(ic, kk, 0),
+                    tabs_host.const_array()(ic, kk, 0),
+                    exner_host.const_array()(ic, kk, 0),
+                    p_mid_host.const_array()(ic, kk, 0),
+                    host_dse_host.const_array()(ic, kk, 0),
+                    pblh_host.const_array()(ic, 0, 0),
+                    obklen_host.const_array()(ic, 0, 0),
+                    ustar_host.const_array()(ic, 0, 0),
+                    shoc_mix_host.const_array()(ic, kk, 0),
+                    isotropy_host.const_array()(ic, kk, 0),
+                    tk_host.const_array()(ic, kk, 0),
+                    tkh_host.const_array()(ic, kk, 0),
+                    shear_prod_host.const_array()(ic, kk, 0),
+                    buoy_prod_host.const_array()(ic, kk, 0),
+                    diss_tke_host.const_array()(ic, kk, 0),
+                    w_sec_host.const_array()(ic, kk, 0),
+                    wthv_sec_host.const_array()(ic, kk, 0),
+                    shoc_cldfrac_host.const_array()(ic, kk, 0),
+                    shoc_ql_host.const_array()(ic, kk, 0),
+                    shoc_ql2_host.const_array()(ic, kk, 0),
+                    shoc_cond_host.const_array()(ic, kk, 0),
+                    shoc_evap_host.const_array()(ic, kk, 0),
+                    wqls_sec_host.const_array()(ic, kk, 0),
+                    thl_sec_host.const_array()(ic, kk, 0),
+                    qw_sec_host.const_array()(ic, kk, 0),
+                    qwthl_sec_host.const_array()(ic, kk, 0),
+                    wthl_sec_host.const_array()(ic, kk, 0),
+                    wqw_sec_host.const_array()(ic, kk, 0),
+                    uw_sec_host.const_array()(ic, kk, 0),
+                    vw_sec_host.const_array()(ic, kk, 0),
+                    wtke_sec_host.const_array()(ic, kk, 0),
+                    w3_host.const_array()(ic, kk, 0),
+                    theta_tend_arr(ic, kk, 0),
+                    qv_tend_arr(ic, kk, 0),
+                    qc_tend_arr(ic, kk, 0),
+                    qi_tend_arr(ic, kk, 0),
+                    tke_tend_arr(ic, kk, 0),
+                    u_tend_arr(ic, kk, 0),
+                    v_tend_arr(ic, kk, 0)
+                };
+                for (Real value : key_values) {
+                    if (!std::isfinite(value)) {
+                        reports.push_back(ShocBadColumnReport{
+                            std::numeric_limits<Real>::infinity(),
+                            "key field nonfinite",
+                            mfi.index(), i, j, k, kk, ic
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (reports.empty()) {
+        return;
+    }
+
+    std::stable_sort(reports.begin(), reports.end(),
+                     [] (const ShocBadColumnReport& a, const ShocBadColumnReport& b) {
+                         return a.score > b.score;
+                     });
+
+    const int max_reports = std::min(m_opts.debug_bad_column_max_reports,
+                                     static_cast<int>(reports.size()));
+
+    const auto rho_arr = rho_host.const_array();
+    const auto theta_arr = theta_host.const_array();
+    const auto thetal_arr = thetal_host.const_array();
+    const auto theta_v_arr = theta_v_host.const_array();
+    const auto qv_arr = qv_host.const_array();
+    const auto qc_arr = qc_host.const_array();
+    const auto qi_arr = qi_host.const_array();
+    const auto qw_arr = qw_host.const_array();
+    const auto tabs_arr = tabs_host.const_array();
+    const auto exner_arr = exner_host.const_array();
+    const auto p_mid_arr = p_mid_host.const_array();
+    const auto p_int_arr = p_int_host.const_array();
+    const auto host_dse_arr = host_dse_host.const_array();
+    const auto pblh_arr = pblh_host.const_array();
+    const auto obklen_arr = obklen_host.const_array();
+    const auto ustar_arr = ustar_host.const_array();
+    const auto shoc_mix_arr = shoc_mix_host.const_array();
+    const auto brunt_arr = brunt_host.const_array();
+    const auto isotropy_arr = isotropy_host.const_array();
+    const auto tk_arr = tk_host.const_array();
+    const auto tkh_arr = tkh_host.const_array();
+    const auto shear_prod_arr = shear_prod_host.const_array();
+    const auto buoy_prod_arr = buoy_prod_host.const_array();
+    const auto diss_tke_arr = diss_tke_host.const_array();
+    const auto w_sec_arr = w_sec_host.const_array();
+    const auto wthv_sec_arr = wthv_sec_host.const_array();
+    const auto shoc_cldfrac_arr = shoc_cldfrac_host.const_array();
+    const auto shoc_ql_arr = shoc_ql_host.const_array();
+    const auto shoc_ql2_arr = shoc_ql2_host.const_array();
+    const auto shoc_cond_arr = shoc_cond_host.const_array();
+    const auto shoc_evap_arr = shoc_evap_host.const_array();
+    const auto wqls_sec_arr = wqls_sec_host.const_array();
+    const auto thl_sec_arr = thl_sec_host.const_array();
+    const auto qw_sec_arr = qw_sec_host.const_array();
+    const auto qwthl_sec_arr = qwthl_sec_host.const_array();
+    const auto wthl_sec_arr = wthl_sec_host.const_array();
+    const auto wqw_sec_arr = wqw_sec_host.const_array();
+    const auto uw_sec_arr = uw_sec_host.const_array();
+    const auto vw_sec_arr = vw_sec_host.const_array();
+    const auto wtke_sec_arr = wtke_sec_host.const_array();
+    const auto w3_arr = w3_host.const_array();
+    const auto surf_sens_flux_arr = surf_sens_flux_host.const_array();
+    const auto surf_lat_flux_arr = surf_lat_flux_host.const_array();
+    const auto surf_tau_u_arr = surf_tau_u_host.const_array();
+    const auto surf_tau_v_arr = surf_tau_v_host.const_array();
+    const bool has_hfx3 = hfx3 && hfx3_host.box().ok();
+    const bool has_qfx3 = qfx3 && qfx3_host.box().ok();
+    const bool has_tau13 = tau13 && tau13_host.box().ok();
+    const bool has_tau23 = tau23 && tau23_host.box().ok();
+
+    for (int n = 0; n < max_reports; ++n) {
+        const auto& rep = reports[static_cast<std::size_t>(n)];
+        const int i = rep.i;
+        const int j = rep.j;
+        const int k = rep.k;
+        const int kk = rep.kk;
+        const int ic = rep.ic;
+
+        const auto node_value = [&] (int ii, int jj, int kk) -> Real {
+            const IntVect iv(ii, jj, kk);
+            return z_host.box().contains(iv) ? z_arr(ii, jj, kk) : std::numeric_limits<Real>::quiet_NaN();
+        };
+
+        const Real z_nd_ijk = node_value(i, j, k);
+        const Real z_nd_ip1jk = node_value(i + 1, j, k);
+        const Real z_nd_ijp1k = node_value(i, j + 1, k);
+        const Real z_nd_ip1jp1k = node_value(i + 1, j + 1, k);
+        const Real z_nd_ijkp1 = node_value(i, j, k + 1);
+        const Real z_nd_ip1jkp1 = node_value(i + 1, j, k + 1);
+        const Real z_nd_ijp1kp1 = node_value(i, j + 1, k + 1);
+        const Real z_nd_ip1jp1kp1 = node_value(i + 1, j + 1, k + 1);
+        const Real four_node_zlo = 0.25_rt * (z_nd_ijk + z_nd_ip1jk + z_nd_ijp1k + z_nd_ip1jp1k);
+        const Real four_node_zhi = 0.25_rt * (z_nd_ijkp1 + z_nd_ip1jkp1 + z_nd_ijp1kp1 + z_nd_ip1jp1kp1);
+        const Real four_node_dz = four_node_zhi - four_node_zlo;
+        const Real corner_dz = z_nd_ijkp1 - z_nd_ijk;
+
+        amrex::Print() << "NATIVE_SHOC_BAD_COLUMN_BEGIN\n"
+                       << "  level=" << m_lev
+                       << " shoc_call=" << (m_advance_calls + 1)
+                       << " mfi_index=" << rep.mfi_index
+                       << " box_valid_lo=(" << mfi.validbox().smallEnd(0) << ","
+                       << mfi.validbox().smallEnd(1) << ","
+                       << mfi.validbox().smallEnd(2) << ")"
+                       << " box_valid_hi=(" << mfi.validbox().bigEnd(0) << ","
+                       << mfi.validbox().bigEnd(1) << ","
+                       << mfi.validbox().bigEnd(2) << ")"
+                       << " layout.nx=" << col.layout.nx
+                       << " layout.ny=" << col.layout.ny
+                       << " layout.ncell=" << col.layout.ncell
+                       << " layout.nlev=" << col.layout.nlev
+                       << " layout.imin=" << col.layout.imin
+                       << " layout.jmin=" << col.layout.jmin
+                       << " layout.kmin=" << col.layout.kmin
+                       << " layout.kmax=" << col.layout.kmax
+                       << "\n"
+                       << "  i=" << i << " j=" << j << " k=" << k
+                       << " kk=" << kk << " ic=" << ic
+                       << " score=" << rep.score
+                       << " reason=" << rep.reason
+                       << "\n"
+                       << "  geometry z_nd(i,j,k)=" << z_nd_ijk
+                       << " z_nd(i+1,j,k)=" << z_nd_ip1jk
+                       << " z_nd(i,j+1,k)=" << z_nd_ijp1k
+                       << " z_nd(i+1,j+1,k)=" << z_nd_ip1jp1k
+                       << " z_nd(i,j,k+1)=" << z_nd_ijkp1
+                       << " z_nd(i+1,j,k+1)=" << z_nd_ip1jkp1
+                       << " z_nd(i,j+1,k+1)=" << z_nd_ijp1kp1
+                       << " z_nd(i+1,j+1,k+1)=" << z_nd_ip1jp1kp1
+                       << "\n"
+                       << "  four_node_zlo=" << four_node_zlo
+                       << " four_node_zhi=" << four_node_zhi
+                       << " four_node_dz=" << four_node_dz
+                       << " corner_dz=" << corner_dz
+                       << " dz=" << dz_arr(ic, kk, 0)
+                       << "\n"
+                       << "  rho=" << rho_arr(ic, kk, 0)
+                       << " theta=" << theta_arr(ic, kk, 0)
+                       << " thetal=" << thetal_arr(ic, kk, 0)
+                       << " theta_v=" << theta_v_arr(ic, kk, 0)
+                       << " qv=" << qv_arr(ic, kk, 0)
+                       << " qc=" << qc_arr(ic, kk, 0)
+                       << " qi=" << qi_arr(ic, kk, 0)
+                       << " qw=" << qw_arr(ic, kk, 0)
+                       << " tabs=" << tabs_arr(ic, kk, 0)
+                       << " exner=" << exner_arr(ic, kk, 0)
+                       << " p_mid=" << p_mid_arr(ic, kk, 0)
+                       << " p_int_lower=" << p_int_arr(ic, kk, 0)
+                       << " p_int_upper=" << p_int_arr(ic, kk + 1, 0)
+                       << " host_dse=" << host_dse_arr(ic, kk, 0)
+                       << "\n"
+                       << "  pblh=" << pblh_arr(ic, 0, 0)
+                       << " obklen=" << obklen_arr(ic, 0, 0)
+                       << " ustar=" << ustar_arr(ic, 0, 0)
+                       << " shoc_mix=" << shoc_mix_arr(ic, kk, 0)
+                       << " Lturb=" << shoc_mix_arr(ic, kk, 0)
+                       << " brunt=" << brunt_arr(ic, kk, 0)
+                       << " isotropy=" << isotropy_arr(ic, kk, 0)
+                       << " tk=" << tk_arr(ic, kk, 0)
+                       << " tkh=" << tkh_arr(ic, kk, 0)
+                       << " shear_prod=" << shear_prod_arr(ic, kk, 0)
+                       << " buoy_prod=" << buoy_prod_arr(ic, kk, 0)
+                       << " diss_tke=" << diss_tke_arr(ic, kk, 0)
+                       << " tke=" << col.tke.const_array()(ic, kk, 0)
+                       << "\n"
+                       << "  w_sec=" << w_sec_arr(ic, kk, 0)
+                       << " wthv_sec=" << wthv_sec_arr(ic, kk, 0)
+                       << " shoc_cldfrac=" << shoc_cldfrac_arr(ic, kk, 0)
+                       << " shoc_ql=" << shoc_ql_arr(ic, kk, 0)
+                       << " shoc_ql2=" << shoc_ql2_arr(ic, kk, 0)
+                       << " shoc_cond=" << shoc_cond_arr(ic, kk, 0)
+                       << " shoc_evap=" << shoc_evap_arr(ic, kk, 0)
+                       << " wqls_sec=" << wqls_sec_arr(ic, kk, 0)
+                       << "\n"
+                       << "  thl_sec_lower=" << thl_sec_arr(ic, kk, 0)
+                       << " thl_sec_upper=" << thl_sec_arr(ic, kk + 1, 0)
+                       << " qw_sec_lower=" << qw_sec_arr(ic, kk, 0)
+                       << " qw_sec_upper=" << qw_sec_arr(ic, kk + 1, 0)
+                       << " qwthl_sec_lower=" << qwthl_sec_arr(ic, kk, 0)
+                       << " qwthl_sec_upper=" << qwthl_sec_arr(ic, kk + 1, 0)
+                       << " wthl_sec_lower=" << wthl_sec_arr(ic, kk, 0)
+                       << " wthl_sec_upper=" << wthl_sec_arr(ic, kk + 1, 0)
+                       << " wqw_sec_lower=" << wqw_sec_arr(ic, kk, 0)
+                       << " wqw_sec_upper=" << wqw_sec_arr(ic, kk + 1, 0)
+                       << " w3_lower=" << w3_arr(ic, kk, 0)
+                       << " w3_upper=" << w3_arr(ic, kk + 1, 0)
+                       << " uw_sec_lower=" << uw_sec_arr(ic, kk, 0)
+                       << " uw_sec_upper=" << uw_sec_arr(ic, kk + 1, 0)
+                       << " vw_sec_lower=" << vw_sec_arr(ic, kk, 0)
+                       << " vw_sec_upper=" << vw_sec_arr(ic, kk + 1, 0)
+                       << " wtke_sec_lower=" << wtke_sec_arr(ic, kk, 0)
+                       << " wtke_sec_upper=" << wtke_sec_arr(ic, kk + 1, 0)
+                       << "\n"
+                       << "  theta_tend=" << theta_tend_arr(ic, kk, 0)
+                       << " qv_tend=" << qv_tend_arr(ic, kk, 0)
+                       << " qc_tend=" << qc_tend_arr(ic, kk, 0)
+                       << " qi_tend=" << qi_tend_arr(ic, kk, 0)
+                       << " tke_tend=" << tke_tend_arr(ic, kk, 0)
+                       << " u_tend=" << u_tend_arr(ic, kk, 0)
+                       << " v_tend=" << v_tend_arr(ic, kk, 0)
+                       << "\n"
+                       << "  surf_sens_flux=" << surf_sens_flux_arr(ic, 0, 0)
+                       << " surf_lat_flux=" << surf_lat_flux_arr(ic, 0, 0)
+                       << " surf_tau_u=" << surf_tau_u_arr(ic, 0, 0)
+                       << " surf_tau_v=" << surf_tau_v_arr(ic, 0, 0)
+                       << " rho_sfc=" << cons_arr(i, j, k, Rho_comp)
+                       << "\n";
+
+        if (has_hfx3) {
+            amrex::Print() << "  raw hfx3(i,j,klo)=" << hfx3_host.const_array()(rep.i, rep.j, rep.k) << "\n";
+        }
+        if (has_qfx3) {
+            amrex::Print() << "  raw qfx3(i,j,klo)=" << qfx3_host.const_array()(rep.i, rep.j, rep.k) << "\n";
+        }
+        if (has_tau13) {
+            amrex::Print() << "  raw tau13(i,j,klo)=" << tau13_host.const_array()(rep.i, rep.j, rep.k)
+                           << " raw tau13(i+1,j,klo)=" << tau13_host.const_array()(rep.i + 1, rep.j, rep.k)
+                           << "\n";
+        }
+        if (has_tau23) {
+            amrex::Print() << "  raw tau23(i,j,klo)=" << tau23_host.const_array()(rep.i, rep.j, rep.k)
+                           << " raw tau23(i,j+1,klo)=" << tau23_host.const_array()(rep.i, rep.j + 1, rep.k)
+                           << "\n";
+        }
+        amrex::Print() << "NATIVE_SHOC_BAD_COLUMN_END\n";
+    }
+
+    if (m_opts.debug_bad_column_abort) {
+        amrex::Abort("Native SHOC debug_bad_column abort: bad SHOC column detected before state update");
     }
 }
 

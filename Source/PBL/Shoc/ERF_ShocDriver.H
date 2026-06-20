@@ -138,6 +138,15 @@ private:
                              amrex::MultiFab& xvel,
                              amrex::MultiFab& yvel,
                              amrex::Real dt) const;
+    void debug_check_bad_column (const ShocColumnData& col,
+                                 const amrex::MFIter& mfi,
+                                 const amrex::MultiFab& z_phys_nd,
+                                 const amrex::MultiFab* hfx3,
+                                 const amrex::MultiFab* qfx3,
+                                 const amrex::MultiFab* tau13,
+                                 const amrex::MultiFab* tau23,
+                                 const amrex::Geometry& geom,
+                                 amrex::Real dt) const;
     void print_debug_summary (amrex::Real dt) const;
 };
 #endif
