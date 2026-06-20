@@ -195,7 +195,7 @@ void erf_slow_rhs_pre (int level, int finest_level,
     std::unique_ptr<MultiFab> dflux_y;
     std::unique_ptr<MultiFab> dflux_z;
 
-        if (l_use_diff) {
+    if (l_use_diff) {
 #ifdef ERF_USE_EAMXX_SHOC
         if (tc.uses_eamxx_shoc()) {
             AMREX_ALWAYS_ASSERT(eamxx_shoc_lev != nullptr);
@@ -207,8 +207,9 @@ void erf_slow_rhs_pre (int level, int finest_level,
 #ifdef ERF_USE_NATIVE_SHOC
         if (tc.uses_native_shoc()) {
             AMREX_ALWAYS_ASSERT(native_shoc_lev != nullptr);
-            // SHOC either supplies host-applied vertical SGS coefficients or
-            // clears them so the host does not re-apply SHOC transport.
+            // Native SHOC always owns the scalar fluxes in state_update mode.
+            // When it also owns momentum stresses, we skip the generic
+            // SurfaceLayer call entirely so the host does not re-apply them.
             native_shoc_lev->set_eddy_diffs();
         }
 #endif
@@ -237,15 +238,10 @@ void erf_slow_rhs_pre (int level, int finest_level,
 #ifdef ERF_USE_NATIVE_SHOC
         if (tc.uses_native_shoc()) {
             AMREX_ALWAYS_ASSERT(native_shoc_lev != nullptr);
-            if (native_shoc_lev->owns_surface_fluxes()) {
-                // Native SHOC has already consumed the lower-boundary fluxes
-                // in its pre-dycore state update, so prevent the host
-                // diffusion path from applying them a second time.
-                native_shoc_lev->set_diff_stresses();
-                surface_layer_handled = true;
-            } else if (native_shoc_lev->uses_host_diffusion()) {
-                surface_layer_handled = false;
-            } else {
+            if (native_shoc_lev->owns_scalar_surface_fluxes()) {
+                l_apply_surface_layer_fluxes_in_diffusion = false;
+            }
+            if (!native_shoc_lev->needs_host_surface_momentum_stresses()) {
                 surface_layer_handled = true;
             }
         }
@@ -267,8 +263,11 @@ void erf_slow_rhs_pre (int level, int finest_level,
                                                       Q1fx1, Q1fx2, Q1fx3);
             }
         }
-        if (surface_layer_handled) {
-            l_apply_surface_layer_fluxes_in_diffusion = false;
+        if (tc.uses_native_shoc() && native_shoc_lev && native_shoc_lev->owns_scalar_surface_fluxes()) {
+            // SHOC-owned scalar fluxes must not be re-used by the host
+            // diffusion source, even if the host SurfaceLayer path was also
+            // evaluated for momentum stress ownership.
+            native_shoc_lev->set_diff_stresses();
         }
     } // l_use_diff
 

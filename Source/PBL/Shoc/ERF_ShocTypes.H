@@ -19,12 +19,30 @@ enum class ShocTransportMode
     HostDiffusion
 };
 
+enum class ShocMomentumTransport
+{
+    None,
+    StateUpdate,
+    HostDiffusion
+};
+
 inline const char*
 shoc_transport_mode_name (ShocTransportMode mode)
 {
     switch (mode) {
     case ShocTransportMode::StateUpdate:   return "state_update";
     case ShocTransportMode::HostDiffusion:return "host_diffusion";
+    }
+    return "unknown";
+}
+
+inline const char*
+shoc_momentum_transport_name (ShocMomentumTransport mode)
+{
+    switch (mode) {
+    case ShocMomentumTransport::None:         return "none";
+    case ShocMomentumTransport::StateUpdate:   return "state_update";
+    case ShocMomentumTransport::HostDiffusion: return "host_diffusion";
     }
     return "unknown";
 }
@@ -39,6 +57,24 @@ inline bool
 shoc_uses_host_diffusion (ShocTransportMode mode)
 {
     return mode == ShocTransportMode::HostDiffusion;
+}
+
+inline bool
+shoc_uses_momentum_state_update (ShocMomentumTransport mode)
+{
+    return mode == ShocMomentumTransport::StateUpdate;
+}
+
+inline bool
+shoc_uses_momentum_host_diffusion (ShocMomentumTransport mode)
+{
+    return mode == ShocMomentumTransport::HostDiffusion;
+}
+
+inline bool
+shoc_disables_momentum_transport (ShocMomentumTransport mode)
+{
+    return mode == ShocMomentumTransport::None;
 }
 
 struct ShocRuntimeOptions
@@ -69,6 +105,7 @@ struct ShocRuntimeOptions
     bool allow_tendency_microphysics_overlap = false;
     bool signed_tke_production = false;
     ShocTransportMode transport_mode = ShocTransportMode::StateUpdate;
+    ShocMomentumTransport momentum_transport = ShocMomentumTransport::HostDiffusion;
 };
 
 struct ShocColumnLayout
@@ -203,6 +240,21 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
             amrex::Abort("erf.shoc.transport_mode must be 'state_update' or 'host_diffusion'");
         }
     }
+
+    std::string momentum_transport = shoc_momentum_transport_name(opts.momentum_transport);
+    if (pp.query("momentum_transport", momentum_transport)) {
+        std::transform(momentum_transport.begin(), momentum_transport.end(), momentum_transport.begin(),
+                       [] (unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (momentum_transport == "none") {
+            opts.momentum_transport = ShocMomentumTransport::None;
+        } else if (momentum_transport == "state_update") {
+            opts.momentum_transport = ShocMomentumTransport::StateUpdate;
+        } else if (momentum_transport == "host_diffusion") {
+            opts.momentum_transport = ShocMomentumTransport::HostDiffusion;
+        } else {
+            amrex::Abort("erf.shoc.momentum_transport must be 'none', 'state_update', or 'host_diffusion'");
+        }
+    }
 }
 
 inline void
@@ -219,6 +271,10 @@ validate_shoc_runtime_options (const ShocRuntimeOptions& opts)
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.top_taper_min_factor >= 0.0 &&
                                      opts.top_taper_min_factor <= 1.0,
                                      "erf.shoc.top_taper_min_factor must be in [0, 1]");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        !(shoc_uses_host_diffusion(opts.transport_mode) &&
+          !shoc_uses_momentum_host_diffusion(opts.momentum_transport)),
+        "erf.shoc.transport_mode = host_diffusion requires erf.shoc.momentum_transport = host_diffusion");
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE

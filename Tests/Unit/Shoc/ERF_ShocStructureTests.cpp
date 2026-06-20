@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <string>
 
 TEST(ShocRuntimeOptions, DefaultsValidate)
 {
@@ -16,6 +17,7 @@ TEST(ShocRuntimeOptions, DefaultsValidate)
     EXPECT_GE(opts.coeff_kh, 0.0);
     EXPECT_FALSE(opts.debug_summary);
     EXPECT_EQ(opts.transport_mode, ShocTransportMode::StateUpdate);
+    EXPECT_EQ(opts.momentum_transport, ShocMomentumTransport::HostDiffusion);
 }
 
 TEST(ShocRuntimeOptions, TransportModeHelpersMatchIntent)
@@ -25,6 +27,13 @@ TEST(ShocRuntimeOptions, TransportModeHelpersMatchIntent)
 
     EXPECT_FALSE(shoc_uses_state_update(ShocTransportMode::HostDiffusion));
     EXPECT_TRUE(shoc_uses_host_diffusion(ShocTransportMode::HostDiffusion));
+
+    EXPECT_TRUE(shoc_uses_momentum_state_update(ShocMomentumTransport::StateUpdate));
+    EXPECT_FALSE(shoc_uses_momentum_state_update(ShocMomentumTransport::None));
+    EXPECT_TRUE(shoc_uses_momentum_host_diffusion(ShocMomentumTransport::HostDiffusion));
+    EXPECT_FALSE(shoc_uses_momentum_host_diffusion(ShocMomentumTransport::None));
+    EXPECT_TRUE(shoc_disables_momentum_transport(ShocMomentumTransport::None));
+    EXPECT_EQ(std::string(shoc_momentum_transport_name(ShocMomentumTransport::None)), "none");
 }
 
 class ScopedParmParseString
@@ -66,6 +75,32 @@ TEST(ShocRuntimeOptions, LegacyTendenciesTransportModeIsRejected)
             read_shoc_runtime_options(opts);
         },
         "removed for native SHOC");
+}
+
+TEST(ShocRuntimeOptions, InvalidMomentumTransportIsRejected)
+{
+    ScopedParmParseString momentum_transport("erf.shoc", "momentum_transport", "tendons");
+
+    EXPECT_DEATH(
+        {
+            ShocRuntimeOptions opts;
+            read_shoc_runtime_options(opts);
+        },
+        "erf.shoc.momentum_transport");
+}
+
+TEST(ShocRuntimeOptions, HostDiffusionTransportRequiresHostMomentumTransport)
+{
+    ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "host_diffusion");
+    ScopedParmParseString momentum_transport("erf.shoc", "momentum_transport", "state_update");
+
+    EXPECT_DEATH(
+        {
+            ShocRuntimeOptions opts;
+            read_shoc_runtime_options(opts);
+            validate_shoc_runtime_options(opts);
+        },
+        "host_diffusion requires erf.shoc.momentum_transport = host_diffusion");
 }
 
 TEST(ShocStructure, SurfaceLayerUsesUstarFloorAndFiniteObukhov)

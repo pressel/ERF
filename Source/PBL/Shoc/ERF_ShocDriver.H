@@ -44,6 +44,12 @@ public:
                         const amrex::Array4<amrex::Real>& cell_rhs) const;
     bool uses_state_update () const;
     bool uses_host_diffusion () const;
+    bool uses_momentum_state_update () const;
+    bool uses_momentum_host_diffusion () const;
+    bool disables_momentum_transport () const;
+    bool owns_scalar_surface_fluxes () const;
+    bool owns_momentum_surface_stresses () const;
+    bool needs_host_surface_momentum_stresses () const;
     bool owns_surface_fluxes () const;
     bool debug_summary_enabled () const { return m_opts.debug_summary; }
     bool has_native_diagnostics () const { return m_eddy_coeffs_cc.isDefined(); }

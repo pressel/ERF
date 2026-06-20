@@ -854,7 +854,8 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
     ShocDriver driver(0, solver_choice);
     EXPECT_TRUE(driver.uses_state_update());
     EXPECT_FALSE(driver.uses_host_diffusion());
-    EXPECT_TRUE(driver.owns_surface_fluxes());
+    EXPECT_TRUE(driver.owns_scalar_surface_fluxes());
+    EXPECT_TRUE(driver.uses_momentum_host_diffusion());
     const Real dt = 10.0_rt;
     const Real max_mix_len = std::sqrt(geom.CellSizeArray()[0] * geom.CellSizeArray()[1]);
 
@@ -863,11 +864,19 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
     MultiFab yvel_before(yba, dm, 1, 0);
     MultiFab zvel_before(zba, dm, 1, 0);
     MultiFab scalar_before(ba, dm, 1, 0);
+    MultiFab hfx3_before(ba, dm, 1, 0);
+    MultiFab qfx3_before(ba, dm, 1, 0);
+    MultiFab tau13_before(xzba, dm, 1, 0);
+    MultiFab tau23_before(yzba, dm, 1, 0);
     MultiFab::Copy(cons_before, cons, 0, 0, NVAR_max, 0);
     MultiFab::Copy(xvel_before, xvel, 0, 0, 1, 0);
     MultiFab::Copy(yvel_before, yvel, 0, 0, 1, 0);
     MultiFab::Copy(zvel_before, zvel, 0, 0, 1, 0);
     MultiFab::Copy(scalar_before, cons, RhoScalar_comp, 0, 1, 0);
+    MultiFab::Copy(hfx3_before, hfx3, 0, 0, 1, 0);
+    MultiFab::Copy(qfx3_before, qfx3, 0, 0, 1, 0);
+    MultiFab::Copy(tau13_before, tau13, 0, 0, 1, 0);
+    MultiFab::Copy(tau23_before, tau23, 0, 0, 1, 0);
 
     shoc_test::run_and_sync([&] {
         driver.advance(cons, xvel, yvel, zvel,
@@ -906,8 +915,8 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
     EXPECT_GT(component_max_abs_difference(cons, RhoTheta_comp, cons_before, RhoTheta_comp), 0.0_rt);
     expect_component_nonnegative(cons, RhoQ1_comp, "state-update qv");
     expect_component_nonnegative(cons, RhoKE_comp, "state-update tke");
-    EXPECT_GT(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
-    EXPECT_GT(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
     EXPECT_EQ(component_max_abs_difference(zvel, 0, zvel_before, 0), 0.0_rt);
     EXPECT_EQ(component_max_abs_difference(cons, RhoScalar_comp, scalar_before, 0), 0.0_rt);
 
@@ -916,8 +925,11 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
     });
 
     expect_multifab_finite(eddy_diffs, 0, EddyDiff::NumDiffs, "eddy_diffs");
-    expect_component_between(eddy_diffs, EddyDiff::Mom_v, 0.0_rt, 0.0_rt, "eddy_diffs Mom_v cleared");
+    expect_component_minmax_match(eddy_diffs, driver.native_diagnostics(),
+                                  EddyDiff::Mom_v, "eddy_diffs Mom_v writeback");
     expect_component_between(eddy_diffs, EddyDiff::Theta_v, 0.0_rt, 0.0_rt, "eddy_diffs Theta_v cleared");
+    expect_component_between(eddy_diffs, EddyDiff::KE_v, 0.0_rt, 0.0_rt, "eddy_diffs KE_v cleared");
+    expect_component_between(eddy_diffs, EddyDiff::Scalar_v, 0.0_rt, 0.0_rt, "eddy_diffs Scalar_v cleared");
     expect_component_between(eddy_diffs, EddyDiff::Q_v, 0.0_rt, 0.0_rt, "eddy_diffs Q_v cleared");
     expect_component_nonnegative(eddy_diffs, EddyDiff::Turb_lengthscale, "eddy_diffs lengthscale");
     expect_component_minmax_match(eddy_diffs, driver.native_diagnostics(),
@@ -929,8 +941,8 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
 
     expect_component_between(hfx3, 0, 0.0_rt, 0.0_rt, "hfx3 cleared");
     expect_component_between(qfx3, 0, 0.0_rt, 0.0_rt, "qfx3 cleared");
-    expect_component_between(tau13, 0, 0.0_rt, 0.0_rt, "tau13 cleared");
-    expect_component_between(tau23, 0, 0.0_rt, 0.0_rt, "tau23 cleared");
+    expect_component_minmax_match(tau13, tau13_before, 0, "tau13 preserved for host momentum diffusion");
+    expect_component_minmax_match(tau23, tau23_before, 0, "tau23 preserved for host momentum diffusion");
 
     amrex::Vector<MultiFab> rhs(IntVars::NumTypes);
     rhs[IntVars::cons].define(ba, dm, NVAR_max, 0);
@@ -957,6 +969,151 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
     expect_component_between(rhs[IntVars::xmom], 0, 0.0_rt, 0.0_rt, "xmom rhs");
     expect_component_between(rhs[IntVars::ymom], 0, 0.0_rt, 0.0_rt, "ymom rhs");
     expect_component_between(rhs[IntVars::zmom], 0, 0.0_rt, 0.0_rt, "zmom rhs");
+}
+
+TEST(ShocDriver, MomentumTransportNoneLeavesVelocitiesUntouchedAndSkipsMomentumExports)
+{
+    ScopedParmParseString momentum_transport("erf.shoc", "momentum_transport", "none");
+
+    Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
+    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
+                            500.0_rt, 100.0_rt, 900.0_rt);
+    int is_periodic[AMREX_SPACEDIM] = {1, 1, 0};
+    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
+    const FixtureMap fixture = load_driver_fixture();
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(IntVect(3, ny, nz));
+    DistributionMapping dm(ba);
+
+    MultiFab cons(ba, dm, NVAR_max, 0);
+    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
+    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
+    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
+    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
+    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+
+    MultiFab xvel(xba, dm, 1, 0);
+    MultiFab yvel(yba, dm, 1, 0);
+    MultiFab zvel(zba, dm, 1, 0);
+    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab hfx3(ba, dm, 1, 0);
+    MultiFab qfx3(ba, dm, 1, 0);
+    MultiFab tau13(xzba, dm, 1, 0);
+    MultiFab tau23(yzba, dm, 1, 0);
+    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
+
+    initialize_state(cons, fixture);
+    initialize_velocity(xvel, yvel, zvel, fixture);
+    initialize_geometry(z_phys_nd, fixture);
+    initialize_surface_fluxes(hfx3, qfx3, tau13, tau23, fixture);
+    initialize_eddy_diffs(eddy_diffs, fixture);
+    shoc_test::sync();
+
+    MultiFab xvel_before(xba, dm, 1, 0);
+    MultiFab yvel_before(yba, dm, 1, 0);
+    MultiFab::Copy(xvel_before, xvel, 0, 0, 1, 0);
+    MultiFab::Copy(yvel_before, yvel, 0, 0, 1, 0);
+
+    SolverChoice solver_choice;
+    solver_choice.moisture_type = MoistureType::None;
+
+    ShocDriver driver(0, solver_choice);
+    EXPECT_TRUE(driver.uses_state_update());
+    EXPECT_TRUE(driver.owns_scalar_surface_fluxes());
+    EXPECT_TRUE(driver.disables_momentum_transport());
+    EXPECT_FALSE(driver.uses_momentum_host_diffusion());
+    EXPECT_FALSE(driver.uses_momentum_state_update());
+
+    shoc_test::run_and_sync([&] {
+        driver.advance(cons, xvel, yvel, zvel,
+                       &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
+                       z_phys_nd, geom, 10.0_rt);
+        driver.set_eddy_diffs();
+        driver.set_diff_stresses();
+    });
+
+    EXPECT_EQ(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
+    EXPECT_EQ(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
+    expect_component_between(eddy_diffs, EddyDiff::Mom_v, 0.0_rt, 0.0_rt, "none momentum export");
+    expect_component_minmax_match(eddy_diffs, driver.native_diagnostics(),
+                                  EddyDiff::Turb_lengthscale, "none lengthscale writeback");
+    expect_component_between(hfx3, 0, 0.0_rt, 0.0_rt, "none hfx3 cleared");
+    expect_component_between(qfx3, 0, 0.0_rt, 0.0_rt, "none qfx3 cleared");
+    expect_component_between(tau13, 0, 0.0_rt, 0.0_rt, "none tau13 cleared");
+    expect_component_between(tau23, 0, 0.0_rt, 0.0_rt, "none tau23 cleared");
+}
+
+TEST(ShocDriver, MomentumTransportStateUpdateUpdatesFaceVelocitiesWhenRequested)
+{
+    ScopedParmParseString momentum_transport("erf.shoc", "momentum_transport", "state_update");
+
+    Box domain(IntVect(0,0,0), IntVect(nx-1, ny-1, nz-1));
+    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
+                            500.0_rt, 100.0_rt, 900.0_rt);
+    int is_periodic[AMREX_SPACEDIM] = {1, 1, 0};
+    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
+    const FixtureMap fixture = load_driver_fixture();
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(IntVect(3, ny, nz));
+    DistributionMapping dm(ba);
+
+    MultiFab cons(ba, dm, NVAR_max, 0);
+    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
+    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
+    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
+    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
+    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+
+    MultiFab xvel(xba, dm, 1, 0);
+    MultiFab yvel(yba, dm, 1, 0);
+    MultiFab zvel(zba, dm, 1, 0);
+    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab hfx3(ba, dm, 1, 0);
+    MultiFab qfx3(ba, dm, 1, 0);
+    MultiFab tau13(xzba, dm, 1, 0);
+    MultiFab tau23(yzba, dm, 1, 0);
+    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
+
+    initialize_state(cons, fixture);
+    initialize_velocity(xvel, yvel, zvel, fixture);
+    initialize_geometry(z_phys_nd, fixture);
+    initialize_surface_fluxes(hfx3, qfx3, tau13, tau23, fixture);
+    initialize_eddy_diffs(eddy_diffs, fixture);
+    shoc_test::sync();
+
+    MultiFab xvel_before(xba, dm, 1, 0);
+    MultiFab yvel_before(yba, dm, 1, 0);
+    MultiFab tau13_before(xzba, dm, 1, 0);
+    MultiFab tau23_before(yzba, dm, 1, 0);
+    MultiFab::Copy(xvel_before, xvel, 0, 0, 1, 0);
+    MultiFab::Copy(yvel_before, yvel, 0, 0, 1, 0);
+    MultiFab::Copy(tau13_before, tau13, 0, 0, 1, 0);
+    MultiFab::Copy(tau23_before, tau23, 0, 0, 1, 0);
+
+    SolverChoice solver_choice;
+    solver_choice.moisture_type = MoistureType::None;
+
+    ShocDriver driver(0, solver_choice);
+    EXPECT_TRUE(driver.uses_state_update());
+    EXPECT_TRUE(driver.owns_scalar_surface_fluxes());
+    EXPECT_TRUE(driver.uses_momentum_state_update());
+    EXPECT_FALSE(driver.uses_momentum_host_diffusion());
+
+    shoc_test::run_and_sync([&] {
+        driver.advance(cons, xvel, yvel, zvel,
+                       &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
+                       z_phys_nd, geom, 10.0_rt);
+        driver.set_diff_stresses();
+    });
+
+    EXPECT_GT(component_max_abs_difference(xvel, 0, xvel_before, 0), 0.0_rt);
+    EXPECT_GT(component_max_abs_difference(yvel, 0, yvel_before, 0), 0.0_rt);
+    expect_component_between(hfx3, 0, 0.0_rt, 0.0_rt, "state_update hfx3 cleared");
+    expect_component_between(qfx3, 0, 0.0_rt, 0.0_rt, "state_update qfx3 cleared");
+    expect_component_between(tau13, 0, 0.0_rt, 0.0_rt, "state_update tau13 cleared");
+    expect_component_between(tau23, 0, 0.0_rt, 0.0_rt, "state_update tau23 cleared");
 }
 
 TEST(ShocDriver, FullHeightBoxPredicateRejectsVerticallySplitBoxes)
@@ -1211,6 +1368,7 @@ TEST(ShocDriver, HostDiffusionModeExportsDiffusivitiesWithoutInternalTransport)
     ShocDriver driver(0, solver_choice);
     EXPECT_FALSE(driver.uses_state_update());
     EXPECT_TRUE(driver.uses_host_diffusion());
+    EXPECT_TRUE(driver.uses_momentum_host_diffusion());
 
     shoc_test::run_and_sync([&] {
         driver.advance(cons, xvel, yvel, zvel,
@@ -1574,6 +1732,7 @@ TEST(ShocDriver, MultiStepHostDiffusionModeKeepsExportsStable)
     ShocDriver driver(0, solver_choice);
     EXPECT_FALSE(driver.uses_state_update());
     EXPECT_TRUE(driver.uses_host_diffusion());
+    EXPECT_TRUE(driver.uses_momentum_host_diffusion());
 
     amrex::Vector<MultiFab> rhs(IntVars::NumTypes);
     rhs[IntVars::cons].define(ba, dm, NVAR_max, 0);

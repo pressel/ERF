@@ -281,7 +281,8 @@ rejects those number-aware layouts until a number closure is implemented.
 Transport modes
 ~~~~~~~~~~~~~~~
 
-Native SHOC has two transport modes:
+Native SHOC has one scalar/cloud/TKE transport selector and one independent
+horizontal-momentum selector:
 
 .. code-block:: text
 
@@ -293,14 +294,36 @@ or:
 
    erf.shoc.transport_mode = host_diffusion
 
-``state_update`` is the default. In this mode, SHOC applies its coupled column
-increment before the dycore sees the state. This avoids splitting theta and
-momentum from moisture across ERF's fast and slow update channels.
+``state_update`` is the default. In this mode, SHOC applies its coupled heat,
+moisture, non-precipitating cloud liquid, carried cloud ice, and TKE update
+before the dycore sees the state.
 
-``host_diffusion`` remains available. In this mode, SHOC exports eddy
-diffusivities to ERF's host diffusion path. SHOC does not apply the
-pre-dycore state update. This mode is currently limited to dry/no-moisture
-configurations.
+The momentum selector is:
+
+.. code-block:: text
+
+   erf.shoc.momentum_transport = host_diffusion
+
+This is the default. In the mixed native SHOC mode, SHOC exports only the
+momentum diffusivity to ERF's host diffusion path while keeping the scalar
+transport on the ``state_update`` path.
+
+Other momentum choices are:
+
+.. code-block:: text
+
+   erf.shoc.momentum_transport = none
+   erf.shoc.momentum_transport = state_update
+
+``none`` disables SHOC momentum transport entirely. ``state_update`` keeps the
+legacy direct-velocity update available for debugging or targeted experiments,
+but it is not the default.
+
+``host_diffusion`` remains available. In this mode, SHOC exports the full
+vertical eddy-diffusivity block to ERF's host diffusion path. SHOC does not
+apply the pre-dycore state update. This mode is currently limited to dry/no-
+moisture configurations and requires ``erf.shoc.momentum_transport =
+host_diffusion``.
 
 Runtime options
 ~~~~~~~~~~~~~~~
@@ -319,8 +342,13 @@ recommended starting point. Most options tune the closure or enable diagnostics.
    * - ``erf.shoc.transport_mode``
      - ``state_update``
      - ``state_update``, ``host_diffusion``
-     - Selects the native SHOC pre-dycore state update or ERF host diffusion.
-       Host diffusion is currently dry/no-moisture only.
+     - Selects the native SHOC scalar/cloud/TKE transport path. Host diffusion
+       is currently dry/no-moisture only.
+   * - ``erf.shoc.momentum_transport``
+     - ``host_diffusion``
+     - ``none``, ``state_update``, ``host_diffusion``
+     - Selects the native SHOC horizontal-momentum path. ``host_diffusion`` is
+       the mixed-mode default.
    * - ``erf.shoc.lambda_low``
      - ``0.001``
      - Real > 0

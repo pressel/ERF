@@ -615,7 +615,7 @@ ShocDriver::advance (MultiFab& cons,
         apply_state_update(cons, xvel, yvel, dt);
     }
 
-    if (uses_state_update()) {
+    if (uses_momentum_state_update()) {
         sync_face_multifab_impl(xvel, geom);
         sync_face_multifab_impl(yvel, geom);
     }
@@ -643,6 +643,9 @@ ShocDriver::set_eddy_diffs () const
         MultiFab::Copy(*m_eddy_diffs_ptr, m_eddy_coeffs_cc,
                        k_shoc_vertical_diff_comp, k_shoc_vertical_diff_comp,
                        k_shoc_vertical_diff_count, 0);
+    } else if (uses_momentum_host_diffusion()) {
+        MultiFab::Copy(*m_eddy_diffs_ptr, m_eddy_coeffs_cc,
+                       EddyDiff::Mom_v, EddyDiff::Mom_v, 1, 0);
     }
 }
 
@@ -651,13 +654,13 @@ ShocDriver::set_diff_stresses () const
 {
     BL_PROFILE("SHOC::set_diff_stresses");
 
-    if (!owns_surface_fluxes()) {
-        // In host_diffusion mode the host diffusion path owns the overlapping
-        // surface fluxes and stresses, so SHOC must not clear them here.
+    if (uses_host_diffusion()) {
+        // Full host-diffusion mode preserves the existing host-owned lower
+        // boundary fluxes and stresses.
         return;
     }
 
-    if (!m_hfx3_ptr || !m_qfx3_ptr || !m_tau13_ptr || !m_tau23_ptr) {
+    if (!m_hfx3_ptr || !m_qfx3_ptr) {
         return;
     }
 
@@ -667,20 +670,23 @@ ShocDriver::set_diff_stresses () const
         const Box& vbx_yz = convert(vbx_cc, IntVect(0,1,1));
         auto hfx = m_hfx3_ptr->array(mfi);
         auto qfx = m_qfx3_ptr->array(mfi);
-        auto tau13 = m_tau13_ptr->array(mfi);
-        auto tau23 = m_tau23_ptr->array(mfi);
 
-        ParallelFor(vbx_cc, vbx_xz, vbx_yz,
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+        ParallelFor(vbx_cc, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
             hfx(i,j,k) = 0.0;
             qfx(i,j,k) = 0.0;
-        },
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            tau13(i,j,k) = 0.0;
-        },
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            tau23(i,j,k) = 0.0;
         });
+
+        if ((owns_momentum_surface_stresses() || disables_momentum_transport()) &&
+            m_tau13_ptr && m_tau23_ptr) {
+            auto tau13 = m_tau13_ptr->array(mfi);
+            auto tau23 = m_tau23_ptr->array(mfi);
+            ParallelFor(vbx_xz, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                tau13(i,j,k) = 0.0;
+            });
+            ParallelFor(vbx_yz, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                tau23(i,j,k) = 0.0;
+            });
+        }
     }
 }
 
@@ -714,9 +720,45 @@ ShocDriver::uses_state_update () const
 }
 
 bool
-ShocDriver::owns_surface_fluxes () const
+ShocDriver::uses_momentum_state_update () const
+{
+    return shoc_uses_momentum_state_update(m_opts.momentum_transport);
+}
+
+bool
+ShocDriver::uses_momentum_host_diffusion () const
+{
+    return shoc_uses_momentum_host_diffusion(m_opts.momentum_transport);
+}
+
+bool
+ShocDriver::disables_momentum_transport () const
+{
+    return shoc_disables_momentum_transport(m_opts.momentum_transport);
+}
+
+bool
+ShocDriver::owns_scalar_surface_fluxes () const
 {
     return uses_state_update();
+}
+
+bool
+ShocDriver::owns_momentum_surface_stresses () const
+{
+    return uses_momentum_state_update();
+}
+
+bool
+ShocDriver::needs_host_surface_momentum_stresses () const
+{
+    return uses_momentum_host_diffusion();
+}
+
+bool
+ShocDriver::owns_surface_fluxes () const
+{
+    return owns_scalar_surface_fluxes();
 }
 
 void
@@ -738,8 +780,10 @@ ShocDriver::apply_state_update (MultiFab& cons,
                                  m_moisture_indices.qi,
                                  dt);
 
-    apply_state_update_face_velocity_impl(xvel, m_u_tend_fc, dt);
-    apply_state_update_face_velocity_impl(yvel, m_v_tend_fc, dt);
+    if (uses_momentum_state_update()) {
+        apply_state_update_face_velocity_impl(xvel, m_u_tend_fc, dt);
+        apply_state_update_face_velocity_impl(yvel, m_v_tend_fc, dt);
+    }
 }
 
 void
@@ -758,6 +802,7 @@ ShocDriver::print_debug_summary (Real dt) const
                    << " call=" << m_advance_calls
                    << " dt=" << dt
                    << " transport_mode=" << shoc_transport_mode_name(m_opts.transport_mode)
+                   << " momentum_transport=" << shoc_momentum_transport_name(m_opts.momentum_transport)
                    << " state_update=" << (uses_state_update() ? "on" : "off")
                    << "\n";
 
