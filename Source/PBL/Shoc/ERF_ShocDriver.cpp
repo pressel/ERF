@@ -7,6 +7,7 @@
 #include <AMReX_Gpu.H>
 
 #include <algorithm>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -51,8 +52,18 @@ namespace
     {
 #ifdef AMREX_USE_GPU
         FArrayBox dst(src.box(), src.nComp(), amrex::The_Pinned_Arena());
-        amrex::Gpu::dtoh_memcpy(dst.dataPtr(), src.dataPtr(), dst.size() * sizeof(Real));
-        amrex::Gpu::streamSynchronize();
+        const std::size_t nbytes = static_cast<std::size_t>(dst.size()) * sizeof(Real);
+        if (src.arena()->isManaged() || src.arena()->isDevice()) {
+            static bool printed_gpu_path_marker = false;
+            if (!printed_gpu_path_marker) {
+                amrex::Print() << "NATIVE_SHOC_DEBUG_COPY_HELPER_GPU_PATH\n";
+                printed_gpu_path_marker = true;
+            }
+            amrex::Gpu::dtoh_memcpy_async(dst.dataPtr(), src.dataPtr(), nbytes);
+            amrex::Gpu::streamSynchronize();
+        } else {
+            std::memcpy(dst.dataPtr(), src.dataPtr(), nbytes);
+        }
         return dst;
 #else
         FArrayBox dst(src.box(), src.nComp());
