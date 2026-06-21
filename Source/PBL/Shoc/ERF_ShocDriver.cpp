@@ -4,6 +4,7 @@
 #include "ERF_IndexDefines.H"
 
 #include <AMReX_BLProfiler.H>
+#include <AMReX_Gpu.H>
 
 #include <algorithm>
 #include <iomanip>
@@ -48,9 +49,16 @@ namespace
     FArrayBox
     copy_fab_to_host (const Fab& src)
     {
+#ifdef AMREX_USE_GPU
+        FArrayBox dst(src.box(), src.nComp(), amrex::The_Pinned_Arena());
+        amrex::Gpu::dtoh_memcpy(dst.dataPtr(), src.dataPtr(), dst.size() * sizeof(Real));
+        amrex::Gpu::streamSynchronize();
+        return dst;
+#else
         FArrayBox dst(src.box(), src.nComp());
         dst.template copy<RunOn::Host>(src);
         return dst;
+#endif
     }
 
     void require_full_height_shoc_boxes (const BoxArray& ba, const Box& domain)
