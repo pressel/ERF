@@ -887,6 +887,7 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
     const auto shear_prod_host = copy_fab_to_host(col.shear_prod);
     const auto buoy_prod_host = copy_fab_to_host(col.buoy_prod);
     const auto diss_tke_host = copy_fab_to_host(col.diss_tke);
+    const auto tke_host = copy_fab_to_host(col.tke);
     const auto w_sec_host = copy_fab_to_host(col.w_sec);
     const auto wthv_sec_host = copy_fab_to_host(col.wthv_sec);
     const auto shoc_cldfrac_host = copy_fab_to_host(col.shoc_cldfrac);
@@ -1089,6 +1090,7 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
     const auto shear_prod_arr = shear_prod_host.const_array();
     const auto buoy_prod_arr = buoy_prod_host.const_array();
     const auto diss_tke_arr = diss_tke_host.const_array();
+    const auto tke_state_arr = tke_host.const_array();
     const auto w_sec_arr = w_sec_host.const_array();
     const auto wthv_sec_arr = wthv_sec_host.const_array();
     const auto shoc_cldfrac_arr = shoc_cldfrac_host.const_array();
@@ -1207,7 +1209,7 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
                        << " shear_prod=" << shear_prod_arr(ic, kk, 0)
                        << " buoy_prod=" << buoy_prod_arr(ic, kk, 0)
                        << " diss_tke=" << diss_tke_arr(ic, kk, 0)
-                       << " tke=" << col.tke.const_array()(ic, kk, 0)
+                       << " tke=" << tke_state_arr(ic, kk, 0)
                        << "\n"
                        << "  w_sec=" << w_sec_arr(ic, kk, 0)
                        << " wthv_sec=" << wthv_sec_arr(ic, kk, 0)
