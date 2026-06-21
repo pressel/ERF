@@ -114,6 +114,10 @@ struct ShocRuntimeOptions
     amrex::Real debug_bad_column_brunt_threshold = 1.0;
     amrex::Real debug_bad_column_min_dz = 1.0;
     amrex::Real debug_bad_column_scalar_moment_threshold = 1.0e4;
+    bool debug_disable_pdf_cloud_increment = false;
+    bool debug_disable_theta_state_update = false;
+    bool debug_disable_moisture_state_update = false;
+    bool debug_disable_tke_state_update = false;
 };
 
 struct ShocColumnLayout
@@ -240,6 +244,10 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
     pp.query("debug_bad_column_brunt_threshold", opts.debug_bad_column_brunt_threshold);
     pp.query("debug_bad_column_min_dz", opts.debug_bad_column_min_dz);
     pp.query("debug_bad_column_scalar_moment_threshold", opts.debug_bad_column_scalar_moment_threshold);
+    pp.query("debug_disable_pdf_cloud_increment", opts.debug_disable_pdf_cloud_increment);
+    pp.query("debug_disable_theta_state_update", opts.debug_disable_theta_state_update);
+    pp.query("debug_disable_moisture_state_update", opts.debug_disable_moisture_state_update);
+    pp.query("debug_disable_tke_state_update", opts.debug_disable_tke_state_update);
 
     std::string transport_mode = shoc_transport_mode_name(opts.transport_mode);
     if (pp.query("transport_mode", transport_mode)) {

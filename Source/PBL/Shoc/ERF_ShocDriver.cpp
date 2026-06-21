@@ -72,6 +72,57 @@ namespace
 #endif
     }
 
+    void print_shoc_debug_settings_once (const ShocRuntimeOptions& opts)
+    {
+        static bool printed = false;
+        if (printed) {
+            return;
+        }
+        printed = true;
+
+        std::ostringstream os;
+        os << std::boolalpha;
+        os << "SHOC debug thresholds:\n"
+           << "  theta_tend=" << opts.debug_bad_column_theta_tend_threshold << "\n"
+           << "  q_tend=" << opts.debug_bad_column_q_tend_threshold << "\n"
+           << "  brunt=" << opts.debug_bad_column_brunt_threshold << "\n"
+           << "  min_dz=" << opts.debug_bad_column_min_dz << "\n"
+           << "  scalar_moment=" << opts.debug_bad_column_scalar_moment_threshold << "\n"
+           << "SHOC debug switches:\n"
+           << "  debug_bad_column=" << opts.debug_bad_column << "\n"
+           << "  debug_bad_column_abort=" << opts.debug_bad_column_abort << "\n"
+           << "  debug_disable_pdf_cloud_increment=" << opts.debug_disable_pdf_cloud_increment << "\n"
+           << "  debug_disable_theta_state_update=" << opts.debug_disable_theta_state_update << "\n"
+           << "  debug_disable_moisture_state_update=" << opts.debug_disable_moisture_state_update << "\n"
+           << "  debug_disable_tke_state_update=" << opts.debug_disable_tke_state_update << "\n";
+        amrex::Print() << os.str();
+    }
+
+    void warn_if_shoc_debug_overrides_active_once (const ShocRuntimeOptions& opts)
+    {
+        static bool warned = false;
+        if (warned) {
+            return;
+        }
+        if (!opts.debug_disable_pdf_cloud_increment &&
+            !opts.debug_disable_theta_state_update &&
+            !opts.debug_disable_moisture_state_update &&
+            !opts.debug_disable_tke_state_update) {
+            return;
+        }
+        warned = true;
+
+        std::ostringstream os;
+        os << std::boolalpha;
+        os << "WARNING: native SHOC debug override active:\n"
+           << "  debug_disable_pdf_cloud_increment = " << opts.debug_disable_pdf_cloud_increment << "\n"
+           << "  debug_disable_theta_state_update = " << opts.debug_disable_theta_state_update << "\n"
+           << "  debug_disable_moisture_state_update = " << opts.debug_disable_moisture_state_update << "\n"
+           << "  debug_disable_tke_state_update = " << opts.debug_disable_tke_state_update << "\n"
+           << "These options are for debugging only and change native SHOC numerics.\n";
+        amrex::Print() << os.str();
+    }
+
     void require_full_height_shoc_boxes (const BoxArray& ba, const Box& domain)
     {
         // Tile-local SHOC packing and writeback still assume each MFIter tile
@@ -193,6 +244,7 @@ namespace
                                        int qv_comp,
                                        int qc_comp,
                                        int qi_comp,
+                                       const ShocRuntimeOptions& opts,
                                        Real dt)
     {
         const bool has_qv = shoc_valid_comp(qv_comp, cons.nComp());
@@ -210,21 +262,27 @@ namespace
 
             ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 const Real rho_val = rho(i,j,k,Rho_comp);
-                cc(i,j,k,RhoTheta_comp) += rho_val * dt * theta_tend(i,j,k);
-                if (has_qv) {
-                    cc(i,j,k,qv_comp) = amrex::max(
-                        cc(i,j,k,qv_comp) + rho_val * dt * qv_tend(i,j,k), 0.0_rt);
+                if (!opts.debug_disable_theta_state_update) {
+                    cc(i,j,k,RhoTheta_comp) += rho_val * dt * theta_tend(i,j,k);
                 }
-                if (has_qc) {
-                    cc(i,j,k,qc_comp) = amrex::max(
-                        cc(i,j,k,qc_comp) + rho_val * dt * qc_tend(i,j,k), 0.0_rt);
+                if (!opts.debug_disable_moisture_state_update) {
+                    if (has_qv) {
+                        cc(i,j,k,qv_comp) = amrex::max(
+                            cc(i,j,k,qv_comp) + rho_val * dt * qv_tend(i,j,k), 0.0_rt);
+                    }
+                    if (has_qc) {
+                        cc(i,j,k,qc_comp) = amrex::max(
+                            cc(i,j,k,qc_comp) + rho_val * dt * qc_tend(i,j,k), 0.0_rt);
+                    }
+                    if (has_qi) {
+                        cc(i,j,k,qi_comp) = amrex::max(
+                            cc(i,j,k,qi_comp) + rho_val * dt * qi_tend(i,j,k), 0.0_rt);
+                    }
                 }
-                if (has_qi) {
-                    cc(i,j,k,qi_comp) = amrex::max(
-                        cc(i,j,k,qi_comp) + rho_val * dt * qi_tend(i,j,k), 0.0_rt);
+                if (!opts.debug_disable_tke_state_update) {
+                    cc(i,j,k,RhoKE_comp) = amrex::max(
+                        cc(i,j,k,RhoKE_comp) + rho_val * dt * tke_tend(i,j,k), 0.0_rt);
                 }
-                cc(i,j,k,RhoKE_comp) = amrex::max(
-                    cc(i,j,k,RhoKE_comp) + rho_val * dt * tke_tend(i,j,k), 0.0_rt);
             });
         }
     }
@@ -250,6 +308,7 @@ ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
 {
     read_shoc_runtime_options(m_opts);
     validate_shoc_runtime_options(m_opts);
+    warn_if_shoc_debug_overrides_active_once(m_opts);
 
     if (uses_host_diffusion() && m_moisture_type != MoistureType::None) {
         amrex::Abort(
@@ -824,6 +883,7 @@ ShocDriver::apply_state_update (MultiFab& cons,
                                  m_moisture_indices.qv,
                                  m_moisture_indices.qc,
                                  m_moisture_indices.qi,
+                                 m_opts,
                                  dt);
 
     if (uses_momentum_state_update()) {
@@ -850,6 +910,7 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
     }
 
     AMREX_ALWAYS_ASSERT(m_cons_ptr != nullptr);
+    print_shoc_debug_settings_once(m_opts);
 
     const auto cons_host = copy_fab_to_host((*m_cons_ptr)[mfi]);
     const auto z_host = copy_fab_to_host(z_phys_nd[mfi]);
@@ -868,6 +929,12 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
     const auto rho_host = copy_fab_to_host(col.rho);
     const auto theta_host = copy_fab_to_host(col.theta);
     const auto thetal_host = copy_fab_to_host(col.thetal);
+    const auto theta_base_host = copy_fab_to_host(col.theta_base);
+    const auto thetal_base_host = copy_fab_to_host(col.thetal_base);
+    const auto qv_base_host = copy_fab_to_host(col.qv_base);
+    const auto qc_base_host = copy_fab_to_host(col.qc_base);
+    const auto qi_base_host = copy_fab_to_host(col.qi_base);
+    const auto tke_base_host = copy_fab_to_host(col.tke_base_state);
     const auto theta_v_host = copy_fab_to_host(col.theta_v);
     const auto qv_host = copy_fab_to_host(col.qv);
     const auto qc_host = copy_fab_to_host(col.qc);
@@ -1069,6 +1136,11 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
     const auto rho_arr = rho_host.const_array();
     const auto theta_arr = theta_host.const_array();
     const auto thetal_arr = thetal_host.const_array();
+    const auto theta_base_arr = theta_base_host.const_array();
+    const auto thetal_base_arr = thetal_base_host.const_array();
+    const auto qv_base_arr = qv_base_host.const_array();
+    const auto qc_base_arr = qc_base_host.const_array();
+    const auto qi_base_arr = qi_base_host.const_array();
     const auto theta_v_arr = theta_v_host.const_array();
     const auto qv_arr = qv_host.const_array();
     const auto qc_arr = qc_host.const_array();
@@ -1091,6 +1163,7 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
     const auto buoy_prod_arr = buoy_prod_host.const_array();
     const auto diss_tke_arr = diss_tke_host.const_array();
     const auto tke_state_arr = tke_host.const_array();
+    const auto tke_base_arr = tke_base_host.const_array();
     const auto w_sec_arr = w_sec_host.const_array();
     const auto wthv_sec_arr = wthv_sec_host.const_array();
     const auto shoc_cldfrac_arr = shoc_cldfrac_host.const_array();
@@ -1142,6 +1215,34 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
         const Real four_node_zhi = 0.25_rt * (z_nd_ijkp1 + z_nd_ip1jkp1 + z_nd_ijp1kp1 + z_nd_ip1jp1kp1);
         const Real four_node_dz = four_node_zhi - four_node_zlo;
         const Real corner_dz = z_nd_ijkp1 - z_nd_ijk;
+        const Real theta_base_val = theta_base_arr(ic, kk, 0);
+        const Real theta_new_val = theta_arr(ic, kk, 0);
+        const Real thetal_base_val = thetal_base_arr(ic, kk, 0);
+        const Real thetal_new_val = thetal_arr(ic, kk, 0);
+        const Real qv_base_val = qv_base_arr(ic, kk, 0);
+        const Real qc_base_val = qc_base_arr(ic, kk, 0);
+        const Real qi_base_val = qi_base_arr(ic, kk, 0);
+        const Real qv_new_val = qv_arr(ic, kk, 0);
+        const Real qc_new_val = qc_arr(ic, kk, 0);
+        const Real qi_new_val = qi_arr(ic, kk, 0);
+        const Real ql_base = qc_base_val + qi_base_val;
+        const Real ql_new = qc_new_val + qi_new_val;
+        const Real qw_base = qv_base_val + qc_base_val + qi_base_val;
+        const Real qw_new = qv_new_val + qc_new_val + qi_new_val;
+        const Real delta_theta = theta_new_val - theta_base_val;
+        const Real delta_qv = qv_new_val - qv_base_val;
+        const Real delta_qc = qc_new_val - qc_base_val;
+        const Real delta_qi = qi_new_val - qi_base_val;
+        const Real delta_ql = ql_new - ql_base;
+        const Real delta_qw = qw_new - qw_base;
+        const Real dt_theta_tend = theta_tend_arr(ic, kk, 0) * dt;
+        const Real dt_qv_tend = qv_tend_arr(ic, kk, 0) * dt;
+        const Real dt_qc_tend = qc_tend_arr(ic, kk, 0) * dt;
+        const Real dt_qi_tend = qi_tend_arr(ic, kk, 0) * dt;
+        const Real dt_tke_tend = tke_tend_arr(ic, kk, 0) * dt;
+        const Real cond_dt = shoc_cond_arr(ic, kk, 0) * dt;
+        const Real evap_dt = shoc_evap_arr(ic, kk, 0) * dt;
+        const Real tke_base_val = tke_base_arr(ic, kk, 0);
 
         amrex::Print() << "NATIVE_SHOC_BAD_COLUMN_BEGIN\n"
                        << "  level=" << m_lev
@@ -1247,6 +1348,48 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
                        << " u_tend=" << u_tend_arr(ic, kk, 0)
                        << " v_tend=" << v_tend_arr(ic, kk, 0)
                        << "\n"
+                       << "  baseline theta=" << theta_base_val
+                       << " thetal=" << thetal_base_val
+                       << " qv=" << qv_base_val
+                       << " qc=" << qc_base_val
+                       << " qi=" << qi_base_val
+                       << " ql=" << ql_base
+                       << " qw=" << qw_base
+                       << " tke=" << tke_base_val
+                       << "\n"
+                       << "  updated  theta=" << theta_new_val
+                       << " thetal=" << thetal_new_val
+                       << " qv=" << qv_new_val
+                       << " qc=" << qc_new_val
+                       << " qi=" << qi_new_val
+                       << " ql=" << ql_new
+                       << " qw=" << qw_new
+                       << " tke=" << tke_state_arr(ic, kk, 0)
+                       << "\n"
+                       << "  deltas   dtheta=" << delta_theta
+                       << " dqv=" << delta_qv
+                       << " dqc=" << delta_qc
+                       << " dqi=" << delta_qi
+                       << " dql=" << delta_ql
+                       << " dqw=" << delta_qw
+                       << "\n"
+                       << "  tend_dt  theta=" << dt_theta_tend
+                       << " qv=" << dt_qv_tend
+                       << " qc=" << dt_qc_tend
+                       << " qi=" << dt_qi_tend
+                       << " tke=" << dt_tke_tend
+                       << "\n"
+                       << "  consistency dtheta_minus_tenddt=" << (delta_theta - dt_theta_tend)
+                       << " dqv_minus_tenddt=" << (delta_qv - dt_qv_tend)
+                       << " dqc_minus_tenddt=" << (delta_qc - dt_qc_tend)
+                       << " dqi_minus_tenddt=" << (delta_qi - dt_qi_tend)
+                       << "\n"
+                       << "  pdf_cloud shoc_ql=" << shoc_ql_arr(ic, kk, 0)
+                       << " shoc_cond_dt=" << cond_dt
+                       << " shoc_evap_dt=" << evap_dt
+                       << " delta_ql=" << delta_ql
+                       << " delta_ql_minus_cond_minus_evap=" << (delta_ql - (cond_dt - evap_dt))
+                       << "\n"
                        << "  surf_sens_flux=" << surf_sens_flux_arr(ic, 0, 0)
                        << " surf_lat_flux=" << surf_lat_flux_arr(ic, 0, 0)
                        << " surf_tau_u=" << surf_tau_u_arr(ic, 0, 0)
@@ -1297,6 +1440,7 @@ ShocDriver::print_debug_summary (Real dt) const
                    << " momentum_transport=" << shoc_momentum_transport_name(m_opts.momentum_transport)
                    << " state_update=" << (uses_state_update() ? "on" : "off")
                    << "\n";
+    print_shoc_debug_settings_once(m_opts);
 
     print_minmax("Kmv", m_eddy_coeffs_cc, EddyDiff::Mom_v);
     print_minmax("Khv", m_eddy_coeffs_cc, EddyDiff::Theta_v);

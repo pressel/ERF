@@ -321,7 +321,6 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
                                  Real dt)
 {
     AMREX_ALWAYS_ASSERT(dt > 0.0);
-    static_cast<void>(opts);
 
     const int nlev = col.layout.nlev;
     if (nlev == 0) {
@@ -376,7 +375,11 @@ ShocImplicit::finalize_from_pdf (ShocColumnData& col,
         ParallelFor(cell_box, [=] AMREX_GPU_DEVICE (int ic, int k, int) noexcept
         {
             const Real qw_new_loc = amrex::max(qw(ic,k,0), shoc_min_qw());
-            const Real pdf_ql = shoc_clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
+            const Real ql_base = amrex::max(0.0_rt, qc_base(ic,k,0) + qi_base(ic,k,0));
+            const Real pdf_ql_raw = shoc_clamp(shoc_ql_pdf(ic,k,0), 0.0_rt, qw_new_loc);
+            const Real pdf_ql = opts.debug_disable_pdf_cloud_increment
+                ? shoc_clamp(ql_base, 0.0_rt, qw_new_loc)
+                : pdf_ql_raw;
             Real tabs_new = 0.0_rt;
             Real qv_new_loc = 0.0_rt;
             Real qc_new_loc = 0.0_rt;
