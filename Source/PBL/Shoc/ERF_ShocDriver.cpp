@@ -1243,177 +1243,179 @@ ShocDriver::debug_check_bad_column (const ShocColumnData& col,
         const Real cond_dt = shoc_cond_arr(ic, kk, 0) * dt;
         const Real evap_dt = shoc_evap_arr(ic, kk, 0) * dt;
         const Real tke_base_val = tke_base_arr(ic, kk, 0);
-
-        amrex::Print() << "NATIVE_SHOC_BAD_COLUMN_BEGIN\n"
-                       << "  level=" << m_lev
-                       << " shoc_call=" << (m_advance_calls + 1)
-                       << " mfi_index=" << rep.mfi_index
-                       << " box_valid_lo=(" << mfi.validbox().smallEnd(0) << ","
-                       << mfi.validbox().smallEnd(1) << ","
-                       << mfi.validbox().smallEnd(2) << ")"
-                       << " box_valid_hi=(" << mfi.validbox().bigEnd(0) << ","
-                       << mfi.validbox().bigEnd(1) << ","
-                       << mfi.validbox().bigEnd(2) << ")"
-                       << " layout.nx=" << col.layout.nx
-                       << " layout.ny=" << col.layout.ny
-                       << " layout.ncell=" << col.layout.ncell
-                       << " layout.nlev=" << col.layout.nlev
-                       << " layout.imin=" << col.layout.imin
-                       << " layout.jmin=" << col.layout.jmin
-                       << " layout.kmin=" << col.layout.kmin
-                       << " layout.kmax=" << col.layout.kmax
-                       << "\n"
-                       << "  i=" << i << " j=" << j << " k=" << k
-                       << " kk=" << kk << " ic=" << ic
-                       << " score=" << rep.score
-                       << " reason=" << rep.reason
-                       << "\n"
-                       << "  geometry z_nd(i,j,k)=" << z_nd_ijk
-                       << " z_nd(i+1,j,k)=" << z_nd_ip1jk
-                       << " z_nd(i,j+1,k)=" << z_nd_ijp1k
-                       << " z_nd(i+1,j+1,k)=" << z_nd_ip1jp1k
-                       << " z_nd(i,j,k+1)=" << z_nd_ijkp1
-                       << " z_nd(i+1,j,k+1)=" << z_nd_ip1jkp1
-                       << " z_nd(i,j+1,k+1)=" << z_nd_ijp1kp1
-                       << " z_nd(i+1,j+1,k+1)=" << z_nd_ip1jp1kp1
-                       << "\n"
-                       << "  four_node_zlo=" << four_node_zlo
-                       << " four_node_zhi=" << four_node_zhi
-                       << " four_node_dz=" << four_node_dz
-                       << " corner_dz=" << corner_dz
-                       << " dz=" << dz_arr(ic, kk, 0)
-                       << "\n"
-                       << "  rho=" << rho_arr(ic, kk, 0)
-                       << " theta=" << theta_arr(ic, kk, 0)
-                       << " thetal=" << thetal_arr(ic, kk, 0)
-                       << " theta_v=" << theta_v_arr(ic, kk, 0)
-                       << " qv=" << qv_arr(ic, kk, 0)
-                       << " qc=" << qc_arr(ic, kk, 0)
-                       << " qi=" << qi_arr(ic, kk, 0)
-                       << " qw=" << qw_arr(ic, kk, 0)
-                       << " tabs=" << tabs_arr(ic, kk, 0)
-                       << " exner=" << exner_arr(ic, kk, 0)
-                       << " p_mid=" << p_mid_arr(ic, kk, 0)
-                       << " p_int_lower=" << p_int_arr(ic, kk, 0)
-                       << " p_int_upper=" << p_int_arr(ic, kk + 1, 0)
-                       << " host_dse=" << host_dse_arr(ic, kk, 0)
-                       << "\n"
-                       << "  pblh=" << pblh_arr(ic, 0, 0)
-                       << " obklen=" << obklen_arr(ic, 0, 0)
-                       << " ustar=" << ustar_arr(ic, 0, 0)
-                       << " shoc_mix=" << shoc_mix_arr(ic, kk, 0)
-                       << " Lturb=" << shoc_mix_arr(ic, kk, 0)
-                       << " brunt=" << brunt_arr(ic, kk, 0)
-                       << " isotropy=" << isotropy_arr(ic, kk, 0)
-                       << " tk=" << tk_arr(ic, kk, 0)
-                       << " tkh=" << tkh_arr(ic, kk, 0)
-                       << " shear_prod=" << shear_prod_arr(ic, kk, 0)
-                       << " buoy_prod=" << buoy_prod_arr(ic, kk, 0)
-                       << " diss_tke=" << diss_tke_arr(ic, kk, 0)
-                       << " tke=" << tke_state_arr(ic, kk, 0)
-                       << "\n"
-                       << "  w_sec=" << w_sec_arr(ic, kk, 0)
-                       << " wthv_sec=" << wthv_sec_arr(ic, kk, 0)
-                       << " shoc_cldfrac=" << shoc_cldfrac_arr(ic, kk, 0)
-                       << " shoc_ql=" << shoc_ql_arr(ic, kk, 0)
-                       << " shoc_ql2=" << shoc_ql2_arr(ic, kk, 0)
-                       << " shoc_cond=" << shoc_cond_arr(ic, kk, 0)
-                       << " shoc_evap=" << shoc_evap_arr(ic, kk, 0)
-                       << " wqls_sec=" << wqls_sec_arr(ic, kk, 0)
-                       << "\n"
-                       << "  thl_sec_lower=" << thl_sec_arr(ic, kk, 0)
-                       << " thl_sec_upper=" << thl_sec_arr(ic, kk + 1, 0)
-                       << " qw_sec_lower=" << qw_sec_arr(ic, kk, 0)
-                       << " qw_sec_upper=" << qw_sec_arr(ic, kk + 1, 0)
-                       << " qwthl_sec_lower=" << qwthl_sec_arr(ic, kk, 0)
-                       << " qwthl_sec_upper=" << qwthl_sec_arr(ic, kk + 1, 0)
-                       << " wthl_sec_lower=" << wthl_sec_arr(ic, kk, 0)
-                       << " wthl_sec_upper=" << wthl_sec_arr(ic, kk + 1, 0)
-                       << " wqw_sec_lower=" << wqw_sec_arr(ic, kk, 0)
-                       << " wqw_sec_upper=" << wqw_sec_arr(ic, kk + 1, 0)
-                       << " w3_lower=" << w3_arr(ic, kk, 0)
-                       << " w3_upper=" << w3_arr(ic, kk + 1, 0)
-                       << " uw_sec_lower=" << uw_sec_arr(ic, kk, 0)
-                       << " uw_sec_upper=" << uw_sec_arr(ic, kk + 1, 0)
-                       << " vw_sec_lower=" << vw_sec_arr(ic, kk, 0)
-                       << " vw_sec_upper=" << vw_sec_arr(ic, kk + 1, 0)
-                       << " wtke_sec_lower=" << wtke_sec_arr(ic, kk, 0)
-                       << " wtke_sec_upper=" << wtke_sec_arr(ic, kk + 1, 0)
-                       << "\n"
-                       << "  theta_tend=" << theta_tend_arr(ic, kk, 0)
-                       << " qv_tend=" << qv_tend_arr(ic, kk, 0)
-                       << " qc_tend=" << qc_tend_arr(ic, kk, 0)
-                       << " qi_tend=" << qi_tend_arr(ic, kk, 0)
-                       << " tke_tend=" << tke_tend_arr(ic, kk, 0)
-                       << " u_tend=" << u_tend_arr(ic, kk, 0)
-                       << " v_tend=" << v_tend_arr(ic, kk, 0)
-                       << "\n"
-                       << "  baseline theta=" << theta_base_val
-                       << " thetal=" << thetal_base_val
-                       << " qv=" << qv_base_val
-                       << " qc=" << qc_base_val
-                       << " qi=" << qi_base_val
-                       << " ql=" << ql_base
-                       << " qw=" << qw_base
-                       << " tke=" << tke_base_val
-                       << "\n"
-                       << "  updated  theta=" << theta_new_val
-                       << " thetal=" << thetal_new_val
-                       << " qv=" << qv_new_val
-                       << " qc=" << qc_new_val
-                       << " qi=" << qi_new_val
-                       << " ql=" << ql_new
-                       << " qw=" << qw_new
-                       << " tke=" << tke_state_arr(ic, kk, 0)
-                       << "\n"
-                       << "  deltas   dtheta=" << delta_theta
-                       << " dqv=" << delta_qv
-                       << " dqc=" << delta_qc
-                       << " dqi=" << delta_qi
-                       << " dql=" << delta_ql
-                       << " dqw=" << delta_qw
-                       << "\n"
-                       << "  tend_dt  theta=" << dt_theta_tend
-                       << " qv=" << dt_qv_tend
-                       << " qc=" << dt_qc_tend
-                       << " qi=" << dt_qi_tend
-                       << " tke=" << dt_tke_tend
-                       << "\n"
-                       << "  consistency dtheta_minus_tenddt=" << (delta_theta - dt_theta_tend)
-                       << " dqv_minus_tenddt=" << (delta_qv - dt_qv_tend)
-                       << " dqc_minus_tenddt=" << (delta_qc - dt_qc_tend)
-                       << " dqi_minus_tenddt=" << (delta_qi - dt_qi_tend)
-                       << "\n"
-                       << "  pdf_cloud shoc_ql=" << shoc_ql_arr(ic, kk, 0)
-                       << " shoc_cond_dt=" << cond_dt
-                       << " shoc_evap_dt=" << evap_dt
-                       << " delta_ql=" << delta_ql
-                       << " delta_ql_minus_cond_minus_evap=" << (delta_ql - (cond_dt - evap_dt))
-                       << "\n"
-                       << "  surf_sens_flux=" << surf_sens_flux_arr(ic, 0, 0)
-                       << " surf_lat_flux=" << surf_lat_flux_arr(ic, 0, 0)
-                       << " surf_tau_u=" << surf_tau_u_arr(ic, 0, 0)
-                       << " surf_tau_v=" << surf_tau_v_arr(ic, 0, 0)
-                       << " rho_sfc=" << cons_arr(i, j, k, Rho_comp)
-                       << "\n";
+        std::ostringstream msg;
+        msg << "NATIVE_SHOC_BAD_COLUMN_BEGIN\n"
+            << "  rank=" << ParallelDescriptor::MyProc()
+            << " level=" << m_lev
+            << " shoc_call=" << (m_advance_calls + 1)
+            << " mfi_index=" << rep.mfi_index
+            << " box_valid_lo=(" << mfi.validbox().smallEnd(0) << ","
+            << mfi.validbox().smallEnd(1) << ","
+            << mfi.validbox().smallEnd(2) << ")"
+            << " box_valid_hi=(" << mfi.validbox().bigEnd(0) << ","
+            << mfi.validbox().bigEnd(1) << ","
+            << mfi.validbox().bigEnd(2) << ")"
+            << " layout.nx=" << col.layout.nx
+            << " layout.ny=" << col.layout.ny
+            << " layout.ncell=" << col.layout.ncell
+            << " layout.nlev=" << col.layout.nlev
+            << " layout.imin=" << col.layout.imin
+            << " layout.jmin=" << col.layout.jmin
+            << " layout.kmin=" << col.layout.kmin
+            << " layout.kmax=" << col.layout.kmax
+            << "\n"
+            << "  i=" << i << " j=" << j << " k=" << k
+            << " kk=" << kk << " ic=" << ic
+            << " score=" << rep.score
+            << " reason=" << rep.reason
+            << "\n"
+            << "  geometry z_nd(i,j,k)=" << z_nd_ijk
+            << " z_nd(i+1,j,k)=" << z_nd_ip1jk
+            << " z_nd(i,j+1,k)=" << z_nd_ijp1k
+            << " z_nd(i+1,j+1,k)=" << z_nd_ip1jp1k
+            << " z_nd(i,j,k+1)=" << z_nd_ijkp1
+            << " z_nd(i+1,j,k+1)=" << z_nd_ip1jkp1
+            << " z_nd(i,j+1,k+1)=" << z_nd_ijp1kp1
+            << " z_nd(i+1,j+1,k+1)=" << z_nd_ip1jp1kp1
+            << "\n"
+            << "  four_node_zlo=" << four_node_zlo
+            << " four_node_zhi=" << four_node_zhi
+            << " four_node_dz=" << four_node_dz
+            << " corner_dz=" << corner_dz
+            << " dz=" << dz_arr(ic, kk, 0)
+            << "\n"
+            << "  rho=" << rho_arr(ic, kk, 0)
+            << " theta=" << theta_arr(ic, kk, 0)
+            << " thetal=" << thetal_arr(ic, kk, 0)
+            << " theta_v=" << theta_v_arr(ic, kk, 0)
+            << " qv=" << qv_arr(ic, kk, 0)
+            << " qc=" << qc_arr(ic, kk, 0)
+            << " qi=" << qi_arr(ic, kk, 0)
+            << " qw=" << qw_arr(ic, kk, 0)
+            << " tabs=" << tabs_arr(ic, kk, 0)
+            << " exner=" << exner_arr(ic, kk, 0)
+            << " p_mid=" << p_mid_arr(ic, kk, 0)
+            << " p_int_lower=" << p_int_arr(ic, kk, 0)
+            << " p_int_upper=" << p_int_arr(ic, kk + 1, 0)
+            << " host_dse=" << host_dse_arr(ic, kk, 0)
+            << "\n"
+            << "  pblh=" << pblh_arr(ic, 0, 0)
+            << " obklen=" << obklen_arr(ic, 0, 0)
+            << " ustar=" << ustar_arr(ic, 0, 0)
+            << " shoc_mix=" << shoc_mix_arr(ic, kk, 0)
+            << " Lturb=" << shoc_mix_arr(ic, kk, 0)
+            << " brunt=" << brunt_arr(ic, kk, 0)
+            << " isotropy=" << isotropy_arr(ic, kk, 0)
+            << " tk=" << tk_arr(ic, kk, 0)
+            << " tkh=" << tkh_arr(ic, kk, 0)
+            << " shear_prod=" << shear_prod_arr(ic, kk, 0)
+            << " buoy_prod=" << buoy_prod_arr(ic, kk, 0)
+            << " diss_tke=" << diss_tke_arr(ic, kk, 0)
+            << " tke=" << tke_state_arr(ic, kk, 0)
+            << "\n"
+            << "  w_sec=" << w_sec_arr(ic, kk, 0)
+            << " wthv_sec=" << wthv_sec_arr(ic, kk, 0)
+            << " shoc_cldfrac=" << shoc_cldfrac_arr(ic, kk, 0)
+            << " shoc_ql=" << shoc_ql_arr(ic, kk, 0)
+            << " shoc_ql2=" << shoc_ql2_arr(ic, kk, 0)
+            << " shoc_cond=" << shoc_cond_arr(ic, kk, 0)
+            << " shoc_evap=" << shoc_evap_arr(ic, kk, 0)
+            << " wqls_sec=" << wqls_sec_arr(ic, kk, 0)
+            << "\n"
+            << "  thl_sec_lower=" << thl_sec_arr(ic, kk, 0)
+            << " thl_sec_upper=" << thl_sec_arr(ic, kk + 1, 0)
+            << " qw_sec_lower=" << qw_sec_arr(ic, kk, 0)
+            << " qw_sec_upper=" << qw_sec_arr(ic, kk + 1, 0)
+            << " qwthl_sec_lower=" << qwthl_sec_arr(ic, kk, 0)
+            << " qwthl_sec_upper=" << qwthl_sec_arr(ic, kk + 1, 0)
+            << " wthl_sec_lower=" << wthl_sec_arr(ic, kk, 0)
+            << " wthl_sec_upper=" << wthl_sec_arr(ic, kk + 1, 0)
+            << " wqw_sec_lower=" << wqw_sec_arr(ic, kk, 0)
+            << " wqw_sec_upper=" << wqw_sec_arr(ic, kk + 1, 0)
+            << " w3_lower=" << w3_arr(ic, kk, 0)
+            << " w3_upper=" << w3_arr(ic, kk + 1, 0)
+            << " uw_sec_lower=" << uw_sec_arr(ic, kk, 0)
+            << " uw_sec_upper=" << uw_sec_arr(ic, kk + 1, 0)
+            << " vw_sec_lower=" << vw_sec_arr(ic, kk, 0)
+            << " vw_sec_upper=" << vw_sec_arr(ic, kk + 1, 0)
+            << " wtke_sec_lower=" << wtke_sec_arr(ic, kk, 0)
+            << " wtke_sec_upper=" << wtke_sec_arr(ic, kk + 1, 0)
+            << "\n"
+            << "  theta_tend=" << theta_tend_arr(ic, kk, 0)
+            << " qv_tend=" << qv_tend_arr(ic, kk, 0)
+            << " qc_tend=" << qc_tend_arr(ic, kk, 0)
+            << " qi_tend=" << qi_tend_arr(ic, kk, 0)
+            << " tke_tend=" << tke_tend_arr(ic, kk, 0)
+            << " u_tend=" << u_tend_arr(ic, kk, 0)
+            << " v_tend=" << v_tend_arr(ic, kk, 0)
+            << "\n"
+            << "  baseline theta=" << theta_base_val
+            << " thetal=" << thetal_base_val
+            << " qv=" << qv_base_val
+            << " qc=" << qc_base_val
+            << " qi=" << qi_base_val
+            << " ql=" << ql_base
+            << " qw=" << qw_base
+            << " tke=" << tke_base_val
+            << "\n"
+            << "  updated  theta=" << theta_new_val
+            << " thetal=" << thetal_new_val
+            << " qv=" << qv_new_val
+            << " qc=" << qc_new_val
+            << " qi=" << qi_new_val
+            << " ql=" << ql_new
+            << " qw=" << qw_new
+            << " tke=" << tke_state_arr(ic, kk, 0)
+            << "\n"
+            << "  deltas   dtheta=" << delta_theta
+            << " dqv=" << delta_qv
+            << " dqc=" << delta_qc
+            << " dqi=" << delta_qi
+            << " dql=" << delta_ql
+            << " dqw=" << delta_qw
+            << "\n"
+            << "  tend_dt  theta=" << dt_theta_tend
+            << " qv=" << dt_qv_tend
+            << " qc=" << dt_qc_tend
+            << " qi=" << dt_qi_tend
+            << " tke=" << dt_tke_tend
+            << "\n"
+            << "  consistency dtheta_minus_tenddt=" << (delta_theta - dt_theta_tend)
+            << " dqv_minus_tenddt=" << (delta_qv - dt_qv_tend)
+            << " dqc_minus_tenddt=" << (delta_qc - dt_qc_tend)
+            << " dqi_minus_tenddt=" << (delta_qi - dt_qi_tend)
+            << "\n"
+            << "  pdf_cloud shoc_ql=" << shoc_ql_arr(ic, kk, 0)
+            << " shoc_cond_dt=" << cond_dt
+            << " shoc_evap_dt=" << evap_dt
+            << " delta_ql=" << delta_ql
+            << " delta_ql_minus_cond_minus_evap=" << (delta_ql - (cond_dt - evap_dt))
+            << "\n"
+            << "  surf_sens_flux=" << surf_sens_flux_arr(ic, 0, 0)
+            << " surf_lat_flux=" << surf_lat_flux_arr(ic, 0, 0)
+            << " surf_tau_u=" << surf_tau_u_arr(ic, 0, 0)
+            << " surf_tau_v=" << surf_tau_v_arr(ic, 0, 0)
+            << " rho_sfc=" << cons_arr(i, j, k, Rho_comp)
+            << "\n";
 
         if (has_hfx3) {
-            amrex::Print() << "  raw hfx3(i,j,klo)=" << hfx3_host.const_array()(rep.i, rep.j, rep.k) << "\n";
+            msg << "  raw hfx3(i,j,klo)=" << hfx3_host.const_array()(rep.i, rep.j, rep.k) << "\n";
         }
         if (has_qfx3) {
-            amrex::Print() << "  raw qfx3(i,j,klo)=" << qfx3_host.const_array()(rep.i, rep.j, rep.k) << "\n";
+            msg << "  raw qfx3(i,j,klo)=" << qfx3_host.const_array()(rep.i, rep.j, rep.k) << "\n";
         }
         if (has_tau13) {
-            amrex::Print() << "  raw tau13(i,j,klo)=" << tau13_host.const_array()(rep.i, rep.j, rep.k)
-                           << " raw tau13(i+1,j,klo)=" << tau13_host.const_array()(rep.i + 1, rep.j, rep.k)
-                           << "\n";
+            msg << "  raw tau13(i,j,klo)=" << tau13_host.const_array()(rep.i, rep.j, rep.k)
+                << " raw tau13(i+1,j,klo)=" << tau13_host.const_array()(rep.i + 1, rep.j, rep.k)
+                << "\n";
         }
         if (has_tau23) {
-            amrex::Print() << "  raw tau23(i,j,klo)=" << tau23_host.const_array()(rep.i, rep.j, rep.k)
-                           << " raw tau23(i,j+1,klo)=" << tau23_host.const_array()(rep.i, rep.j + 1, rep.k)
-                           << "\n";
+            msg << "  raw tau23(i,j,klo)=" << tau23_host.const_array()(rep.i, rep.j, rep.k)
+                << " raw tau23(i,j+1,klo)=" << tau23_host.const_array()(rep.i, rep.j + 1, rep.k)
+                << "\n";
         }
-        amrex::Print() << "NATIVE_SHOC_BAD_COLUMN_END\n";
+        msg << "NATIVE_SHOC_BAD_COLUMN_END\n";
+        amrex::AllPrint() << msg.str() << std::flush;
     }
 
     if (m_opts.debug_bad_column_abort) {
