@@ -670,6 +670,17 @@ ShocDriver::advance (MultiFab& cons,
                 });
         }
 
+#ifdef AMREX_USE_GPU
+        // Diagnostic fence:
+        // The per-MFIter SHOC column workspace is reused for the next box.
+        // Synchronize here to test whether queued GPU kernels are still reading
+        // the current box's column scratch when the next box resets/reuses it.
+        {
+            BL_PROFILE("SHOC::advance::sync_after_writeback");
+            amrex::Gpu::streamSynchronize();
+        }
+#endif
+
     }
 
     {
