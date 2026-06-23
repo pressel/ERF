@@ -4,9 +4,12 @@
 #include "ERF_ShocDiagnostics.H"
 #include "ERF_ShocTypes.H"
 #include "ERF_ShocPreprocess.H"
+#include "ERF_ShocColumnData.H"
 
 #include <AMReX_BoxArray.H>
 #include <AMReX_MultiFab.H>
+
+#include <memory>
 
 bool shoc_boxarray_spans_full_height (const amrex::BoxArray& ba,
                                       const amrex::Box& domain);
@@ -117,6 +120,7 @@ private:
     amrex::MultiFab* m_tau13_ptr = nullptr;
     amrex::MultiFab* m_tau23_ptr = nullptr;
     amrex::MultiFab* m_eddy_diffs_ptr = nullptr;
+    amrex::Vector<std::unique_ptr<ShocColumnWorkspace>> m_column_workspaces;
     int m_advance_calls = 0;
     bool m_prev_turb_valid = false;
 

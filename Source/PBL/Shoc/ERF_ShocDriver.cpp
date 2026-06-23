@@ -494,12 +494,22 @@ ShocDriver::advance (MultiFab& cons,
             "Native SHOC state_update does not yet support number-aware microphysics layouts with cloud/ice number concentrations. A number closure is required before SHOC can update cloud mass in these layouts.");
     }
 
-    // Reused across the current host-serial MFIter loop to avoid repeated
-    // SHOC scratch allocation. If this loop is parallelized on the host,
-    // make the workspace thread-private.
-    ShocColumnWorkspace workspace;
+    // Keep one SHOC column workspace per local box so GPU writeback kernels
+    // can finish reading a box's scratch before it is reused.
+    const int n_local = cons.local_size();
+    if (static_cast<int>(m_column_workspaces.size()) < n_local) {
+        const std::size_t old_size = m_column_workspaces.size();
+        m_column_workspaces.resize(n_local);
+        for (std::size_t n = old_size; n < m_column_workspaces.size(); ++n) {
+            m_column_workspaces[n] = std::make_unique<ShocColumnWorkspace>();
+        }
+    }
 
-    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+    int local_index = 0;
+    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi, ++local_index) {
+        AMREX_ALWAYS_ASSERT(local_index >= 0);
+        AMREX_ALWAYS_ASSERT(local_index < static_cast<int>(m_column_workspaces.size()));
+        ShocColumnWorkspace& workspace = *m_column_workspaces[local_index];
         const Box& vbx = mfi.validbox();
         const ShocColumnLayout active_layout = make_shoc_layout(vbx, geom);
         {
@@ -669,17 +679,6 @@ ShocDriver::advance (MultiFab& cons,
                 }
                 });
         }
-
-#ifdef AMREX_USE_GPU
-        // Diagnostic fence:
-        // The per-MFIter SHOC column workspace is reused for the next box.
-        // Synchronize here to test whether queued GPU kernels are still reading
-        // the current box's column scratch when the next box resets/reuses it.
-        {
-            BL_PROFILE("SHOC::advance::sync_after_writeback");
-            amrex::Gpu::streamSynchronize();
-        }
-#endif
 
     }
 
