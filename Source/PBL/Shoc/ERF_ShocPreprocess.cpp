@@ -16,6 +16,15 @@ Real load_q (const Array4<const Real>& cons_arr,
 {
     return shoc_valid_comp(comp, ncomp) ? cons_arr(i,j,k,comp) / rho : 0.0;
 }
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+Real four_node_z_avg (const Array4<const Real>& z, int i, int j, int k) noexcept
+{
+    return 0.25_rt * (z(i  ,j  ,k) +
+                      z(i+1,j  ,k) +
+                      z(i  ,j+1,k) +
+                      z(i+1,j+1,k));
+}
 }
 
 void
@@ -97,8 +106,11 @@ ShocPreprocess::fill_columns (ShocColumnData& col,
 
         for (int k = klo; k <= khi; ++k) {
             const int kk = k - klo;
-            const Real zlo = z_arr(i,j,k);
-            const Real zhi = z_arr(i,j,k+1);
+            // z_phys_nd is nodal in x, y, and z. Pack SHOC column interface
+            // heights as the four-node horizontal average over the ERF cell
+            // footprint, matching the EAMxx SHOC coupling.
+            const Real zlo = four_node_z_avg(z_arr, i, j, k);
+            const Real zhi = four_node_z_avg(z_arr, i, j, k+1);
             const Real zc = 0.5_rt * (zlo + zhi);
             const Real dz = zhi - zlo;
             const Real rho = cons_arr(i,j,k,Rho_comp);

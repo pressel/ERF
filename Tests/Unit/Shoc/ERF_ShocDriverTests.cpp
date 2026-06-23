@@ -1,4 +1,6 @@
 #include "ERF_IndexDefines.H"
+#include "ERF_Constants.H"
+#include "ERF_EOS.H"
 #include "ERF_ShocColumnData.H"
 #include "ERF_ShocDriver.H"
 #include "ERF_ShocPreprocess.H"
@@ -41,6 +43,14 @@ constexpr int nz = 5;
 constexpr Real tol = 1.0e-12_rt;
 
 using FixtureMap = std::map<std::string, amrex::Vector<Real>>;
+
+amrex::BoxArray
+make_nodal_zphys_boxarray (const amrex::BoxArray& ba)
+{
+    amrex::BoxArray zphys_ba(ba);
+    zphys_ba.surroundingNodes();
+    return zphys_ba;
+}
 
 template <int N>
 GpuArray<Real, N>
@@ -705,7 +715,7 @@ TEST(ShocPreprocess, SurfaceStressAveragesFaceValuesToColumnCenters)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -744,6 +754,97 @@ TEST(ShocPreprocess, SurfaceStressAveragesFaceValuesToColumnCenters)
     }
 }
 
+TEST(ShocPreprocess, UsesFourNodeAveragedTerrainGeometry)
+{
+    Box domain(IntVect(0,0,0), IntVect(1,1,2));
+    amrex::RealBox real_box(0.0_rt, 0.0_rt, 0.0_rt,
+                            200.0_rt, 200.0_rt, 300.0_rt);
+    int is_periodic[AMREX_SPACEDIM] = {0, 0, 0};
+    Geometry geom(domain, &real_box, amrex::CoordSys::cartesian, is_periodic);
+
+    amrex::BoxArray ba(domain);
+    ba.maxSize(IntVect(2, 2, 3));
+    DistributionMapping dm(ba);
+
+    MultiFab cons(ba, dm, NVAR_max, 0);
+    amrex::BoxArray xba = amrex::convert(ba, IntVect(1,0,0));
+    amrex::BoxArray yba = amrex::convert(ba, IntVect(0,1,0));
+    amrex::BoxArray zba = amrex::convert(ba, IntVect(0,0,1));
+    amrex::BoxArray xzba = amrex::convert(ba, IntVect(1,0,1));
+    amrex::BoxArray yzba = amrex::convert(ba, IntVect(0,1,1));
+    amrex::BoxArray zphys_ba = make_nodal_zphys_boxarray(ba);
+
+    MultiFab xvel(xba, dm, 1, 0);
+    MultiFab yvel(yba, dm, 1, 0);
+    MultiFab zvel(zba, dm, 1, 0);
+    MultiFab z_phys_nd(zphys_ba, dm, 1, 0);
+    MultiFab hfx3(ba, dm, 1, 0);
+    MultiFab qfx3(ba, dm, 1, 0);
+    MultiFab tau13(xzba, dm, 1, 0);
+    MultiFab tau23(yzba, dm, 1, 0);
+    MultiFab eddy_diffs(ba, dm, EddyDiff::NumDiffs, 0);
+
+    initialize_basic_column_state(cons, zvel, z_phys_nd, hfx3, qfx3, eddy_diffs);
+    initialize_face_velocities_with_seam_offsets(xvel, yvel, domain, 0.0_rt, 0.0_rt);
+    initialize_face_stress_gradients(tau13, tau23);
+
+    for (MFIter mfi(z_phys_nd, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = z_phys_nd.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = 100.0_rt * k + 10.0_rt * static_cast<Real>(i) + 2.0_rt * static_cast<Real>(j);
+        });
+    }
+    shoc_test::sync();
+
+    ShocColumnWorkspace workspace;
+    const MoistureComponentIndices moisture_indices(RhoQ1_comp, RhoQ2_comp);
+
+    for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+        const ShocColumnLayout active_layout = make_shoc_layout(mfi.validbox(), geom);
+        workspace.ensure_capacity(active_layout, shoc_test::test_arena(), shoc::InitRunOn::Host);
+
+        shoc_test::run_and_sync([&] {
+            ShocPreprocess::fill_columns(workspace.col, mfi, cons, xvel, yvel, zvel,
+                                         &hfx3, &qfx3, &tau13, &tau23, z_phys_nd, geom,
+                                         moisture_indices);
+        });
+
+        const auto zi = workspace.col.zi.const_array();
+        const auto zt = workspace.col.zt.const_array();
+        const auto dz = workspace.col.dz.const_array();
+        const auto dse = workspace.col.host_dse.const_array();
+        const auto tabs = workspace.col.tabs.const_array();
+        const auto zarr = z_phys_nd.const_array(mfi);
+        const auto layout = workspace.col.layout;
+
+        for (int j = 0; j < layout.ny; ++j) {
+            for (int i = 0; i < layout.nx; ++i) {
+                const int ic = shoc_column_index(layout, layout.imin + i, layout.jmin + j);
+                for (int kk = 0; kk < layout.nlev; ++kk) {
+                    const int k = layout.kmin + kk;
+                    const Real zlo = 0.25_rt * (zarr(i,  j,  k) +
+                                                zarr(i+1,j,  k) +
+                                                zarr(i,  j+1,k) +
+                                                zarr(i+1,j+1,k));
+                    const Real zhi = 0.25_rt * (zarr(i,  j,  k+1) +
+                                                zarr(i+1,j,  k+1) +
+                                                zarr(i,  j+1,k+1) +
+                                                zarr(i+1,j+1,k+1));
+                    const Real zc = 0.5_rt * (zlo + zhi);
+                    const Real expected_dse = Cp_d * tabs(ic,kk,0) + CONST_GRAV * zc;
+
+                    EXPECT_NEAR(zi(ic,kk,0), zlo, tol);
+                    EXPECT_NEAR(zt(ic,kk,0), zc, tol);
+                    EXPECT_NEAR(dz(ic,kk,0), zhi - zlo, tol);
+                    EXPECT_NEAR(dse(ic,kk,0), expected_dse, tol);
+                }
+            }
+        }
+    }
+}
+
 TEST(ShocDriver, FaceSyncKeepsSeamCopiesAlignedAfterStateUpdate)
 {
     Box domain(IntVect(0,0,0), IntVect(3,3,4));
@@ -766,7 +867,7 @@ TEST(ShocDriver, FaceSyncKeepsSeamCopiesAlignedAfterStateUpdate)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -830,7 +931,7 @@ TEST(ShocDriver, AdvanceAppliesStateUpdateAndProducesFiniteDiagnostics)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -996,7 +1097,7 @@ TEST(ShocDriver, MomentumTransportNoneLeavesVelocitiesUntouchedAndSkipsMomentumE
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1069,7 +1170,7 @@ TEST(ShocDriver, MomentumTransportStateUpdateUpdatesFaceVelocitiesWhenRequested)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1157,7 +1258,7 @@ TEST(ShocDriver, PassiveScalarIsNotModifiedByNativeShoc)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1235,8 +1336,8 @@ TEST(ShocDriver, SecondAdvanceIgnoresHostDiffSeedsAfterCarryStateIsEstablished)
     MultiFab yvel_b(yba, dm, 1, 0);
     MultiFab zvel_a(zba, dm, 1, 0);
     MultiFab zvel_b(zba, dm, 1, 0);
-    MultiFab z_phys_nd_a(zba, dm, 1, 0);
-    MultiFab z_phys_nd_b(zba, dm, 1, 0);
+    MultiFab z_phys_nd_a(make_nodal_zphys_boxarray(ba), dm, 1, 0);
+    MultiFab z_phys_nd_b(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3_a(ba, dm, 1, 0);
     MultiFab hfx3_b(ba, dm, 1, 0);
     MultiFab qfx3_a(ba, dm, 1, 0);
@@ -1331,7 +1432,7 @@ TEST(ShocDriver, HostDiffusionModeExportsDiffusivitiesWithoutInternalTransport)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1472,7 +1573,7 @@ TEST(ShocDriver, StateUpdateModeRejectsNumberAwareMoistureLayoutsWithoutNumberCl
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1543,7 +1644,7 @@ TEST(ShocDriver, StateUpdateModeSupportsIceCapableMoistureLayouts)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1628,7 +1729,7 @@ TEST(ShocDriver, MultiStepStateUpdateModeKeepsColumnDiagnosticsStable)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1712,7 +1813,7 @@ TEST(ShocDriver, MultiStepHostDiffusionModeKeepsExportsStable)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
@@ -1821,7 +1922,7 @@ TEST(ShocDriver, FixturePreprocessStructureAndTkeStayBoundedBeforePdf)
     MultiFab xvel(xba, dm, 1, 0);
     MultiFab yvel(yba, dm, 1, 0);
     MultiFab zvel(zba, dm, 1, 0);
-    MultiFab z_phys_nd(zba, dm, 1, 0);
+    MultiFab z_phys_nd(make_nodal_zphys_boxarray(ba), dm, 1, 0);
     MultiFab hfx3(ba, dm, 1, 0);
     MultiFab qfx3(ba, dm, 1, 0);
     MultiFab tau13(xzba, dm, 1, 0);
