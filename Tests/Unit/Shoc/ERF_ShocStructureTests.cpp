@@ -65,6 +65,23 @@ private:
     bool m_had_previous = false;
 };
 
+namespace
+{
+void
+shift_column_heights (ShocColumnData& col, Real offset)
+{
+    auto zt = col.zt.array();
+    auto zi = col.zi.array();
+    for (int k = 0; k < col.layout.nlev; ++k) {
+        zt(0,k,0) += offset;
+    }
+    for (int k = 0; k <= col.layout.nlev; ++k) {
+        zi(0,k,0) += offset;
+    }
+    shoc_test::sync();
+}
+}
+
 TEST(ShocRuntimeOptions, LegacyTendenciesTransportModeIsRejected)
 {
     ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "tendencies");
@@ -329,9 +346,10 @@ TEST(ShocStructure, PblHeightStaysInsideColumn)
 
     const auto pblh = col.pblh.const_array();
     const auto zt = col.zt.const_array();
+    const auto zi = col.zi.const_array();
 
-    EXPECT_GE(pblh(0,0,0), zt(0,0,0));
-    EXPECT_LE(pblh(0,0,0), zt(0,col.layout.nlev-1,0));
+    EXPECT_GE(pblh(0,0,0), shoc::height_agl(zt(0,0,0), zi(0,0,0)));
+    EXPECT_LE(pblh(0,0,0), shoc::height_agl(zt(0,col.layout.nlev-1,0), zi(0,0,0)));
 }
 
 TEST(ShocStructure, LowestCloudLayerAppliesVentilationFloor)
@@ -347,7 +365,77 @@ TEST(ShocStructure, LowestCloudLayerAppliesVentilationFloor)
 
     const auto pblh = col.pblh.const_array();
     const auto zi = col.zi.const_array();
-    EXPECT_GE(pblh(0,0,0), zi(0,1,0) + 50.0);
+    EXPECT_GE(pblh(0,0,0), shoc::height_agl(zi(0,1,0), zi(0,0,0)) + 50.0);
+}
+
+TEST(ShocStructure, BruntInvariantToTerrainOffset)
+{
+    auto base = shoc_test::make_column(6);
+    auto shifted = shoc_test::make_column(6);
+    shift_column_heights(shifted, 750.0_rt);
+    ShocRuntimeOptions opts;
+
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(base);
+        ShocStructure::diagnose_pblh(base);
+        ShocStructure::diagnose_length_and_brunt(base, opts, 2000.0, 2000.0);
+        ShocStructure::diagnose_surface_layer(shifted);
+        ShocStructure::diagnose_pblh(shifted);
+        ShocStructure::diagnose_length_and_brunt(shifted, opts, 2000.0, 2000.0);
+    });
+
+    const auto base_brunt = base.brunt.const_array();
+    const auto shifted_brunt = shifted.brunt.const_array();
+    for (int k = 0; k < base.layout.nlev; ++k) {
+        EXPECT_NEAR(base_brunt(0,k,0), shifted_brunt(0,k,0), 1.0e-12);
+    }
+}
+
+TEST(ShocStructure, LengthScaleInvariantToTerrainOffset)
+{
+    auto base = shoc_test::make_column(6);
+    auto shifted = shoc_test::make_column(6);
+    shift_column_heights(shifted, 750.0_rt);
+    ShocRuntimeOptions opts;
+
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(base);
+        ShocStructure::diagnose_pblh(base);
+        ShocStructure::diagnose_length_and_brunt(base, opts, 2000.0, 2000.0);
+        ShocStructure::diagnose_surface_layer(shifted);
+        ShocStructure::diagnose_pblh(shifted);
+        ShocStructure::diagnose_length_and_brunt(shifted, opts, 2000.0, 2000.0);
+    });
+
+    const auto base_mix = base.shoc_mix.const_array();
+    const auto shifted_mix = shifted.shoc_mix.const_array();
+    for (int k = 0; k < base.layout.nlev; ++k) {
+        EXPECT_NEAR(base_mix(0,k,0), shifted_mix(0,k,0), 1.0e-12);
+    }
+}
+
+TEST(ShocStructure, PblHeightInvariantToTerrainOffsetAndReturnsAgl)
+{
+    auto base = shoc_test::make_column(6);
+    auto shifted = shoc_test::make_column(6);
+    shift_column_heights(shifted, 750.0_rt);
+
+    shoc_test::run_and_sync([&] {
+        ShocStructure::diagnose_surface_layer(base);
+        ShocStructure::diagnose_pblh(base);
+        ShocStructure::diagnose_surface_layer(shifted);
+        ShocStructure::diagnose_pblh(shifted);
+    });
+
+    const auto base_pblh = base.pblh.const_array();
+    const auto shifted_pblh = shifted.pblh.const_array();
+    const auto shifted_zt = shifted.zt.const_array();
+    const auto shifted_zi = shifted.zi.const_array();
+    const Real z_sfc = shifted_zi(0,0,0);
+
+    EXPECT_NEAR(base_pblh(0,0,0), shifted_pblh(0,0,0), 1.0e-12);
+    EXPECT_LT(shifted_pblh(0,0,0), 750.0_rt);
+    EXPECT_LE(shifted_pblh(0,0,0), shoc::height_agl(shifted_zt(0,shifted.layout.nlev-1,0), z_sfc));
 }
 
 TEST(ShocStructure, LengthScaleRespectsBoundsAndBruntIsFinite)

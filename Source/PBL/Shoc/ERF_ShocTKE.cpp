@@ -190,6 +190,7 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
 
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
+        const Real z_sfc = zi(ic,0,0);
         Real brunt_int = 0.0_rt;
         for (int k = 0; k < layout.nlev; ++k) {
             if (p_mid(ic,k,0) > shoc_trop_pres()) {
@@ -231,7 +232,8 @@ ShocTKE::diagnose_tke_and_diffusivities (ShocColumnData& col,
             isotropy(ic,k,0) = amrex::min(shoc_max_iso(),
                                           tscale / (1.0_rt + local_lambda * brunt(ic,k,0) * tscale * tscale));
 
-            const bool use_stable_mix = (zt(ic,k,0) < pblh(ic,0,0) + shoc_pbl_trans()) &&
+            const Real zt_agl = shoc::height_agl(zt(ic,k,0), z_sfc);
+            const bool use_stable_mix = (zt_agl < pblh(ic,0,0) + shoc_pbl_trans()) &&
                                         (tabs(ic,0,0) < shoc_tabs_crit());
             if (use_stable_mix) {
                 const Real sterm_sqrt = std::sqrt(amrex::max(sterm(ic,k,0), 0.0_rt));

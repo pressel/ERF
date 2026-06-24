@@ -57,6 +57,7 @@ public:
     bool debug_summary_enabled () const { return m_opts.debug_summary; }
     bool has_native_diagnostics () const { return m_eddy_coeffs_cc.isDefined(); }
     const amrex::MultiFab& native_diagnostics () const { return m_eddy_coeffs_cc; }
+    // Native SHOC pblh is diagnosed in meters above local ground (AGL).
     const amrex::MultiFab& pblh_diagnostics () const { return m_pblh_cc; }
     const amrex::MultiFab& shoc_cldfrac_diagnostics () const { return m_shoc_cldfrac_cc; }
     const amrex::MultiFab& shoc_ql_diagnostics () const { return m_shoc_ql_cc; }

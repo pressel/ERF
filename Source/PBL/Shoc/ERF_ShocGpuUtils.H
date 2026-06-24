@@ -55,6 +55,13 @@ set_fab_val (amrex::FArrayBox& fab, amrex::Real value)
     set_fab_val(fab, value, default_init_run_on());
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real
+height_agl (amrex::Real z, amrex::Real z_sfc) noexcept
+{
+    return amrex::max(amrex::Real(0.0), z - z_sfc);
+}
+
 inline void
 sync_if_needed ()
 {

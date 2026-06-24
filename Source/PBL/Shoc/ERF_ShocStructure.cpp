@@ -69,6 +69,7 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
     auto obklen = col.obklen.array();
     auto wthv_sec = col.wthv_sec.array();
     auto pblh = col.pblh.array();
+    const auto zi = col.zi.const_array();
     const auto thetal = col.thetal.const_array();
     const auto qc = col.qc.const_array();
     const auto qi = col.qi.const_array();
@@ -97,7 +98,7 @@ ShocStructure::diagnose_surface_layer (ShocColumnData& col)
         const Real ustar_cu = ustar(ic,0,0) * ustar(ic,0,0) * ustar(ic,0,0);
         obklen(ic,0,0) = -thv_sfc * ustar_cu /
                          (CONST_GRAV * KAPPA * (kbfs + sign_val));
-        pblh(ic,0,0) = zt(ic,0,0);
+        pblh(ic,0,0) = shoc::height_agl(zt(ic,0,0), zi(ic,0,0));
 
         // E3SM SHOC advances TKE using the carried buoyancy-flux profile from
         // the previous SHOC call. ERF overwrites only the surface entry here
@@ -131,13 +132,16 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
     {
         const int npbl = diagnose_npbl(p_mid, layout, ic);
         const Real ustar_loc = ustar(ic,0,0);
+        const Real z_sfc = zi(ic,0,0);
+        const Real zt0_agl = shoc::height_agl(zt(ic,0,0), z_sfc);
         const Real thv0 = virtual_theta_from_shoc_state(thetal(ic,0,0), qc(ic,0,0), qi(ic,0,0),
                                                         qv(ic,0,0), exner(ic,0,0));
-        Real pblh_loc = zt(ic,npbl-1,0);
+        Real pblh_loc = shoc::height_agl(zt(ic,npbl-1,0), z_sfc);
         Real prev_rino = 0.0_rt;
         bool found_pblh = false;
 
         for (int k = 1; k < npbl; ++k) {
+            const Real ztk_agl = shoc::height_agl(zt(ic,k,0), z_sfc);
             const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0), qi(ic,k,0),
                                                             qv(ic,k,0), exner(ic,k,0));
             const Real du = u(ic,k,0) - u(ic,0,0);
@@ -146,14 +150,15 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
                                         du * du +
                                         dv * dv +
                                         shoc_pbl_fac() * ustar_loc * ustar_loc);
-            const Real rino = CONST_GRAV * (thvk - thv0) * (zt(ic,k,0) - zt(ic,0,0)) /
+            const Real rino = CONST_GRAV * (thvk - thv0) * (ztk_agl - zt0_agl) /
                               (amrex::max(thv0, 1.0e-12_rt) * vvk);
             if (rino >= shoc_pbl_ricr()) {
                 if (k == 1 || amrex::Math::abs(rino - prev_rino) <= 1.0e-12_rt) {
-                    pblh_loc = zt(ic,k,0);
+                    pblh_loc = ztk_agl;
                 } else {
-                    pblh_loc = zt(ic,k-1,0) + (shoc_pbl_ricr() - prev_rino) *
-                               (zt(ic,k,0) - zt(ic,k-1,0)) / (rino - prev_rino);
+                    const Real ztkm1_agl = shoc::height_agl(zt(ic,k-1,0), z_sfc);
+                    pblh_loc = ztkm1_agl + (shoc_pbl_ricr() - prev_rino) *
+                               (ztk_agl - ztkm1_agl) / (rino - prev_rino);
                 }
                 found_pblh = true;
                 break;
@@ -162,7 +167,7 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
         }
 
         if (!found_pblh) {
-            pblh_loc = zt(ic,npbl-1,0);
+            pblh_loc = shoc::height_agl(zt(ic,npbl-1,0), z_sfc);
         }
 
         if (wthv_sec(ic,0,0) > 0.0_rt) {
@@ -174,6 +179,7 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
                                    (amrex::max(ustar_loc, shoc_u_star_min()) * phiminv);
             prev_rino = 0.0_rt;
             for (int k = 1; k < npbl; ++k) {
+                const Real ztk_agl = shoc::height_agl(zt(ic,k,0), z_sfc);
                 const Real thvk = virtual_theta_from_shoc_state(thetal(ic,k,0), qc(ic,k,0), qi(ic,k,0),
                                                                 qv(ic,k,0), exner(ic,k,0));
                 const Real du = u(ic,k,0) - u(ic,0,0);
@@ -182,14 +188,15 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
                                             du * du +
                                             dv * dv +
                                             shoc_pbl_fac() * ustar_loc * ustar_loc);
-                const Real rino = CONST_GRAV * (thvk - tlv) * (zt(ic,k,0) - zt(ic,0,0)) /
+                const Real rino = CONST_GRAV * (thvk - tlv) * (ztk_agl - zt0_agl) /
                                   (amrex::max(thv0, 1.0e-12_rt) * vvk);
                 if (rino >= shoc_pbl_ricr()) {
                     if (k == 1 || amrex::Math::abs(rino - prev_rino) <= 1.0e-12_rt) {
-                        pblh_loc = zt(ic,k,0);
+                        pblh_loc = ztk_agl;
                     } else {
-                        pblh_loc = zt(ic,k-1,0) + (shoc_pbl_ricr() - prev_rino) *
-                                   (zt(ic,k,0) - zt(ic,k-1,0)) / (rino - prev_rino);
+                        const Real ztkm1_agl = shoc::height_agl(zt(ic,k-1,0), z_sfc);
+                        pblh_loc = ztkm1_agl + (shoc_pbl_ricr() - prev_rino) *
+                                   (ztk_agl - ztkm1_agl) / (rino - prev_rino);
                     }
                     break;
                 }
@@ -199,7 +206,7 @@ ShocStructure::diagnose_pblh (ShocColumnData& col)
 
         pblh_loc = amrex::max(pblh_loc, 700.0_rt * ustar_loc);
         if (qc(ic,0,0) + qi(ic,0,0) > 0.0_rt && layout.nlev > 1) {
-            pblh_loc = amrex::max(pblh_loc, zi(ic,1,0) + 50.0_rt);
+            pblh_loc = amrex::max(pblh_loc, shoc::height_agl(zi(ic,1,0), z_sfc) + 50.0_rt);
         }
         pblh(ic,0,0) = pblh_loc;
     });
@@ -228,11 +235,13 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
 
     ParallelFor(col_box, [=] AMREX_GPU_DEVICE (int ic, int, int) noexcept
     {
+        const Real z_sfc = zi(ic,0,0);
         Real numerator = 0.0_rt;
         Real denom = 0.0_rt;
         for (int k = 0; k < layout.nlev; ++k) {
             const Real tke_sqrt = std::sqrt(amrex::max(tke(ic,k,0), shoc_min_tke()));
-            numerator += tke_sqrt * zt(ic,k,0) * dz(ic,k,0);
+            const Real zt_agl = shoc::height_agl(zt(ic,k,0), z_sfc);
+            numerator += tke_sqrt * zt_agl * dz(ic,k,0);
             denom += tke_sqrt * dz(ic,k,0);
         }
         const Real l_inf = (denom > 0.0_rt) ? 0.1_rt * numerator / denom : shoc_min_len();
@@ -276,7 +285,8 @@ ShocStructure::diagnose_length_and_brunt (ShocColumnData& col,
                             (theta_v_hi - theta_v_lo) / amrex::max(dz(ic,k,0), 1.0e-12_rt);
             const Real tkes = std::sqrt(amrex::max(tke(ic,k,0), shoc_min_tke()));
             const Real brunt_pos = amrex::max(brunt(ic,k,0), 0.0_rt);
-            const Real inv_term = (1.0_rt / amrex::max(400.0_rt * tkes * KAPPA * amrex::max(zt(ic,k,0), 1.0_rt), 1.0e-12_rt)) +
+            const Real zt_agl = shoc::height_agl(zt(ic,k,0), z_sfc);
+            const Real inv_term = (1.0_rt / amrex::max(400.0_rt * tkes * KAPPA * amrex::max(zt_agl, 1.0_rt), 1.0e-12_rt)) +
                                   (1.0_rt / amrex::max(400.0_rt * tkes * amrex::max(l_inf, shoc_min_len()), 1.0e-12_rt)) +
                                   0.01_rt * brunt_pos / amrex::max(tke(ic,k,0), shoc_min_tke());
             Real mix = amrex::min(shoc_max_len(),

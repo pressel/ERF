@@ -136,6 +136,7 @@ struct ShocColumnData
 {
     ShocColumnLayout layout;
 
+    // Absolute physical cell-center and interface heights [m].
     amrex::FArrayBox zt;
     amrex::FArrayBox zi;
     amrex::FArrayBox dz;
@@ -157,6 +158,7 @@ struct ShocColumnData
     amrex::FArrayBox w;
     amrex::FArrayBox host_dse;
 
+    // Native SHOC PBL height in meters above local ground (AGL).
     amrex::FArrayBox pblh;
     amrex::FArrayBox obklen;
     amrex::FArrayBox ustar;

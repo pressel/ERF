@@ -1131,6 +1131,8 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             }
             mf_comp ++;
         };
+        // Native SHOC pblh is diagnosed in meters AGL and is copied through
+        // unchanged into the plotfile diagnostic field.
         if (containerHasElement(plot_var_names, "pblh")) {
             copy_native_shoc_diagnostic(have_native_shoc_diagnostics
                                         ? &native_shoc_driver[lev]->pblh_diagnostics()

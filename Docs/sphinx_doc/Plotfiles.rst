@@ -800,6 +800,7 @@ Output Options for 2D plotfiles
 |                   | [m]                        |
 +-------------------+----------------------------+
 | **pblh**          | Diagnosed PBL height       |
+|                   | (native SHOC: meters AGL)  |
 |                   | (with SurfaceLayer only)   |
 |                   | [m]                        |
 +-------------------+----------------------------+

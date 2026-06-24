@@ -645,6 +645,8 @@ ShocDriver::advance (MultiFab& cons,
                     tke_tend(i,j,k) = col_tke_tend(ic,kk,0);
                     u_tend_cc(i,j,k) = col_u_tend(ic,kk,0);
                     v_tend_cc(i,j,k) = col_v_tend(ic,kk,0);
+                    // Native SHOC pblh is diagnosed as meters AGL and is
+                    // copied directly into the plotfile diagnostic field.
                     pblh_arr(i,j,k) = pblh(ic,0,0);
                     shoc_cldfrac_arr(i,j,k) = shoc_cldfrac(ic,kk,0);
                     shoc_ql_arr(i,j,k) = shoc_ql(ic,kk,0);
