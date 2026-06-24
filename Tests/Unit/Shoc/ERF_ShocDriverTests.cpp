@@ -327,6 +327,19 @@ initialize_basic_column_state (MultiFab& cons,
 }
 
 void
+initialize_terrain_geometry (MultiFab& z_phys_nd)
+{
+    for (MFIter mfi(z_phys_nd, false); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = z_phys_nd.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            arr(i,j,k) = 100.0_rt * k + 10.0_rt * static_cast<Real>(i) + 2.0_rt * static_cast<Real>(j);
+        });
+    }
+}
+
+void
 initialize_face_velocities_with_seam_offsets (MultiFab& xvel,
                                               MultiFab& yvel,
                                               const Box& domain,
@@ -788,14 +801,7 @@ TEST(ShocPreprocess, UsesFourNodeAveragedTerrainGeometry)
     initialize_face_velocities_with_seam_offsets(xvel, yvel, domain, 0.0_rt, 0.0_rt);
     initialize_face_stress_gradients(tau13, tau23);
 
-    for (MFIter mfi(z_phys_nd, false); mfi.isValid(); ++mfi) {
-        const Box& bx = mfi.validbox();
-        auto arr = z_phys_nd.array(mfi);
-        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-        {
-            arr(i,j,k) = 100.0_rt * k + 10.0_rt * static_cast<Real>(i) + 2.0_rt * static_cast<Real>(j);
-        });
-    }
+    initialize_terrain_geometry(z_phys_nd);
     shoc_test::sync();
 
     ShocColumnWorkspace workspace;
