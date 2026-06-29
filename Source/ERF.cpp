@@ -951,7 +951,9 @@ ERF::post_timestep (int nstep, double time, Real dt_lev0)
       }
     }
 
-    if ( solverChoice.io_hurricane_eye_tracker and (nstep == 0 or (nstep+1)%m_plot3d_int_1 == 0) )
+    if ( solverChoice.init_type==InitType::HindCast and
+         solverChoice.io_hurricane_eye_tracker and
+         (nstep == 0 or (nstep+1)%m_plot3d_int_1 == 0) )
     {
         int levc=finest_level;
 
@@ -999,6 +1001,23 @@ ERF::post_timestep (int nstep, double time, Real dt_lev0)
             WriteLinePlot(filename_minpressure, hurricane_minpressure_vs_time);
         }
     }
+
+    if ( solverChoice.init_type==InitType::WRFInput and
+         solverChoice.io_hurricane_eye_tracker and
+         (nstep == 0 or (nstep+1)%m_plot3d_int_1 == 0)) {
+        HurricaneEyeTracker_WRF (solverChoice);
+
+        std::string filename_tracker = MakeVTKFilename_TrackerCircle(nstep);
+        std::string filename_xy      = MakeVTKFilename_EyeTracker_xy(nstep);
+        std::string filename_latlon  = MakeFilename_EyeTracker_latlon(nstep);
+
+        if (ParallelDescriptor::IOProcessor()) {
+            WriteVTKPolyline(filename_tracker, hurricane_tracker_circle);
+            WriteVTKPolyline(filename_xy, hurricane_eye_track_xy);
+            WriteLinePlot(filename_latlon, hurricane_eye_track_latlon);
+        }
+    }
+
 } // post_timestep
 
 // This is called from main.cpp and handles all initialization, whether from start or restart
@@ -1728,7 +1747,7 @@ ERF::InitData_post ()
     // Print max values of lateral gradients of base state pressure at level 0
     if (verbose > 0) {
         for (int lev = 0; lev <= finest_level; ++lev) {
-            if ( (lev == 0) && (solverChoice.terrain_type != TerrainType::EB) ) {
+            if (lev == 0) {
                 compute_max_pressure_gradient_diagnostic(lev);
             }
         }
