@@ -42,6 +42,7 @@ target_link_libraries(erf_shoc_unit_tests PRIVATE GTest::gtest)
 
 gtest_add_tests(TARGET erf_shoc_unit_tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  EXTRA_ARGS --gtest_death_test_style=threadsafe
   TEST_LIST erf_shoc_unit_tests_tests
 )
 

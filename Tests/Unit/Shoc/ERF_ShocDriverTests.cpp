@@ -1607,7 +1607,7 @@ TEST(ShocDriver, StateUpdateModeRejectsNumberAwareMoistureLayoutsWithoutNumberCl
                            &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
                            z_phys_nd, geom, 10.0_rt);
         }),
-        "number-aware|number closure");
+        "number closure");
 }
 
 TEST(ShocDriver, HostDiffusionWithMoistureIsRejected)
