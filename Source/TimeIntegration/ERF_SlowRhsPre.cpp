@@ -264,7 +264,7 @@ void erf_slow_rhs_pre (int level, int finest_level,
             }
         }
         if (tc.uses_native_shoc() && native_shoc_lev && native_shoc_lev->owns_scalar_surface_fluxes()) {
-            // SHOC-owned scalar fluxes must not be re-used by the host
+            // SHOC-owned scalar fluxes must not be reused by the host
             // diffusion source, even if the host SurfaceLayer path was also
             // evaluated for momentum stress ownership.
             native_shoc_lev->set_diff_stresses();
