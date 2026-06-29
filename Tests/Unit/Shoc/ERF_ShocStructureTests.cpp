@@ -68,7 +68,7 @@ private:
 namespace
 {
 void
-shift_column_heights (ShocColumnData& col, Real offset)
+shift_column_heights (ShocColumnData& col, amrex::Real offset)
 {
     auto zt = col.zt.array();
     auto zi = col.zi.array();
@@ -372,7 +372,7 @@ TEST(ShocStructure, BruntInvariantToTerrainOffset)
 {
     auto base = shoc_test::make_column(6);
     auto shifted = shoc_test::make_column(6);
-    shift_column_heights(shifted, 750.0_rt);
+    shift_column_heights(shifted, amrex::Real(750.0));
     ShocRuntimeOptions opts;
 
     shoc_test::run_and_sync([&] {
@@ -395,7 +395,7 @@ TEST(ShocStructure, LengthScaleInvariantToTerrainOffset)
 {
     auto base = shoc_test::make_column(6);
     auto shifted = shoc_test::make_column(6);
-    shift_column_heights(shifted, 750.0_rt);
+    shift_column_heights(shifted, amrex::Real(750.0));
     ShocRuntimeOptions opts;
 
     shoc_test::run_and_sync([&] {
@@ -418,7 +418,7 @@ TEST(ShocStructure, PblHeightInvariantToTerrainOffsetAndReturnsAgl)
 {
     auto base = shoc_test::make_column(6);
     auto shifted = shoc_test::make_column(6);
-    shift_column_heights(shifted, 750.0_rt);
+    shift_column_heights(shifted, amrex::Real(750.0));
 
     shoc_test::run_and_sync([&] {
         ShocStructure::diagnose_surface_layer(base);
@@ -431,10 +431,10 @@ TEST(ShocStructure, PblHeightInvariantToTerrainOffsetAndReturnsAgl)
     const auto shifted_pblh = shifted.pblh.const_array();
     const auto shifted_zt = shifted.zt.const_array();
     const auto shifted_zi = shifted.zi.const_array();
-    const Real z_sfc = shifted_zi(0,0,0);
+    const amrex::Real z_sfc = shifted_zi(0,0,0);
 
     EXPECT_NEAR(base_pblh(0,0,0), shifted_pblh(0,0,0), 1.0e-12);
-    EXPECT_LT(shifted_pblh(0,0,0), 750.0_rt);
+    EXPECT_LT(shifted_pblh(0,0,0), amrex::Real(750.0));
     EXPECT_LE(shifted_pblh(0,0,0), shoc::height_agl(shifted_zt(0,shifted.layout.nlev-1,0), z_sfc));
 }
 
