@@ -200,7 +200,7 @@ TEST(Plotfile2D, FindDiagnosticReturnsDescriptorForSurfaceFluxComposition)
     ASSERT_NE(sensible, nullptr);
     EXPECT_STREQ(sensible->name, "sensible_heat_flux");
     EXPECT_EQ(sensible->id, plotfile2d::DiagnosticID::SensibleHeatFlux);
-    EXPECT_EQ(sensible->category, plotfile2d::DiagnosticCategory::SurfaceLayer);
+    EXPECT_EQ(sensible->category, plotfile2d::DiagnosticCategory::SurfaceFlux);
     EXPECT_STREQ(sensible->units, "W m^-2");
     EXPECT_EQ(sensible->missing_policy, plotfile2d::MissingPolicy::FillMinus999WhenUnavailable);
 
@@ -208,7 +208,7 @@ TEST(Plotfile2D, FindDiagnosticReturnsDescriptorForSurfaceFluxComposition)
     ASSERT_NE(latent, nullptr);
     EXPECT_STREQ(latent->name, "latent_heat_flux");
     EXPECT_EQ(latent->id, plotfile2d::DiagnosticID::LatentHeatFlux);
-    EXPECT_EQ(latent->category, plotfile2d::DiagnosticCategory::SurfaceLayer);
+    EXPECT_EQ(latent->category, plotfile2d::DiagnosticCategory::SurfaceFlux);
     EXPECT_STREQ(latent->units, "W m^-2");
     EXPECT_EQ(latent->missing_policy, plotfile2d::MissingPolicy::FillMinus999WhenUnavailable);
 }
