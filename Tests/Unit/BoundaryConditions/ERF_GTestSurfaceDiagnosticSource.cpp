@@ -45,9 +45,17 @@ TEST(SurfaceDiagnosticSource, ClassifiesLsmAndFallbackPaths)
 {
     EXPECT_EQ(classify_scalar_source(false, false, true,  true,  true),
               SurfaceDiagnosticSource::LSMLand);
+    EXPECT_EQ(classify_scalar_source(true, false, true,  true,  true),
+              SurfaceDiagnosticSource::LSMLand);
+    EXPECT_EQ(classify_scalar_source(false, true, true,  true,  true),
+              SurfaceDiagnosticSource::LSMLand);
 
     EXPECT_EQ(classify_scalar_source(false, false, true,  true,  false),
               SurfaceDiagnosticSource::SurfaceLayerFallback);
+    EXPECT_EQ(classify_scalar_source(true, false, true,  true,  false),
+              SurfaceDiagnosticSource::Custom);
+    EXPECT_EQ(classify_scalar_source(false, true, true,  true,  false),
+              SurfaceDiagnosticSource::RICO);
 
     EXPECT_EQ(classify_scalar_source(false, false, true,  false, false),
               SurfaceDiagnosticSource::SurfaceLayerLand);

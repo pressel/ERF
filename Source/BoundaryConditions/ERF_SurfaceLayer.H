@@ -335,6 +335,7 @@ public:
           q_star.resize(nlevs);
           t_surf.resize(nlevs);
           q_surf.resize(nlevs);
+          surface_diagnostic_source.resize(nlevs);
           olen.resize(nlevs);
           pblh.resize(nlevs);
       }

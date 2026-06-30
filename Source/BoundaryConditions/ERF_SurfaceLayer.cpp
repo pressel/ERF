@@ -626,8 +626,6 @@ SurfaceLayer::compute_SurfaceLayer_bcs (const int& lev,
             });
         } // custom
 
-        surface_diagnostic_source[lev]->FillBoundary(m_geom[lev].periodicity());
-
         if (!rotate) {
             // Rho*u flux
             //============================================================================

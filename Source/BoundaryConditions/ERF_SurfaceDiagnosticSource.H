@@ -45,14 +45,14 @@ classify_scalar_source (bool is_custom,
                         bool has_lsm_flux,
                         bool lsm_flux_is_valid) noexcept
 {
+    if (is_land && has_lsm_flux && lsm_flux_is_valid) {
+        return SurfaceDiagnosticSource::LSMLand;
+    }
     if (is_custom) {
         return SurfaceDiagnosticSource::Custom;
     }
     if (is_rico) {
         return SurfaceDiagnosticSource::RICO;
-    }
-    if (is_land && has_lsm_flux && lsm_flux_is_valid) {
-        return SurfaceDiagnosticSource::LSMLand;
     }
     if (is_land && has_lsm_flux && !lsm_flux_is_valid) {
         return SurfaceDiagnosticSource::SurfaceLayerFallback;
