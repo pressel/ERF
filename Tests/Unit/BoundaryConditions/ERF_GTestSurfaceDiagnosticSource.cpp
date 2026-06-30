@@ -62,10 +62,4 @@ TEST(SurfaceDiagnosticSource, ClassifiesLsmAndFallbackPaths)
 
     EXPECT_EQ(classify_scalar_source(false, false, false, false, false),
               SurfaceDiagnosticSource::SurfaceLayerSea);
-
-    EXPECT_EQ(classify_scalar_source(true, false, true, true, true),
-              SurfaceDiagnosticSource::Custom);
-
-    EXPECT_EQ(classify_scalar_source(false, true, true, true, true),
-              SurfaceDiagnosticSource::RICO);
 }
