@@ -103,6 +103,20 @@ TEST(Plotfile2D, WarningMessageNamesParameterAndVariable)
     EXPECT_TRUE(contains(message, "z_surf"));
 }
 
+// Motivation: Warnings should report the full ParmParse name so users can
+// locate the exact plot2d namelist entry in a multi-stream input deck.
+TEST(Plotfile2D, ParameterNameIncludesParmParsePrefix)
+{
+    EXPECT_EQ(format_plot2d_parameter_name("erf", "plot2d_vars_1"), "erf.plot2d_vars_1");
+}
+
+// Motivation: Helper formatting should not invent a separator when the prefix
+// is empty, which keeps standalone call sites readable.
+TEST(Plotfile2D, ParameterNameHandlesEmptyPrefix)
+{
+    EXPECT_EQ(format_plot2d_parameter_name("", "plot2d_vars_1"), "plot2d_vars_1");
+}
+
 // Motivation: The internal component-count guard needs to expose enough
 // context to debug a drift between the canonical variable list and the fill
 // blocks.

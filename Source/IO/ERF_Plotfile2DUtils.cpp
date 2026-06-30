@@ -72,6 +72,17 @@ format_unavailable_2d_plot_var_warning (const std::string& parameter_name,
 }
 
 std::string
+format_plot2d_parameter_name (const std::string& pp_prefix,
+                              const std::string& parameter_name)
+{
+    if (pp_prefix.empty()) {
+        return parameter_name;
+    }
+
+    return pp_prefix + "." + parameter_name;
+}
+
+std::string
 format_2d_component_count_error (int lev, int filled, int expected)
 {
     std::ostringstream os;

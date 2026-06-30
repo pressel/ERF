@@ -25,6 +25,9 @@ std::string format_unavailable_2d_plot_var_warning (const std::string& parameter
                                                     const std::string& unavailable_name,
                                                     const amrex::Vector<std::string>& available_names);
 
+std::string format_plot2d_parameter_name (const std::string& pp_prefix,
+                                          const std::string& parameter_name);
+
 std::string format_2d_component_count_error (int lev, int filled, int expected);
 
 std::string format_invalid_2d_stream_error (int which);

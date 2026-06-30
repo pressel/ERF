@@ -111,7 +111,8 @@ ERF::setPlotVariables2D (const std::string& pp_plot_var_names, Vector<std::strin
     // list is intentionally user-configurable and may include names that are not
     // compiled into a given build. The warning is still explicit so the user
     // can correct the input deck.
-    warn_for_unavailable_2d_plot_vars(pp_plot_var_names, selection.unavailable, derived_names_2d);
+    warn_for_unavailable_2d_plot_vars(plotfile2d::format_plot2d_parameter_name(pp_prefix, pp_plot_var_names),
+                                      selection.unavailable, derived_names_2d);
 }
 
 void
