@@ -711,9 +711,11 @@ SurfaceLayer::compute_SurfaceLayer_bcs (const int& lev,
                                      t12_arr, t21_arr,
                                      t13_arr, t31_arr,
                                      t23_arr, t32_arr);
-            });
+                });
         }
     } // mfiter
+
+    surface_diagnostic_source[lev]->FillBoundary(m_geom[lev].periodicity());
 }
 
 /**
@@ -917,8 +919,6 @@ SurfaceLayer::compute_SurfaceLayer_bcs_EB (const int& lev,
             }
         });
     } // mfiter
-
-    surface_diagnostic_source[lev]->FillBoundary(m_geom[lev].periodicity());
 
 }
 
