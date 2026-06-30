@@ -810,7 +810,13 @@ Output Options for 2D Plotfiles
 Examples of Usage
 -----------------
 
-In an input file, the user can select parameters to plot by supplying a space-delimited
-list to **erf.plot_vars_1** or **erf.plot_vars_2**.
+The following inputs write a 2D plotfile every 10 level-0 time steps:
 
--  **erf.plot_vars_1** = *option1* *option2* *option3*
+.. code-block:: none
+
+   erf.plot2d_file_1 = plt2d_
+   erf.plot2d_int_1  = 10
+   erf.plot2d_vars_1 = z_surf mapfac lat_m lon_m u_star surf_pres integrated_qv
+
+The variable list may appear in any order. ERF writes the selected variables in
+its canonical 2D plotfile order.
