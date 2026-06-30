@@ -750,6 +750,9 @@ concentration.
 Output Options for 2D Plotfiles
 -------------------------------
 
+The table below lists the built-in 2D diagnostic catalog. ERF writes selected
+variables in this order.
+
 +--------------------+---------------------------------------------------------------+
 | Parameter          | Definition                                                    |
 +====================+===============================================================+
