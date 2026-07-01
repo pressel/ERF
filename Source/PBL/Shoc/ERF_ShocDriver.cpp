@@ -140,7 +140,7 @@ ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
     read_shoc_runtime_options(m_opts);
     validate_shoc_runtime_options(m_opts);
 
-    if (uses_host_diffusion() && m_moisture_type != MoistureType::None) {
+    if (!shoc_transport_mode_supports_moisture(m_opts.transport_mode, m_moisture_type)) {
         amrex::Abort(
             "Native SHOC host_diffusion with moisture is not yet supported because SHOC does not own cloud macrophysics in this mode while SHOC-family microphysics condensation is suppressed. Use state_update for moist SHOC runs, or run host_diffusion only for dry cases until a transport-aware microphysics ownership predicate is implemented.");
     }

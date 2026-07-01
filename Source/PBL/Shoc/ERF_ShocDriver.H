@@ -11,13 +11,6 @@
 bool shoc_boxarray_spans_full_height (const amrex::BoxArray& ba,
                                       const amrex::Box& domain);
 
-inline bool
-shoc_layout_requires_number_closure (const MoistureComponentIndices& indices,
-                                     int ncomp) noexcept
-{
-    return shoc_valid_comp(indices.nc, ncomp) || shoc_valid_comp(indices.ni, ncomp);
-}
-
 class ShocDriver
 {
 public:
@@ -42,6 +35,7 @@ public:
     void add_slow_tend (const amrex::MFIter& mfi,
                         const amrex::Box& tbx,
                         const amrex::Array4<amrex::Real>& cell_rhs) const;
+    bool uses_shoc_tendencies () const { return uses_state_update(); }
     bool uses_state_update () const;
     bool uses_host_diffusion () const;
     bool owns_surface_fluxes () const;

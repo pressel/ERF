@@ -15,7 +15,7 @@
 
 enum class ShocTransportMode
 {
-    StateUpdate,
+    Tendencies,
     HostDiffusion
 };
 
@@ -23,22 +23,35 @@ inline const char*
 shoc_transport_mode_name (ShocTransportMode mode)
 {
     switch (mode) {
-    case ShocTransportMode::StateUpdate:   return "state_update";
+    case ShocTransportMode::Tendencies:   return "tendencies";
     case ShocTransportMode::HostDiffusion:return "host_diffusion";
     }
     return "unknown";
 }
 
 inline bool
-shoc_uses_state_update (ShocTransportMode mode)
+shoc_uses_internal_transport (ShocTransportMode mode)
 {
-    return mode == ShocTransportMode::StateUpdate;
+    return mode == ShocTransportMode::Tendencies;
 }
 
 inline bool
 shoc_uses_host_diffusion (ShocTransportMode mode)
 {
     return mode == ShocTransportMode::HostDiffusion;
+}
+
+inline bool
+shoc_uses_state_update (ShocTransportMode mode)
+{
+    return shoc_uses_internal_transport(mode);
+}
+
+inline bool
+shoc_transport_mode_supports_moisture (ShocTransportMode mode,
+                                       MoistureType moisture_type)
+{
+    return !(shoc_uses_host_diffusion(mode) && moisture_type != MoistureType::None);
 }
 
 struct ShocRuntimeOptions
@@ -68,7 +81,7 @@ struct ShocRuntimeOptions
     bool debug_summary = false;
     bool allow_tendency_microphysics_overlap = false;
     bool signed_tke_production = false;
-    ShocTransportMode transport_mode = ShocTransportMode::StateUpdate;
+    ShocTransportMode transport_mode = ShocTransportMode::Tendencies;
 };
 
 struct ShocColumnLayout
@@ -192,15 +205,12 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
     if (pp.query("transport_mode", transport_mode)) {
         std::transform(transport_mode.begin(), transport_mode.end(), transport_mode.begin(),
                        [] (unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (transport_mode == "state_update") {
-            opts.transport_mode = ShocTransportMode::StateUpdate;
+        if (transport_mode == "tendencies") {
+            opts.transport_mode = ShocTransportMode::Tendencies;
         } else if (transport_mode == "host_diffusion") {
             opts.transport_mode = ShocTransportMode::HostDiffusion;
-        } else if (transport_mode == "tendencies") {
-            amrex::Abort(
-                "erf.shoc.transport_mode = tendencies has been removed for native SHOC. Use erf.shoc.transport_mode = state_update. Native SHOC now applies its coupled column increment before the dycore to avoid splitting theta and momentum from moisture.");
         } else {
-            amrex::Abort("erf.shoc.transport_mode must be 'state_update' or 'host_diffusion'");
+            amrex::Abort("erf.shoc.transport_mode must be 'tendencies' or 'host_diffusion'");
         }
     }
 }
@@ -226,6 +236,14 @@ bool
 shoc_valid_comp (int comp, int ncomp)
 {
     return comp >= 0 && comp < ncomp;
+}
+
+inline bool
+shoc_layout_requires_number_closure (const MoistureComponentIndices& moisture_indices,
+                                     int ncomp)
+{
+    return shoc_valid_comp(moisture_indices.nc, ncomp) ||
+           shoc_valid_comp(moisture_indices.ni, ncomp);
 }
 
 template <typename T>
