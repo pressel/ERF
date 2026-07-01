@@ -1,8 +1,9 @@
 #include <AMReX.H>
 
+#include <cstdio>
+#include <cstdlib>
 #include <gtest/gtest.h>
 
-#include <cstring>
 #include <iostream>
 
 #if defined(AMREX_USE_CUDA)
@@ -22,17 +23,6 @@ namespace erf_test_sycl = cl::sycl;
 namespace
 {
 constexpr int erf_test_skip_code = 77;
-
-bool
-is_gtest_discovery (int argc, char** argv)
-{
-    for (int n = 1; n < argc; ++n) {
-        if (std::strcmp(argv[n], "--gtest_list_tests") == 0) {
-            return true;
-        }
-    }
-    return false;
-}
 
 bool
 gpu_runtime_available ()
@@ -76,11 +66,12 @@ gpu_runtime_available ()
 int
 main (int argc, char** argv)
 {
-    const bool discovery = is_gtest_discovery(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
 
-    if (discovery) {
-        return RUN_ALL_TESTS();
+    if (::testing::GTEST_FLAG(list_tests)) {
+        const int list_result = RUN_ALL_TESTS();
+        std::fflush(nullptr);
+        std::_Exit(list_result);
     }
 
     if (!gpu_runtime_available()) {

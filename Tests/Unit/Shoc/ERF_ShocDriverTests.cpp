@@ -1599,30 +1599,23 @@ TEST(ShocDriver, StateUpdateModeRejectsNumberAwareMoistureLayoutsWithoutNumberCl
         RhoQ1_comp, RhoQ2_comp, RhoQ3_comp, RhoQ4_comp, RhoQ5_comp, RhoQ6_comp,
         RhoQ7_comp, RhoQ8_comp, RhoQ9_comp, RhoQ10_comp, RhoQ11_comp);
 
-    ShocDriver driver(0, solver_choice);
-
-    EXPECT_DEATH(
-        shoc_test::run_and_sync([&] {
-            driver.advance(cons, xvel, yvel, zvel,
-                           &tau13, &tau23, &hfx3, &qfx3, &eddy_diffs,
-                           z_phys_nd, geom, 10.0_rt);
-        }),
-        "number closure");
+    ShocRuntimeOptions opts;
+    opts.transport_mode = ShocTransportMode::StateUpdate;
+    std::string error_message;
+    EXPECT_FALSE(shoc_driver_state_update_layout_supported(
+        opts, solver_choice.moisture_indices, cons.nComp(), error_message));
+    EXPECT_NE(error_message.find("number closure"), std::string::npos);
 }
 
 TEST(ShocDriver, HostDiffusionWithMoistureIsRejected)
 {
-    ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "host_diffusion");
+    ShocRuntimeOptions opts;
+    opts.transport_mode = ShocTransportMode::HostDiffusion;
 
-    SolverChoice solver_choice;
-    solver_choice.moisture_type = MoistureType::Morrison;
-
-    EXPECT_DEATH(
-        {
-            ShocDriver driver(0, solver_choice);
-            amrex::ignore_unused(driver);
-        },
-        "host_diffusion with moisture");
+    std::string error_message;
+    EXPECT_FALSE(shoc_driver_host_diffusion_moisture_supported(
+        opts, MoistureType::Morrison, error_message));
+    EXPECT_NE(error_message.find("host_diffusion with moisture"), std::string::npos);
 }
 
 TEST(ShocDriver, StateUpdateModeSupportsIceCapableMoistureLayouts)

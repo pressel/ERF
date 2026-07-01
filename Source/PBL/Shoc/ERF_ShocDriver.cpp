@@ -310,9 +310,9 @@ ShocDriver::ShocDriver (int lev, const SolverChoice& solver_choice)
     validate_shoc_runtime_options(m_opts);
     warn_if_shoc_debug_overrides_active_once(m_opts);
 
-    if (uses_host_diffusion() && m_moisture_type != MoistureType::None) {
-        amrex::Abort(
-            "Native SHOC host_diffusion with moisture is not yet supported because SHOC does not own cloud macrophysics in this mode while SHOC-family microphysics condensation is suppressed. Use state_update for moist SHOC runs, or run host_diffusion only for dry cases until a transport-aware microphysics ownership predicate is implemented.");
+    std::string error_message;
+    if (!shoc_driver_host_diffusion_moisture_supported(m_opts, m_moisture_type, error_message)) {
+        amrex::Abort(error_message.c_str());
     }
 }
 
@@ -488,16 +488,18 @@ ShocDriver::advance (MultiFab& cons,
         ensure_storage(cons, xvel, yvel, *eddy_diffs);
     }
 
-    if (uses_state_update() &&
-        shoc_layout_requires_number_closure(m_moisture_indices, cons.nComp())) {
-        amrex::Abort(
-            "Native SHOC state_update does not yet support number-aware microphysics layouts with cloud/ice number concentrations. A number closure is required before SHOC can update cloud mass in these layouts.");
+    std::string error_message;
+    if (!shoc_driver_state_update_layout_supported(m_opts, m_moisture_indices, cons.nComp(),
+                                                    error_message)) {
+        amrex::Abort(error_message.c_str());
     }
 
     // Keep one SHOC column workspace per local box so GPU writeback kernels
     // can finish reading a box's scratch before it is reused.
-    const int n_local = cons.local_size();
-    if (static_cast<int>(m_column_workspaces.size()) < n_local) {
+    const auto n_local_long = cons.local_size();
+    AMREX_ALWAYS_ASSERT(n_local_long >= 0);
+    const std::size_t n_local = static_cast<std::size_t>(n_local_long);
+    if (m_column_workspaces.size() < n_local) {
         const std::size_t old_size = m_column_workspaces.size();
         m_column_workspaces.resize(n_local);
         for (std::size_t n = old_size; n < m_column_workspaces.size(); ++n) {
@@ -505,10 +507,9 @@ ShocDriver::advance (MultiFab& cons,
         }
     }
 
-    int local_index = 0;
+    std::size_t local_index = 0;
     for (MFIter mfi(cons, false); mfi.isValid(); ++mfi, ++local_index) {
-        AMREX_ALWAYS_ASSERT(local_index >= 0);
-        AMREX_ALWAYS_ASSERT(local_index < static_cast<int>(m_column_workspaces.size()));
+        AMREX_ALWAYS_ASSERT(local_index < m_column_workspaces.size());
         ShocColumnWorkspace& workspace = *m_column_workspaces[local_index];
         const Box& vbx = mfi.validbox();
         const ShocColumnLayout active_layout = make_shoc_layout(vbx, geom);

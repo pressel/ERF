@@ -36,35 +36,6 @@ TEST(ShocRuntimeOptions, TransportModeHelpersMatchIntent)
     EXPECT_EQ(std::string(shoc_momentum_transport_name(ShocMomentumTransport::None)), "none");
 }
 
-class ScopedParmParseString
-{
-public:
-    ScopedParmParseString (const char* prefix,
-                           const char* name,
-                           const std::string& value)
-        : m_pp(prefix),
-          m_name(name)
-    {
-        m_had_previous = m_pp.query(m_name, m_previous);
-        m_pp.remove(m_name);
-        m_pp.add(m_name, value);
-    }
-
-    ~ScopedParmParseString ()
-    {
-        m_pp.remove(m_name);
-        if (m_had_previous) {
-            m_pp.add(m_name, m_previous);
-        }
-    }
-
-private:
-    amrex::ParmParse m_pp;
-    std::string m_name;
-    std::string m_previous;
-    bool m_had_previous = false;
-};
-
 namespace
 {
 void
@@ -84,40 +55,31 @@ shift_column_heights (ShocColumnData& col, amrex::Real offset)
 
 TEST(ShocRuntimeOptions, LegacyTendenciesTransportModeIsRejected)
 {
-    ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "tendencies");
-
-    EXPECT_DEATH(
-        {
-            ShocRuntimeOptions opts;
-            read_shoc_runtime_options(opts);
-        },
-        "removed for native SHOC");
+    ShocRuntimeOptions opts;
+    std::string error_message;
+    EXPECT_FALSE(parse_shoc_transport_mode_string("tendencies", opts.transport_mode, error_message));
+    EXPECT_NE(error_message.find("removed for native SHOC"), std::string::npos);
 }
 
 TEST(ShocRuntimeOptions, InvalidMomentumTransportIsRejected)
 {
-    ScopedParmParseString momentum_transport("erf.shoc", "momentum_transport", "tendons");
-
-    EXPECT_DEATH(
-        {
-            ShocRuntimeOptions opts;
-            read_shoc_runtime_options(opts);
-        },
-        "erf.shoc.momentum_transport");
+    ShocMomentumTransport transport = ShocMomentumTransport::None;
+    std::string error_message;
+    EXPECT_FALSE(parse_shoc_momentum_transport_string("tendons", transport, error_message));
+    EXPECT_NE(error_message.find("erf.shoc.momentum_transport"), std::string::npos);
 }
 
 TEST(ShocRuntimeOptions, HostDiffusionTransportRequiresHostMomentumTransport)
 {
-    ScopedParmParseString transport_mode("erf.shoc", "transport_mode", "host_diffusion");
-    ScopedParmParseString momentum_transport("erf.shoc", "momentum_transport", "state_update");
+    ShocRuntimeOptions opts;
+    opts.transport_mode = ShocTransportMode::HostDiffusion;
+    opts.momentum_transport = ShocMomentumTransport::StateUpdate;
 
-    EXPECT_DEATH(
-        {
-            ShocRuntimeOptions opts;
-            read_shoc_runtime_options(opts);
-            validate_shoc_runtime_options(opts);
-        },
-        "host_diffusion requires erf.shoc.momentum_transport = host_diffusion");
+    std::string error_message;
+    EXPECT_FALSE(validate_shoc_runtime_options_message(opts, error_message));
+    EXPECT_NE(error_message.find(
+                  "host_diffusion requires erf.shoc.momentum_transport = host_diffusion"),
+              std::string::npos);
 }
 
 TEST(ShocStructure, SurfaceLayerUsesUstarFloorAndFiniteObukhov)

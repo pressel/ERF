@@ -120,6 +120,74 @@ struct ShocRuntimeOptions
     bool debug_disable_tke_state_update = false;
 };
 
+inline std::string
+shoc_lower_copy (std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [] (unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+inline bool
+parse_shoc_transport_mode_string (std::string value,
+                                 ShocTransportMode& mode,
+                                 std::string& error_message)
+{
+    value = shoc_lower_copy(value);
+    if (value == "state_update") {
+        mode = ShocTransportMode::StateUpdate;
+        return true;
+    }
+    if (value == "host_diffusion") {
+        mode = ShocTransportMode::HostDiffusion;
+        return true;
+    }
+    if (value == "tendencies") {
+        error_message =
+            "erf.shoc.transport_mode = tendencies has been removed for native SHOC. Use erf.shoc.transport_mode = state_update. Native SHOC now applies its coupled column increment before the dycore to avoid splitting theta and momentum from moisture.";
+        return false;
+    }
+
+    error_message = "erf.shoc.transport_mode must be 'state_update' or 'host_diffusion'";
+    return false;
+}
+
+inline bool
+parse_shoc_momentum_transport_string (std::string value,
+                                      ShocMomentumTransport& mode,
+                                      std::string& error_message)
+{
+    value = shoc_lower_copy(value);
+    if (value == "none") {
+        mode = ShocMomentumTransport::None;
+        return true;
+    }
+    if (value == "state_update") {
+        mode = ShocMomentumTransport::StateUpdate;
+        return true;
+    }
+    if (value == "host_diffusion") {
+        mode = ShocMomentumTransport::HostDiffusion;
+        return true;
+    }
+
+    error_message = "erf.shoc.momentum_transport must be 'none', 'state_update', or 'host_diffusion'";
+    return false;
+}
+
+inline bool
+validate_shoc_runtime_options_message (const ShocRuntimeOptions& opts,
+                                      std::string& error_message)
+{
+    if (shoc_uses_host_diffusion(opts.transport_mode) &&
+        !shoc_uses_momentum_host_diffusion(opts.momentum_transport)) {
+        error_message =
+            "erf.shoc.transport_mode = host_diffusion requires erf.shoc.momentum_transport = host_diffusion";
+        return false;
+    }
+    return true;
+}
+
 struct ShocColumnLayout
 {
     int nx = 0;
@@ -253,32 +321,19 @@ read_shoc_runtime_options (ShocRuntimeOptions& opts)
 
     std::string transport_mode = shoc_transport_mode_name(opts.transport_mode);
     if (pp.query("transport_mode", transport_mode)) {
-        std::transform(transport_mode.begin(), transport_mode.end(), transport_mode.begin(),
-                       [] (unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (transport_mode == "state_update") {
-            opts.transport_mode = ShocTransportMode::StateUpdate;
-        } else if (transport_mode == "host_diffusion") {
-            opts.transport_mode = ShocTransportMode::HostDiffusion;
-        } else if (transport_mode == "tendencies") {
-            amrex::Abort(
-                "erf.shoc.transport_mode = tendencies has been removed for native SHOC. Use erf.shoc.transport_mode = state_update. Native SHOC now applies its coupled column increment before the dycore to avoid splitting theta and momentum from moisture.");
-        } else {
-            amrex::Abort("erf.shoc.transport_mode must be 'state_update' or 'host_diffusion'");
+        std::string error_message;
+        if (!parse_shoc_transport_mode_string(transport_mode, opts.transport_mode, error_message)) {
+            amrex::Abort(error_message.c_str());
         }
     }
 
     std::string momentum_transport = shoc_momentum_transport_name(opts.momentum_transport);
     if (pp.query("momentum_transport", momentum_transport)) {
-        std::transform(momentum_transport.begin(), momentum_transport.end(), momentum_transport.begin(),
-                       [] (unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (momentum_transport == "none") {
-            opts.momentum_transport = ShocMomentumTransport::None;
-        } else if (momentum_transport == "state_update") {
-            opts.momentum_transport = ShocMomentumTransport::StateUpdate;
-        } else if (momentum_transport == "host_diffusion") {
-            opts.momentum_transport = ShocMomentumTransport::HostDiffusion;
-        } else {
-            amrex::Abort("erf.shoc.momentum_transport must be 'none', 'state_update', or 'host_diffusion'");
+        std::string error_message;
+        if (!parse_shoc_momentum_transport_string(momentum_transport,
+                                                  opts.momentum_transport,
+                                                  error_message)) {
+            amrex::Abort(error_message.c_str());
         }
     }
 }
@@ -309,10 +364,9 @@ validate_shoc_runtime_options (const ShocRuntimeOptions& opts)
                                      "erf.shoc.debug_bad_column_min_dz must be positive");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(opts.debug_bad_column_scalar_moment_threshold > 0.0,
                                      "erf.shoc.debug_bad_column_scalar_moment_threshold must be positive");
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
-        !(shoc_uses_host_diffusion(opts.transport_mode) &&
-          !shoc_uses_momentum_host_diffusion(opts.momentum_transport)),
-        "erf.shoc.transport_mode = host_diffusion requires erf.shoc.momentum_transport = host_diffusion");
+    std::string error_message;
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(validate_shoc_runtime_options_message(opts, error_message),
+                                     error_message.c_str());
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE

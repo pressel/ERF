@@ -21,6 +21,36 @@ shoc_layout_requires_number_closure (const MoistureComponentIndices& indices,
     return shoc_valid_comp(indices.nc, ncomp) || shoc_valid_comp(indices.ni, ncomp);
 }
 
+inline bool
+shoc_driver_host_diffusion_moisture_supported (const ShocRuntimeOptions& opts,
+                                               MoistureType moisture_type,
+                                               std::string& error_message)
+{
+    if (!shoc_uses_host_diffusion(opts.transport_mode) || moisture_type == MoistureType::None) {
+        return true;
+    }
+
+    error_message =
+        "Native SHOC host_diffusion with moisture is not yet supported because SHOC does not own cloud macrophysics in this mode while SHOC-family microphysics condensation is suppressed. Use state_update for moist SHOC runs, or run host_diffusion only for dry cases until a transport-aware microphysics ownership predicate is implemented.";
+    return false;
+}
+
+inline bool
+shoc_driver_state_update_layout_supported (const ShocRuntimeOptions& opts,
+                                           const MoistureComponentIndices& indices,
+                                           int ncomp,
+                                           std::string& error_message)
+{
+    if (!shoc_uses_state_update(opts.transport_mode) ||
+        !shoc_layout_requires_number_closure(indices, ncomp)) {
+        return true;
+    }
+
+    error_message =
+        "Native SHOC state_update does not yet support number-aware microphysics layouts with cloud/ice number concentrations. A number closure is required before SHOC can update cloud mass in these layouts.";
+    return false;
+}
+
 class ShocDriver
 {
 public:
