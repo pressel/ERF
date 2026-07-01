@@ -496,21 +496,24 @@ ShocDriver::advance (MultiFab& cons,
 
     // Keep one SHOC column workspace per local box so GPU writeback kernels
     // can finish reading a box's scratch before it is reused.
-    const auto n_local_long = cons.local_size();
-    AMREX_ALWAYS_ASSERT(n_local_long >= 0);
-    const std::size_t n_local = static_cast<std::size_t>(n_local_long);
-    if (m_column_workspaces.size() < n_local) {
-        const std::size_t old_size = m_column_workspaces.size();
-        m_column_workspaces.resize(n_local);
-        for (std::size_t n = old_size; n < m_column_workspaces.size(); ++n) {
-            m_column_workspaces[n] = std::make_unique<ShocColumnWorkspace>();
+    const amrex::Long n_local = cons.local_size();
+    AMREX_ALWAYS_ASSERT(n_local >= amrex::Long{0});
+    const amrex::Long current_size = static_cast<amrex::Long>(m_column_workspaces.size());
+    if (current_size < n_local) {
+        const amrex::Long old_size = current_size;
+        m_column_workspaces.resize(static_cast<std::size_t>(n_local));
+        for (amrex::Long n = old_size; n < n_local; ++n) {
+            m_column_workspaces[static_cast<std::size_t>(n)] =
+                std::make_unique<ShocColumnWorkspace>();
         }
     }
 
-    std::size_t local_index = 0;
+    amrex::Long local_index = 0;
     for (MFIter mfi(cons, false); mfi.isValid(); ++mfi, ++local_index) {
-        AMREX_ALWAYS_ASSERT(local_index < m_column_workspaces.size());
-        ShocColumnWorkspace& workspace = *m_column_workspaces[local_index];
+        AMREX_ALWAYS_ASSERT(
+            local_index < static_cast<amrex::Long>(m_column_workspaces.size()));
+        ShocColumnWorkspace& workspace =
+            *m_column_workspaces[static_cast<std::size_t>(local_index)];
         const Box& vbx = mfi.validbox();
         const ShocColumnLayout active_layout = make_shoc_layout(vbx, geom);
         {
