@@ -87,11 +87,8 @@ void apply_face (const amrex::Box& bx,
         const amrex::Real old_flux = flux(fi,fj,fk,flux_comp);
         amrex::Real new_flux = amrex::Real(0.0);
         if (!(is_qc || (is_qv && wall.moisture_mode == erf_wall_thermodynamics::MoistureMode::DryImpermeable))) {
-            if constexpr (HIGH) {
-                new_flux = -rho * alpha * (wall_value - cell_value) * inv_half_cell;
-            } else {
-                new_flux = -rho * alpha * (cell_value - wall_value) * inv_half_cell;
-            }
+            new_flux = HIGH ? -rho * alpha * (wall_value - cell_value) * inv_half_cell
+                            : -rho * alpha * (cell_value - wall_value) * inv_half_cell;
         }
         flux(fi,fj,fk,flux_comp) = new_flux;
 
@@ -99,7 +96,7 @@ void apply_face (const amrex::Box& bx,
         // the RHS.  Add only the boundary correction so the state update and
         // the retained flux array use exactly the same physical flux.
         const amrex::Real correction = (new_flux - old_flux) * dx_inv[DIR];
-        if constexpr (HIGH) {
+        if (HIGH) {
             rhs(i,j,k,quantity) -= correction;
         } else {
             rhs(i,j,k,quantity) += correction;
