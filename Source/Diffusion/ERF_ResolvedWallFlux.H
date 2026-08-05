@@ -87,8 +87,8 @@ void apply_face (const amrex::Box& bx,
         const amrex::Real old_flux = flux(fi,fj,fk,flux_comp);
         amrex::Real new_flux = amrex::Real(0.0);
         if (!(is_qc || (is_qv && wall.moisture_mode == erf_wall_thermodynamics::MoistureMode::DryImpermeable))) {
-            new_flux = HIGH ? -rho * alpha * (wall_value - cell_value) * inv_half_cell
-                            : -rho * alpha * (cell_value - wall_value) * inv_half_cell;
+            const amrex::Real sign = HIGH ? amrex::Real(1.0) : amrex::Real(-1.0);
+            new_flux = -sign * rho * alpha * (wall_value - cell_value) * inv_half_cell;
         }
         flux(fi,fj,fk,flux_comp) = new_flux;
 
