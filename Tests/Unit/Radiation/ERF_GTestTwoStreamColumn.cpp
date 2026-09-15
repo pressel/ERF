@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include <AMReX_Array4.H>
@@ -707,26 +708,30 @@ TEST(TwoStreamColumn, InterfaceFluxesMatchTheSurfaceAndTopDiagnostics)
 TEST(TwoStreamColumn, SurfaceLayerPotentialTemperatureIsConvertedBeforeEmission)
 {
     // The surface layer hands the sweep a potential temperature (MOST works in
-    // theta). The emission needs the temperature, T_s = theta_s * Exner of the
-    // lowest cell; using theta directly would overstate sigma T^4 by the fourth
+    // theta). The emission needs the temperature, T_s = theta_s * Exner at the
+    // physical surface; using theta directly would overstate sigma T^4 by the fourth
     // power of 1/Exner, several percent below 1000 hPa.
     RadChoice rc = base_choice();
     rc.surface_emissivity_lw = 1.0;
     const amrex::Real rho = 1.0, T_air = 290.0;
     const amrex::Real theta_air = getThgivenRandT(rho, T_air, RdoCp);
-    const amrex::Real exner = T_air / theta_air;            // Exner function of the state
+    const amrex::Real pressure_surface = erf_surface_temperature::pressure_at_surface(
+        rho, rho * theta_air, 0.0, amrex::Real(0.5) * kDz);
+    const amrex::Real exner = std::pow(pressure_surface / p_0, RdoCp);
     ASSERT_LT(exner, 0.999);                                // the state is not at p_0
     const amrex::Real theta_s = 300.0;
     const ColumnResult r = run_uniform_column(rc, rho, T_air, kNz, kDz, 0.0, 0.0, nullptr, nullptr, nullptr, &theta_s);
     const amrex::Real T_s = theta_s * exner;
     const amrex::Real B_T = kSigma * T_s * T_s * T_s * T_s;
     const amrex::Real B_theta = kSigma * theta_s * theta_s * theta_s * theta_s;
-    EXPECT_NEAR(r.flux_lw_up[0], B_T, 1.0e-9 * B_T);
+    const amrex::Real scalar_tolerance =
+        amrex::Real(128.0) * std::numeric_limits<amrex::Real>::epsilon();
+    EXPECT_NEAR(r.flux_lw_up[0], B_T, scalar_tolerance * B_T);
     EXPECT_LT(r.flux_lw_up[0], 0.99 * B_theta);
     // Without a field the erf.rad_t_sfc value is a temperature and is used as is.
     const ColumnResult d = run_uniform_column(rc, rho, T_air);
     const amrex::Real B_d = kSigma * std::pow(rc.rad_t_sfc, 4);
-    EXPECT_NEAR(d.flux_lw_up[0], B_d, 1.0e-9 * B_d);
+    EXPECT_NEAR(d.flux_lw_up[0], B_d, scalar_tolerance * B_d);
 }
 
 TEST(TwoStreamColumn, MassModelShortwaveIsIndependentOfVerticalResolution)
@@ -942,4 +947,3 @@ TEST(TwoStreamColumn, CloudFractionLiquidWaterTermIsAThreshold)
     // RH and qc terms add and saturate at 1
     EXPECT_NEAR(diagnose_cloud_fraction_from_rh_qc(0.9, 5.0e-4, 0.8, 1.0, 1.0e-3), 1.0, 1.0e-12);
 }
-

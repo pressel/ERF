@@ -3158,7 +3158,8 @@ the ones marked **Required** abort the run if they are not given.
 |                                       | correction                                               | MYNNEDMF, YSU, MRF  |                  |
 +---------------------------------------+----------------------------------------------------------+---------------------+------------------+
 | **erf.most.surf_temp**                | prescribed surface temperature [K]; a positive value     | Real > 0            | -1.0 (not set)   |
-|                                       | selects the surface-temperature formulation              |                     |                  |
+|                                       | selects the surface-temperature formulation; it is       |                     |                  |
+|                                       | converted to SurfaceLayer potential temperature         |                     |                  |
 +---------------------------------------+----------------------------------------------------------+---------------------+------------------+
 | **erf.most.surf_moist**               | prescribed surface moisture [kg/kg]; read only with an   | Real >= 0           | -1.0 (not set)   |
 |                                       | active moisture model                                    |                     |                  |
@@ -3592,7 +3593,7 @@ distance factor of the date, or the unscaled 1360.9 W/m² when the zenith angle 
 start date is known), ``erf.rad_t_sfc`` (required; with a land-surface model or a surface layer
 present it is the initial value of the prognostic surface temperature when the surface energy
 balance evolves one and unused otherwise, and the surface layer's potential temperature is
-converted with the Exner function of the lowest cell), ``start_datetime`` and the
+converted with the Exner function at the physical surface), ``start_datetime`` and the
 ``erf.rad_orbital_*`` overrides. A deck that still sets one of the former two-stream-only keys
 (``erf.radiation.solar_zenith``, ``erf.radiation.S0``, ``erf.radiation.surface_temp_k``,
 ``erf.radiation.latitude_deg``, ``erf.radiation.longitude_deg``, ``erf.radiation.day_of_year``,

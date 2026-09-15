@@ -15,6 +15,8 @@
 #include <ERF_EOS.H>
 #include <ERF_IndexDefines.H>
 #include <ERF_RadStruct.H>
+#include <ERF_SurfaceTemperature.H>
+#include <ERF_TerrainMetrics.H>
 #include <ERF_TwoStreamSW.H>
 #include <ERF_TwoStreamLW.H>
 #include <ERF_PrognosticCloudFraction.H>
@@ -873,10 +875,10 @@ void diagnose_layer_optics (
  * @param[in] has_hetero_emiss_lw true if hetero_emiss_lw is available
  * @param[in] hetero_emiss_lw Optional per-column LW surface emissivity field
  * @param[in] has_t_sfc true if t_sfc is available
- * @param[in] t_sfc Optional per-column surface temperature field [K]
+ * @param[in] t_sfc Optional per-column SurfaceLayer potential-temperature field [K]
  * @param[in] t_sfc_is_theta true when t_sfc holds a potential temperature (the surface
  * layer's field: MOST works in theta); it is then converted with the Exner function of
- * the lowest cell before the surface emission is formed
+ * the physical surface before the surface emission is formed
  * @param[in] has_latlon true if per-column latitude and longitude fields are available
  * @param[in] lat_arr Optional per-column latitude [degrees] (dynamic sun)
  * @param[in] lon_arr Optional per-column longitude [degrees, east positive] (dynamic sun)
@@ -1143,10 +1145,27 @@ void vertical_two_stream_sweep (
             bool t_sfc_from_field = false;
             amrex::Real t_surface = resolve_surface_temp_k(i, j, t_sfc, rad_choice, has_t_sfc, t_sfc_from_field);
             // The surface layer carries a potential temperature (MOST works in
-            // theta); the emission needs the temperature, so convert with the
-            // Exner function of the lowest cell (p_surface ~ p of that cell).
+            // theta); the emission needs the temperature, so reconstruct it at
+            // the physical surface pressure.
             if (t_sfc_from_field && t_sfc_is_theta) {
-                t_surface /= get_inverse_exner(i, j, kmin, state_arr);
+                const amrex::Real rho = state_arr(i, j, kmin, Rho_comp);
+                const amrex::Real rho_theta = state_arr(i, j, kmin, RhoTheta_comp);
+                const amrex::Real qv = get_qv_from_state(i, j, kmin, state_arr);
+                const amrex::Real delta_z = z_phys_nd ?
+                    Compute_Zrel_AtCellCenter(i, j, kmin, z_phys_nd) :
+                    amrex::Real(0.5) * dz_uniform;
+                const amrex::Real pressure = erf_surface_temperature::pressure_at_surface(
+                    rho, rho_theta, qv, delta_z);
+                amrex::Real t_absolute = t_surface;
+                if (erf_surface_temperature::theta_to_absolute(
+                        t_surface, pressure, t_absolute)) {
+                    t_surface = t_absolute;
+                } else {
+                    // The atmospheric column is already invalid at this
+                    // pressure; retain the validated fallback instead of
+                    // forming a NaN/Inf surface emission.
+                    t_surface = rad_choice.t_sfc_default;
+                }
             }
             amrex::Real emiss_lw  = resolve_surface_emissivity_lw(i, j, hetero_emiss_lw, rad_choice, has_hetero_emiss_lw);
             F_lw_up_iface(0) = emiss_lw * compute_thermal_intensity(t_surface, sigma)

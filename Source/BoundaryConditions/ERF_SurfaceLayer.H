@@ -23,6 +23,7 @@
 #include "ERF_TerrainMetrics.H"
 #include "ERF_PBLHeight.H"
 #include "ERF_MicrophysicsUtils.H"
+#include "ERF_SurfaceTemperature.H"
 #include "ERF_EB.H"
 
 
@@ -143,7 +144,9 @@ public:
                        "erf.most.pblh_calc (MYNN25 is the only scheme implemented)");
       }
 
-      // Get surface temperature.  surf_temp and surf_moist are declared with negative
+      // Get prescribed surface temperature in absolute Kelvin. The value is
+      // converted to SurfaceLayer theta when it is written to t_surf.
+      // surf_temp and surf_moist are declared with negative
       // sentinels (see below) so that "did the user set this" is a property of the
       // value rather than of the queryAdd return value, which only reports whether the
       // key existed before the call and so stops being meaningful once anything has
@@ -339,6 +342,7 @@ public:
    * @param[in]     sst_lev       sea-surface-temperature data by time
    * @param[in]     tsk_lev       skin-temperature data by time
    * @param[in]     lmask_lev     land-mask data by time
+   * @param[in]     sst_tsk_are_theta true when SST/TSK arrays already hold theta
    */
   void make_SurfaceLayer_at_level (const int& lev,
                                    int nlevs,
@@ -356,8 +360,10 @@ public:
                                    amrex::Vector<std::string>      lsm_flux_name,
                                    amrex::Vector<std::unique_ptr<amrex::MultiFab>>& sst_lev,
                                    amrex::Vector<std::unique_ptr<amrex::MultiFab>>& tsk_lev,
-                                   amrex::Vector<std::unique_ptr<amrex::iMultiFab>>& lmask_lev)
+                                   amrex::Vector<std::unique_ptr<amrex::iMultiFab>>& lmask_lev,
+                                   bool sst_tsk_are_theta = true)
   {
+      m_sst_tsk_are_theta = sst_tsk_are_theta;
       // Update MOST Average
       m_ma.make_MOSTAverage_at_level(lev, mfv,
                                      Theta_prim, Qv_prim, Qr_prim,
@@ -498,6 +504,7 @@ public:
           if (lc_name == "theta" || lc_name == "t_surf") {
               m_has_lsm_tsurf  = true;
               m_lsm_tsurf_indx = n;
+              m_lsm_tsurf_is_theta = (lc_name == "theta");
           }
       }
       if (m_use_sfc_sst && m_use_coupled_sst) {
@@ -595,6 +602,7 @@ public:
 
       t_surf[lev] = std::make_unique<amrex::MultiFab>(ba_flux, dm, ncomp, ng);
       t_surf[lev]->setVal(default_land_surf_temp);
+      initialize_tsurf_from_absolute(lev, mf, z_phys_nd);
 
       q_surf[lev] = std::make_unique<amrex::MultiFab>(ba_flux, dm, ncomp, ng);
       q_surf[lev]->setVal(default_land_surf_moist);
@@ -824,7 +832,9 @@ public:
    * @param[in] time interpolation time
    */
   void fill_tsurf_with_sst_and_tsk (const int& lev,
-                                    const double& time);
+                                    const double& time,
+                                    const amrex::MultiFab& cons_in,
+                                    const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
 
   /**
    * Fill surface temperature interpolated from time varying SST file
@@ -833,7 +843,9 @@ public:
    * @param[in] time interpolation time
    */
   void fill_tsurf_with_sfc_sst (const int& lev,
-                                const double& time);
+                                const double& time,
+                                const amrex::MultiFab& cons_in,
+                                const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
 
   /**
    * Overwrite surface temperature with coupled ocean SST where the coupler
@@ -845,7 +857,9 @@ public:
    *
    * @param[in] lev level index
    */
-  void fill_tsurf_with_coupled_sst (const int& lev);
+  void fill_tsurf_with_coupled_sst (const int& lev,
+                                    const amrex::MultiFab& cons_in,
+                                    const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
 
   /**
    * Fill surface moisture from saturation specific humidity.
@@ -881,7 +895,16 @@ public:
    *
    * @param[in] lev level index
    */
-  void get_lsm_tsurf (const int& lev);
+  void get_lsm_tsurf (const int& lev,
+                      const amrex::MultiFab& cons_in,
+                      const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
+
+  /**
+   * Initialize the configured absolute fallback in the canonical theta form.
+   */
+  void initialize_tsurf_from_absolute (const int& lev,
+                                       const amrex::MultiFab& cons_in,
+                                       const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
 
   /**
    * Wrapper around compute_pblh.
@@ -926,23 +949,45 @@ public:
    *
    * @param[in] time elapsed simulation time
    */
-  void update_surf_temp (const double& time)
+  void update_surf_temp (const int lev,
+                         const double& time,
+                         const amrex::MultiFab& cons_in,
+                         const std::unique_ptr<amrex::MultiFab>& z_phys_nd)
   {
-      // NOTE: this is a whole-domain setVal, so it overwrites the SST/TSK fill
-      //       done earlier in update_fluxes. Coupled SST is applied after this
-      //       call and therefore still wins on the water cells it covers.
+      // This overwrites the SST/TSK fill done earlier in update_fluxes.
+      // Coupled SST is applied after this call and therefore still wins on
+      // the water cells it covers.
       if (surf_heating_rate != 0) {
-          // Use the actual size of t_surf, not m_geom.size(), which is always
-          // max_level+1 and so runs past the levels that exist.  t_surf is sized for
-          // all levels up front but filled one level at a time, so we also have to
-          // skip the entries that have not been allocated yet.
-          int nlevs = static_cast<int>(t_surf.size());
-          for (int lev = 0; lev < nlevs; lev++) {
-              if (!t_surf[lev]) { continue; }
-              t_surf[lev]->setVal(surf_temp + surf_heating_rate * static_cast<amrex::Real>(time));
-              amrex::Print() << "Surface temp at t=" << time << ": "
-                             << surf_temp + surf_heating_rate * time << std::endl;
+          const amrex::Real absolute_temperature =
+              surf_temp + surf_heating_rate * static_cast<amrex::Real>(time);
+          const int klo = m_geom[lev].Domain().smallEnd(2);
+          const amrex::Real dz = m_geom[lev].CellSize(2);
+          for (amrex::MFIter mfi(*t_surf[lev]); mfi.isValid(); ++mfi) {
+              amrex::Box gtbx = mfi.growntilebox();
+              if (gtbx.smallEnd(2) != klo) { continue; }
+              auto t_surf_arr = t_surf[lev]->array(mfi);
+              const auto cons_arr = cons_in.const_array(mfi);
+              const auto z_arr = z_phys_nd ? z_phys_nd->const_array(mfi) :
+                                             amrex::Array4<const amrex::Real>{};
+              ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+              {
+                  const amrex::Real rho = cons_arr(i,j,k,Rho_comp);
+                  const amrex::Real rho_theta = cons_arr(i,j,k,RhoTheta_comp);
+                  const amrex::Real qv = (cons_arr.nComp() > RhoQ1_comp && rho > 0.0) ?
+                      cons_arr(i,j,k,RhoQ1_comp) / rho : amrex::Real(0.0);
+                  const amrex::Real delta_z = z_arr ?
+                      Compute_Zrel_AtCellCenter(i,j,k,z_arr) : myhalf * dz;
+                  const amrex::Real pressure = erf_surface_temperature::pressure_at_surface(
+                      rho, rho_theta, qv, delta_z);
+                  amrex::Real theta = t_surf_arr(i,j,k);
+                  if (erf_surface_temperature::absolute_to_theta(
+                          absolute_temperature, pressure, theta)) {
+                      t_surf_arr(i,j,k) = theta;
+                  }
+              });
           }
+          amrex::Print() << "Surface temp at t=" << time << ": "
+                         << absolute_temperature << " K" << std::endl;
       }
   }
 
@@ -1081,6 +1126,8 @@ public:
   /**
    * Return the surface-temperature field.
    *
+   * The field stores dry potential temperature, not absolute temperature.
+   *
    * @param[in] lev level index
    */
   amrex::MultiFab* get_t_surf (const int& lev) { return t_surf[lev].get(); }
@@ -1089,7 +1136,7 @@ public:
    * Set the surface-temperature field to a constant value.
    *
    * @param[in] lev   level index
-   * @param[in] tsurf surface temperature
+   * @param[in] tsurf surface potential temperature
    */
   void set_t_surf(const int& lev, const amrex::Real tsurf) { t_surf[lev]->setVal(tsurf); }
 
@@ -1275,6 +1322,7 @@ private:
 
   bool m_include_wstar = false;
   amrex::Real z0_const{amrex::Real(0.1)};
+  // Configured in absolute Kelvin; converted to theta when stored in t_surf.
   amrex::Real default_land_surf_temp{amrex::Real(300.)};
   // Negative sentinels: a surface temperature is absolute and a surface moisture is a
   // mixing ratio, so neither can legitimately be negative.  The constructor probes
@@ -1304,7 +1352,12 @@ private:
   bool use_moisture;
   bool m_has_lsm_fluxes = false;
   bool m_has_lsm_tsurf  = false;
+  bool m_lsm_tsurf_is_theta = false;
   int  m_lsm_tsurf_indx = -1;
+
+  // WRFInput SST/TSK are already theta; metgrid fields are Kelvin. Coupled
+  // SST is normalized per covered cell and never relies on this flag.
+  bool m_sst_tsk_are_theta = true;
 
   // variables for sfc/sst forcing from file
   bool m_use_sfc_fluxes = false;

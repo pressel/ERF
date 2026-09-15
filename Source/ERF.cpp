@@ -1306,7 +1306,8 @@ ERF::InitData_post ()
                                                        Qr_prim[lev], z_phys_nd[lev],
                                                        Hwave[lev].get(),Lwave[lev].get(),eddyDiffs_lev[lev].get(),
                                                        lsm_data[lev], lsm_data_name, lsm_flux[lev], lsm_flux_name,
-                                                       sst_lev[lev], tsk_lev[lev], lmask_lev[lev]);
+                                                       sst_lev[lev], tsk_lev[lev], lmask_lev[lev],
+                                                       solverChoice.init_type != InitType::Metgrid);
         }
 
         // If initializing from an input_sounding, make sure the surface layer

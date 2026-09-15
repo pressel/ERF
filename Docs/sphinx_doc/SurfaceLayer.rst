@@ -315,6 +315,11 @@ or purely time and SST information, such as:
    203.000000  292.800
    204.000000  294.580
 
+The SST values in this file are absolute temperatures in Kelvin. When SST forcing
+is used, ERF converts each covered value to the SurfaceLayer's dry potential-
+temperature representation at the physical-surface pressure before the MOST
+calculation.
+
 Notes
 ^^^^^
 

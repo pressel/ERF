@@ -3,6 +3,7 @@
 
 #include <ERF_Constants.H>
 #include <ERF_EOS.H>
+#include <ERF_SurfaceTemperature.H>
 
 namespace rrtmgp {
 
@@ -11,8 +12,8 @@ namespace rrtmgp {
  *
  * RRTMGP and LSM surface-temperature fields contain absolute temperature,
  * while the SurfaceLayer field contains potential temperature.  The latter
- * must therefore be converted with the pressure of the lowest atmospheric
- * cell before it is handed to RRTMGP.
+ * must therefore be converted with the pressure at the physical surface
+ * before it is handed to RRTMGP.
  *
  * @param[in]  is_land                 true when the column is over land
  * @param[in]  has_lsm_t_sfc           true when an LSM t_sfc field exists
@@ -20,7 +21,7 @@ namespace rrtmgp {
  * @param[in]  lsm_t_sfc               LSM t_sfc value, when present
  * @param[in]  has_surface_layer       true when a SurfaceLayer field exists
  * @param[in]  surface_layer_theta     SurfaceLayer potential temperature
- * @param[in]  surface_pressure        pressure in the lowest atmospheric cell
+ * @param[in]  surface_pressure        pressure at the physical surface
  * @param[in]  default_t_sfc           configured absolute-temperature fallback
  * @param[out] t_sfc                   resolved absolute temperature for RRTMGP
  * @param[in,out] lsm_t_sfc_out        optional LSM fallback/writeback field
@@ -44,16 +45,21 @@ resolve_surface_temperature (const bool is_land,
 
     if (use_lsm_t_sfc) {
         t_sfc = lsm_t_sfc;
-    } else if (has_surface_layer) {
+    } else if (has_surface_layer &&
+               erf_surface_temperature::theta_to_absolute(
+                   surface_layer_theta, surface_pressure, t_sfc)) {
         // SurfaceLayer::get_t_surf() returns theta.  RRTMGP requires T.
-        t_sfc = getTgivenPandTh(surface_pressure, surface_layer_theta, RdoCp);
+        // The conversion is valid only for a physically valid surface
+        // pressure.  If the atmospheric column is already invalid, retain
+        // the validated absolute fallback rather than persisting NaN/Inf.
     } else {
         t_sfc = default_t_sfc;
     }
 
     // Preserve the existing fallback/writeback behavior, but write the value
     // in the LSM contract: absolute temperature.
-    if (lsm_t_sfc_out != nullptr && !use_lsm_t_sfc) {
+    if (lsm_t_sfc_out != nullptr && !use_lsm_t_sfc &&
+        (!has_surface_layer || erf_surface_temperature::valid_pressure(surface_pressure))) {
         *lsm_t_sfc_out = t_sfc;
     }
 }

@@ -763,8 +763,10 @@ Radiation::mf_to_kokkos_buffers (iMultiFab* lmask,
                         const bool has_lsm_t_sfc = static_cast<bool>(lsm_in_arr);
                         const bool valid_lsm_t_sfc =
                             has_lsm_t_sfc && (lsm_in_arr(i,j,k) < lsm_undefined);
-                        // Match TwoStream: convert SurfaceLayer theta with
-                        // the pressure in the lowest atmospheric cell.
+                        // SurfaceLayer theta is referenced to the physical
+                        // surface.  RRTMGP's bottom interface is the matching
+                        // pressure location; t_lev(0) is synchronized with
+                        // this t_sfc below.
                         rrtmgp::resolve_surface_temperature(
                             is_land,
                             has_lsm_t_sfc,
@@ -772,7 +774,7 @@ Radiation::mf_to_kokkos_buffers (iMultiFab* lmask,
                             has_lsm_t_sfc ? lsm_in_arr(i,j,k) : Real(0.),
                             static_cast<bool>(tsurf_arr),
                             tsurf_arr ? tsurf_arr(i,j,k) : Real(0.),
-                            p_lay_tab(icol, 0),
+                            p_lev_tab(icol, 0),
                             rrtmgp_default_val,
                             rrtmgp_to_fill(icol),
                             has_lsm_t_sfc ? &lsm_in_arr(i,j,k) : nullptr);
