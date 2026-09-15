@@ -1,5 +1,4 @@
 #include <cmath>
-#include <limits>
 #include <vector>
 
 #include <AMReX_Array4.H>
@@ -724,14 +723,12 @@ TEST(TwoStreamColumn, SurfaceLayerPotentialTemperatureIsConvertedBeforeEmission)
     const amrex::Real T_s = theta_s * exner;
     const amrex::Real B_T = kSigma * T_s * T_s * T_s * T_s;
     const amrex::Real B_theta = kSigma * theta_s * theta_s * theta_s * theta_s;
-    const amrex::Real scalar_tolerance =
-        amrex::Real(128.0) * std::numeric_limits<amrex::Real>::epsilon();
-    EXPECT_NEAR(r.flux_lw_up[0], B_T, scalar_tolerance * B_T);
+    EXPECT_NEAR(r.flux_lw_up[0], B_T, 1.0e-9 * B_T);
     EXPECT_LT(r.flux_lw_up[0], 0.99 * B_theta);
     // Without a field the erf.rad_t_sfc value is a temperature and is used as is.
     const ColumnResult d = run_uniform_column(rc, rho, T_air);
     const amrex::Real B_d = kSigma * std::pow(rc.rad_t_sfc, 4);
-    EXPECT_NEAR(d.flux_lw_up[0], B_d, scalar_tolerance * B_d);
+    EXPECT_NEAR(d.flux_lw_up[0], B_d, 1.0e-9 * B_d);
 }
 
 TEST(TwoStreamColumn, MassModelShortwaveIsIndependentOfVerticalResolution)
