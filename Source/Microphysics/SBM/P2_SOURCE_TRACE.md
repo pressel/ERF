@@ -1,269 +1,179 @@
-# ERF SBM P2 source trace
+# ERF SBM P2 closeout source trace
 
-This document is the implementation trace for the final P2 correction pass.
-The historical P0/P1 trace remains in `P0_P1_SOURCE_TRACE.md`. The symbols
-and paths below are the source of truth for the qualified P2 envelope.
+This is the source-level trace for the closeout branch
+`sbm-p2-final-closeout`, based on
+`13ff28958a2286b9969d77dd4d6396a9d6475e4c` and normally merged with
+`origin/development` at `805bdd156cd1213200d839c3945a023c3d9bd7e6`.
+The design authority is
+`/Users/pres026/Research/ERF_SBM_Public/ERF_SBM_Warm_Aerosol_Design_and_Implementation_Specification_v1.0.md`.
+This trace distinguishes the host estimate from the actual SBM carrier; it
+does not claim the missing host-to-actual proof is closed.
 
-## G0 — locked contracts and source locations
+## G0 — locked architecture and authoritative state
 
-| Contract | Production source | Implemented meaning |
+| Contract | Production source | Meaning |
 |---|---|---|
-| Authoritative state | `Source/AuxiliaryState/ERF_AuxiliaryStateManager.{H,cpp}` (`old`, `evaluation`, `output`, `scratch`) and `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp` (`sbm_auxiliary`) | The spectral state is provider-owned and authoritative. ERF compact `qc/qr` are projections, not an independent transport state. |
-| Physical carrier flux | `ERF::advance_sbm_stage` in `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp`; ERF face fields in `Source/ERF.H` | DonorCell and GroupedFCT_WENOZ3 use the existing ERF face-centered dry-air mass flux. They do not reconstruct independent velocity fluxes. |
-| Physical storage | `SBMLayout` / `SBMBulkProjection` in `Source/Microphysics/SBM/` | One-moment storage is `M`; two-moment storage is physical `(M,C)`. Endpoint variables are bounded transport scratch only. |
-| Complete constraints | `ERF_SBMConstraintGroups.{H,cpp}` and `ERF_SBMTransportPrototype.cpp` | Every population/bin/property group is limited with one common face limiter and complete linear-form constraints. |
-| Accepted transfer | `AuxiliaryFaceTransferLedger::record_stage` in `Source/AuxiliaryState/ERF_AuxiliaryFaceTransfer.{H,cpp}` | The accepted physical face transfer is the single quantity used for divergence, projection, diagnostics, boundary budgets, and AMR register accounting. |
-| Diffusion | `ERF_SBMDiffusion.{H,cpp}` and `ERF_SBMTransportPrototype.cpp` | Explicit scalar density-weighted diffusion acts on `X/rho` with the declared SBM coefficient and is included once in the low-order flux. |
-| Schema identity | `ERF_SBMRestart.{H,cpp}` | Restart compares exact layout, projection, transport, AMR-transfer, numerical, boundary, and grid identities before restoring state. |
+| Authoritative spectral state | `Source/AuxiliaryState/ERF_AuxiliaryStateManager.{H,cpp}` and `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp` | Provider-owned `SBMAux` is authoritative; compact `qc/qr` are projections. |
+| Actual carrier | `ERF::advance_sbm_stage` and ERF face fields | SBM receives ERF's `avg_xmom`, `avg_ymom`, and `avg_zmom`; they are not reconstructed velocity fields. |
+| Physical storage | `ERF_SBMLayout`, `ERF_SBMBulkProjection` | One-moment is `M`; two-moment is physical `(M,C)`. |
+| Complete constraints | `ERF_SBMConstraintGroups.{H,cpp}` and transport prototype | Every population/bin/property group is limited by complete linear-form constraints and one face limiter. |
+| Accepted transfer | `ERF_AuxiliaryFaceTransfer.{H,cpp}` | The accepted physical face transfer drives divergence, projection, boundary budgets, and AMR accounting. |
+| Diffusion | `ERF_SBMDiffusion.{H,cpp}` and transport prototype | Explicit scalar density-weighted diffusion on `X/rho`, included once in the low-order flux. |
+| Restart identity | `ERF_SBMRestart.{H,cpp}` | Layout, projection, transport, AMR, boundary, grid, and schema identities are compared before restore. |
 
-## G1 — production WENO-Z3 face convention
+P3 condensation, activation, regeneration, collision/coalescence,
+sedimentation, aerosol lifecycle, ice, and related warm-cloud physics remain
+outside this branch.
 
-The production helper is `sbm_weno_z3_face` in
-`Source/Microphysics/SBM/ERF_SBMTransportPrototype.cpp` (near line 166),
-called by `ERF_SBMTransportPrototype::advance_stage` (near line 990). It uses
-the ERF local finite-volume WENO-Z3 candidate and canonical fixed-precision
-epsilon and weight algebra on the prepared two-ghost intensive `X/rho`
-stencil. It has no beta-dependent epsilon floor, `abs(q)`/amplitude branch,
-or offset-dependent scale.
+## G1 — WENO-Z3 and donor conventions
 
-The face index is the finite-volume face between cells `i-1` and `i` (and the
-analogous index in `y`/`z`). A positive carrier uses the left/upwind donor side
-and a negative carrier uses the right/upwind donor side. The independent tests
-`WENOZ3TranslationCovarianceForSmoothAndDiscontinuousStencils`,
-`WENOZ3CanonicalERFEquivalenceRandomized`,
-`WENOZ3CanonicalERFDiscontinuityAndConstantStencils`,
-`CoarseFineWENOInterfaceOracleUsesBothUpwindSigns`, and
-`FiniteVolumeWENOQuadraticOptimalCandidateIsExact` exercise additive offsets,
-randomized algebraic equivalence, discontinuous `[0,1,1,1]` and mirror
-stencils, both signs, finite constant data, and exact cell-average quadratic
-data. The production/helper equivalence tests compare the adapter against a
-separately written canonical scalar reference. Retained smooth constant-density
-convergence data is an approximately third-order spatial operator result; it
-is not a claim about nonlinear ERF time-integration order.
+`sbm_weno_z3_face` in
+`Source/Microphysics/SBM/ERF_SBMTransportPrototype.cpp` is the ERF
+finite-volume WENO-Z3 adapter over prepared intensive `X/rho` ghosts. A
+positive face carrier uses the left/upwind value; a negative carrier uses the
+right/upwind value. The canonical/reference tests cover additive offsets,
+randomized algebraic equivalence, discontinuities, constant data, quadratic
+cell averages, and both signs. The production identity remains
+`WENO_Z3-group-FCT-v4`.
 
-The variable-density convergence fixture uses positive nonconstant density
-and a smooth mixing ratio and records the bounded approximately second-order
-behavior required for the simple `U/rho` stencil.
+DonorCell and grouped WENO/FCT use the same prepared-state, accepted-ledger,
+compact-projection, flux-register, reflux, and fail-closed validation path.
+Runtime-sized one- and two-moment groups remain atomic. No `MAX_BINS` or
+bulk-independent compact transport was introduced.
 
-## G2 — temporal source views and target density
+## G2 — temporal source and density views
 
-`ERF::advance_sbm_stage` in
-`Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp` explicitly prepares every
-view before donor, WENO, support, or diffusion reads:
+`ERF::advance_sbm_stage` prepares source views before donor, WENO, support, or
+diffusion reads. Stage 0 uses the prepared old view; later stages use the
+prepared evaluation view when the contract requires it. The explicit density
+views are `rho_anchor`, `rho_input`, and `rho_target`; they are not replaced
+with a neighboring or constant density.
 
-* `AuxiliaryStateManager::fill_stage_from_coarse(..., Old, old_step_time)`
-  fills the fine old view for all stages that read the full-step old source.
-* For later stages,
-  `AuxiliaryStateManager::fill_stage_from_coarse(..., Evaluation,
-  old_stage_time)` fills the fine evaluation view at the actual predictor
-  evaluation time. Stage 0 does not substitute the evaluation time for the
-  old view.
-* The same preparation is used by both production transport methods. The
-  source is selected from the prepared old or evaluation view according to
-  the temporal contract.
-* The transport boundary receives explicit `rho_anchor`, `rho_input`, and
-  `rho_target` views. `ProductionTargetDensityPreservesConstantRatioForBothTemporalContracts`
-  checks all three compressible stages and both anelastic Heun stages with
-  variable density and no order-one tolerance floor.
-
-The compressible ledger is `dt*F_stage2_accepted`; the anelastic ledger is
-`0.5*dt*(F_stage0_accepted+F_stage1_accepted)`. Source selection and ledger
-weights are implemented in `make_compressible_stage`, `make_anelastic_stage`,
-and `StageContext::accepted_ledger_weight`.
+`StageContext::rhs_interval()` is the transport interval. Compressible RK3
+uses `h/3`, `h/2`, and `h`; anelastic Heun uses `h` and `h`. These are distinct
+from accepted-ledger weights: compressible accepts stage 2, while anelastic
+uses `0.5*(stage 0 + stage 1)`.
 
 ## G3 — carrier-weighted AMR transfer
 
-`AuxiliaryStateManager::carrier_weighted_fill` in
-`Source/AuxiliaryState/ERF_AuxiliaryStateManager.cpp` implements the generic,
-provider-neutral transfer. For every density-weighted component it forms
+`AuxiliaryStateManager::carrier_weighted_fill` transfers each density-weighted
+component as
 
 ```text
-z_c(t) = U_c(t) / rho_c(t)
-z_f    = supported piecewise-constant interpolation/fill of z_c
-U_f    = z_f * rho_f(target time)
+z_c = U_c/rho_c
+z_f = supported fill/interpolation of z_c
+U_f = z_f*rho_f(target time)
 ```
 
-The coarse `U` and coarse host density are time-interpolated to the same time
-before division. The fine host density is passed as an explicit target view;
-it is never reconstructed by the SBM manager. A finite, strictly positive
-density is required wherever a supported value is formed, and the same
-multiplier is applied to every component in an atomic group. Tiny exact zeros
-remain exact zeros.
+The coarse numerator and denominator are time-aligned before division. The
+fine target density is passed by the ERF callsite. A finite positive density is
+required; exact zeros remain exact zeros. Fine valid cells retain authority,
+coarse data fills the grown ghost region, and final fine periodic/same-level
+fill restores fine ownership.
 
-The carrier-weighted stage transaction is ordered explicitly: preserve fine
-valid cells, write coarse-derived values into the grown ghost region, then
-perform the final fine-level `FillBoundary(fine_geometry.periodicity())`.
-That final operation restores same-level and periodic fine authority; a true
-uncovered coarse/fine ghost has no same-level owner and therefore retains the
-coarse-derived value.
+Callsites are `ERF::MakeNewLevelFromCoarse`, `ERF::RemakeLevel`, and
+`ERF::advance_sbm_stage`. The manager remains provider-neutral. Tests cover
+creation, stage FillPatch, two-FAB authority, internal-FAB attached-property
+donors, restriction, remake, variable density, and one/two-rank equivalence.
 
-Callsites are `ERF::MakeNewLevelFromCoarse` in
-`Source/ERF_MakeNewLevel.cpp` (near line 516), after host `FillCoarsePatch`
-has built the target fine density; `ERF::RemakeLevel` in the same file (near
-line 1109), after `synchronize_sbm_level_companions`, with current coarse
-old/output and fine target density views; and
-`ERF::advance_sbm_stage`, for old and evaluation coarse/fine stage fills.
-Restart restores the authoritative per-level spectrum and reprojects compact
-state; it does not convert or reconstruct the spectrum from bulk.
+## G4 — compact projection
 
-`AuxiliaryStateManager::prolong_from_coarse`,
-`fill_stage_from_coarse`, `remake_level_from_coarse`, and `average_down_to`
-cover creation, stage FillPatch, remake/regrid, and restriction. The manager
-remains generic: cloud/bin meanings exist only in the SBM provider and
-projection services. Host density sources are the actual ERF
-`vars_old[lev][Vars::cons]` `Rho_comp` and `vars_new[lev][Vars::cons]`
-`Rho_comp` aliases constructed at the callsites; stage target density is the
-current host state passed through the production adapter.
+After supported spectral prolongation, stage fill, reflux, and matched
+average-down, `SBMBulkProjection::apply_to_core` projects the authoritative
+spectrum into compact fields over the valid-plus-available-grow region. A
+stale compact ghost is never used as a spectral source. Projection is ordered
+after spectral transfer and before the compact state is consumed.
 
-The manager unit coverage verifies the carrier identity and
-`CarrierWeightedStageFillPreservesFineFABAuthority` independently checks two
-fine FABs, nonuniform target density, same-level overlap, and a true
-coarse/fine ghost. `AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary`
-then forces transport across the internal fine-FAB boundary and checks the
-analytic donor envelope `[3,7]` and fine donor ratio 7, rather than deriving
-the expected value through a production support helper. The production
-variable-density periodic two-level fixture continues to verify creation,
-stage transport, and dynamic regrid/remake.
+## G5 — boundary policy
 
-## G4 — compact ghost projection
+`Source/Microphysics/SBM/ERF_SBMBoundary.H` contains the shared GPU-safe
+predicates used by production transport and the actual-stage demand oracle:
 
-After every supported spectral prolongation/fill, the production callsite
-projects the authoritative spectrum into core `qc/qr` over the common
-valid-plus-available-grow region. The helper is
-`SBMBulkProjection::apply_to_core`; callsites are in `ERF_MakeNewLevel.cpp`
-after creation/remake and in `ERF_SBMErfIntegration.cpp` after stage fill,
-reflux, and matched auxiliary average-down. The operation is ordered after
-the spectral transfer and never uses a host compact FillPatch value as a
-source. The compact ghost unit test injects a discrepant stale compact value
-and requires machine-scale agreement with the spectral ghost projection.
+```text
+suppress normal advective transfer: ImpermeableWall
+suppress normal diffusion:          ImpermeableWall or AdvectiveOutflow
+```
 
-## G5 — DonorCell and grouped transport
+Periodic faces retain periodic transport. Outward advective outflow is
+accepted; inward carrier is rejected and diffusion is not charged. A physical
+wall has no required normal ghost read. The four-boundary production matrix
+and direct unit tests cover x/y/z signs, wall closure, outward-only outflow,
+compact/state transfer, and nonzero wall diffusion.
 
-`TransportMethod::DonorCell` and `TransportMethod::GroupedFCT_WENOZ3` enter
-the same prepared-state, carrier-weighted density, accepted-ledger, compact
-projection, flux-register, reflux, and fail-closed validation path. The
-shared `prepare_transport_coordinates` helper evaluates the complete
-`fabbox()` (not only `validbox()`), uses already prepared fine and true
-coarse/fine source ghosts, and converts 1M `(M,C)` to `(L,H)` with
-`std::fma`, a scale-aware cancellation tolerance, and no order-one floor.
-Donor support is derived from the low-order source, actual upwind donors,
-active diffusion neighbors, and the Heun old state; no universal carrier
-floor is introduced. `DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors`
-is an independent two-level oracle with both carrier signs, accepted-flux,
-endpoint-realizability, compact-projection, and rank-equivalence checks. The
-real fixtures `SBM_P2_AMR_DONOR_2M` and `SBM_P2_AMR_DONOR_SUBCYCLE_2M`
-qualify DonorCell on one periodic refinement level at one and two MPI ranks.
-
-## G6 — timestep and capability policy
+## G6 — host timestep path
 
 `ERF::sbm_admissible_timestep` in
-`Source/TimeIntegration/ERF_ComputeTimestep.cpp` is called from ERF's normal
-`ComputeDt` path. For static Cartesian geometry it computes, with one fixed
-MPI/global reduction, the host-side bin-independent low-order estimate
+`Source/TimeIntegration/ERF_ComputeTimestep.cpp` is called by normal ERF
+`ComputeDt`. On its supported static-Cartesian envelope it computes one
+bin-independent reduction over host `vars_new`:
 
 ```text
-tau/(rho_anchor V) * [sum_d max(sigma_d mdot_d, 0)
-                      + sum_faces A_f rho_face K/d_if] <= 1,
-mdot_d = u_face,d rho_face.
+R_host = max_i { [sum_d outgoing(u_face,d*rho_face)]/(rho_i V_i)
+                 + [sum_faces A_f*rho_face*K/d_if]/(rho_i V_i) }
+dt_host = 0.5/R_host
 ```
 
-It returns the mathematical bound `1/(advective_rate+diffusive_rate)` to the
-host admissibility helper, which retains the explicit `0.5` safety factor;
-both values and the selected timestep are logged. The production stage check
-remains an exact stage-local defensive guard, with no hidden subcycling or
-velocity-only replacement. Invalid density/velocity/coefficient, terrain,
-EB, or missing host ghosts fail closed. `SBM_P2_HOST_CFL_VARIABLE_RHO_1` and
-`_2` exercise the variable-density counterexample, combined diffusion, and
-1/2-rank reductions; their evidence also records that native stepping was
-used and that the old velocity-only estimate would violate the mathematical
-bound. The distinction between this reconstructed host estimate and the
-actual `avg_*mom` carrier oracle is closed by G10.
+The diagnostic labels this carrier as `host_carrier=reconstructed_u_rho`.
+The locked safety factor is unchanged. Invalid density, velocity, coefficient,
+terrain, EB, or missing host ghost input fails closed. The implementation has
+no spectral-bin loop, full host spectral copy, or private retry/subcycle.
 
-`CapabilityInput` parsing and `evaluate_capability` in
-`ERF_SBMContracts.{H,cpp}` expose and validate `max_level`, every active
-spatial ratio, the native time factor, `TwoWay`, periodicity, transport and
-moment modes, explicit diffusion, chunk size, boundaries, precision, and
-unsupported P3/terrain/EB/implicit/tensor policies. Defaults are
-conservative: an unpopulated native-subcycling field cannot grant AMR
-qualification. The negative matrix rejects max level 2, non-factor-2
-spatial/time refinement, OneWay/nonperiodic AMR, prescribed inflow, implicit
-or tensor diffusion, terrain/EB, and P3 physics.
+## G7 — actual-stage carrier oracle and assertion
 
-## G10 — actual-stage carrier/CFL closure
+`ERF::advance_sbm_stage` passes the exact `avg_*mom` arrays to
+`ERF_SBMTransportPrototype::advance_stage`. Before transport,
+`measure_actual_stage_low_order_demand` computes the same low-order outgoing
+advective and density-weighted diffusive demand from those arrays, exact
+stage density, geometry, and the shared G5 boundary policy. It uses the exact
+`StageContext::rhs_interval()`, reports advective, diffusive, combined, and
+`tau*rate`, and feeds the result into the existing fail-closed stage
+assertion.
 
-The production SBM handoff in `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp`
-passes the ERF face-centered `avg_xmom[lev]`, `avg_ymom[lev]`, and
-`avg_zmom[lev]` arrays directly to `ERF_SBMTransportPrototype::advance_stage`.
-These are the carrier arrays consumed by the low-order transport update; they
-are not reconstructed velocity fields. The density argument is the exact
-low-order density view selected by the temporal contract: the prepared anchor
-density for compressible RK3 and anelastic Heun correction, and the prepared
-evaluation/input density for the anelastic predictor.
+The reduction is fixed-size and independent of the number of bins. It does
+not change the `0.5` host safety factor, clip, retry, private-subcycle, or
+narrow the accepted carrier speed.
 
-`measure_actual_stage_low_order_demand` in
-`Source/Microphysics/SBM/ERF_SBMTransportPrototype.cpp` evaluates the same
-outgoing advective and density-weighted diffusive demand from those exact
-arrays. It uses `StageContext::rhs_interval()` for the stage duration, so the
-qualified values are `h/3`, `h/2`, `h` for compressible RK3 and `h`, `h` for
-anelastic Heun. Diffusive face density is the production arithmetic mean of
-the two adjacent exact density values. A fixed two-reduction diagnostic
-(four-rate global maximum, then a worst-cell key) reports the maximum
-advective rate, diffusive rate, combined rate, `tau*rate`, level, stage, and
-cell metadata. It allocates no spectral or O(Nbin) diagnostic scratch and
-performs no retry or private subcycling. The existing low-order stage
-admissibility guard remains in place; the actual-carrier result is emitted as
-a production oracle so the selected host step is checked against the exact
-carrier without introducing a retry or subcycle controller.
-
-The host `sbm_admissible_timestep` remains the normal ERF `ComputeDt` path and
-continues to report its reconstructed `u_face*rho_face` estimate explicitly as
-`host_carrier=reconstructed_u_rho`. The actual-stage oracle is the closure
-check for the carrier consumed by SBM; the host bound's explicit 0.5 safety
-factor is retained. A manufactured variable-density comparison records
-`reconstructed_u_rho=0.098125` versus `actual_avg_xmom=0.125`, demonstrating
-why the host estimate is not treated as an identity.
-
-Path B is the selected acoustic policy. P2 capability evaluation rejects any
-active ERF acoustic substepping (`SubsteppingType` other than `None`) with the
-stable reason `P2 SBM host-CFL qualification does not yet cover ERF acoustic
-substepping`. This is separate from the qualified native AMR factor-2
-subcycling. The rejection is covered for DonorCell and GroupedFCT_WENOZ3 in
-both one- and two-moment modes, before the first coarse step.
-
-## G7 — AMR synchronization, reflux, and qualified envelope
-
-`sbm_flux_reg` is allocated only for active SBM two-way coupling. The
-integration hook registers accepted per-area face fluxes with the
-YAFluxRegister `dt/dx` convention exactly once. ERF's native
-`erf.dt_ref_ratio=2` advances the fine level twice per coarse step. At
-synchronization, ERF refluxes the authoritative spectrum, calls
-`validate_sbm_post_reflux`, projects compact fields, then performs normal ERF
-average-down and matched auxiliary average-down with a second validation.
-`post_reflux_validation_count` and `post_reflux_material_rejection_count` are
-emitted in the composite diagnostic; successful qualification fixtures report
-zero material rejections. The negative unit path injects a materially
-inadmissible correction and verifies fail-closed behavior before any clipping
-or repair.
-
-The qualified multilevel envelope is deliberately bounded:
+The important qualification boundary is explicit:
 
 ```text
-static Cartesian, double precision, fully periodic,
-max_level=1, spatial refinement ratio=(2,2,2),
-native time refinement factor=2, TwoWay coupling,
-runtime 1M/2M bins, DonorCell or GroupedFCT_WENOZ3.
+host carrier:   reconstructed u_face*rho_face from current host state
+actual carrier: ERF avg_xmom/avg_ymom/avg_zmom after fast/source/AMR updates
 ```
 
-Single-level impermeable-wall and outward-only advective-outflow cases are
-also qualified. Nonperiodic AMR, max level greater than one, other spatial or
-time ratios, OneWay multilevel coupling, prescribed production spectral
-inflow, terrain, EB, moving/dynamic geometry, native/implicit moisture
-diffusion, tensor/cross diffusion, dynamic spectral grids, schema conversion,
-and all P3 physics fail closed.
+`ERF_Substep_NS.cpp`, `ERF_Substep_MT.cpp`, and `ERF_Substep_T.cpp` update
+`avg_*mom` with fast pressure/source terms and vertical flux terms. The
+current host path does not provide a rigorous finite pre-step bound on all
+such later values. The actual oracle is therefore a runtime defensive check,
+not a proof that the host timestep always suffices. This is the unresolved
+`NEEDS_EXPERIMENT` / `REVISE` item that forces the final partial gate.
 
-## G8 — strict restart identities
+## G8 — acoustic and AMR policy
 
-`ERF_SBMRestart.H` defines the current stable identities:
+`ERF_SBMContracts.cpp` rejects any active ERF acoustic substepping with the
+stable reason:
+
+```text
+P2 SBM host-CFL qualification does not yet cover ERF acoustic substepping
+```
+
+This rejection is tested for DonorCell and GroupedFCT_WENOZ3, one and two
+moments, and one and two MPI ranks. It is separate from qualified native AMR
+factor-2 subcycling. The supported AMR envelope is static Cartesian,
+fully-periodic, `max_level=1`, spatial ratio `(2,2,2)`, native time factor 2,
+and `TwoWay` coupling. Unsupported AMR, terrain, EB, moving geometry,
+prescribed production spectral inflow, implicit/tensor diffusion, and schema
+conversion fail closed.
+
+## G9 — AMR synchronization and restart
+
+`sbm_flux_reg` is active only for SBM two-way coupling. Accepted area-weighted
+face fluxes are registered once with the YAFluxRegister `dt/dx` convention.
+ERF native factor-2 fine stepping, reflux, post-reflux validation, compact
+projection, average-down, and matched auxiliary average-down preserve the
+authoritative spectral state. Material post-reflux rejection remains
+fail-closed; clipping is not used.
+
+The current stable identities are:
 
 ```text
 constraint: complete-groups-donor-support-v2
@@ -273,30 +183,30 @@ boundary: periodic+wall+outflow-no-inflow-v1
 schema: ERF-SBM-P2-4
 ```
 
-The transport and AMR-transfer identities are part of the exact checkpoint
-schema comparison. Old WENO v2/v3 and old direct-extensive AMR-transfer
-payloads reject; mismatched grid, layout, or checkpointed compact projection
-also reject. New-versus-restarted two-level trajectories are compared using
-the authoritative `SBMAux_*`, compact cell fields, and schema payloads, with
-repeated runs covering deterministic endpoint-ghost initialization.
+Restart tests compare exact schema/layout/projection identities and
+authoritative `SBMAux_*` plus compact fields. They do not reconstruct the
+spectrum from bulk `qc/qr`.
 
-## G9 — evidence locations
+## G10 — evidence locations and limitations
 
-Focused unit and production tests are registered in `Tests/CTestList.cmake`.
-The real P2 runners are `Tests/RunSBMP2AMR.cmake`,
-`Tests/RunSBMP2AMRSubcycle.cmake`, `Tests/RunSBMP2Timestep.cmake`,
-`Tests/RunSBMP2VariableHostCFL.cmake`, and
-`Tests/RunSBMP2AcousticSubsteppingRejection.cmake`. The P1 prototype runner
-also validates actual-stage diagnostics for both compressible RK3 and
-anelastic Heun.
-The focused tests include the fine-FAB authority, attached-property donor,
-prepared 2M coarse/fine endpoint, canonical WENO randomized/reference, and
-host-CFL counterexample checks. Temporary negative controls were run for the
-F01 final-sync bypass, F02 validbox-only scratch, F03 velocity-only host
-bound, and F04 adaptive WENO epsilon, and were restored before qualification.
-Independent convergence and scratch-memory evidence is written under
-`/private/tmp/erf_sbm_p2_*.csv`; final machine-generated qualification values
-and exact command/rank matrix belong in
-`Source/Microphysics/SBM/P2_QUALIFICATION_REPORT.md` after implementation
-freeze. GPU status is reported separately because this environment has no
-qualified GPU runtime.
+CTest registration is in `Tests/CTestList.cmake`. The production runners are:
+
+* `Tests/RunSBMPrototype.cmake` for P1 stage timing;
+* `Tests/RunSBMP2AMR.cmake` and `RunSBMP2AMRSubcycle.cmake`;
+* `Tests/RunSBMP2Restart.cmake`;
+* `Tests/RunSBMP2Boundaries.cmake`;
+* `Tests/RunSBMP2Timestep.cmake`;
+* `Tests/RunSBMP2VariableHostCFL.cmake`; and
+* `Tests/RunSBMP2AcousticSubsteppingRejection.cmake`.
+
+The direct unit coverage is in
+`Tests/Unit/Microphysics/SBM/ERF_GTestSBMP0P1.cpp` and
+`ERF_GTestSBMP2.cpp`. The closeout wall regression is
+`ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues`; its physical
+wall ghost values are deliberately non-finite and its coefficient is `K=1`.
+
+The current local evidence is recorded in
+`Source/Microphysics/SBM/P2_QUALIFICATION_REPORT.md`: merged SBM/P1/P2
+22/22, full CTest 908/908, CMake DOUBLE and SINGLE/SINGLE builds, and the
+captured per-stage wall rates. GitHub Actions and GPU runtime qualification
+remain external/pending. No P3 work is authorized by this trace.
