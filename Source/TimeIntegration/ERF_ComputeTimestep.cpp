@@ -176,7 +176,8 @@ double ERF::sbm_admissible_timestep(const int level) const
         Print() << "SBM host stability bound at level " << level << " = " << bound
                 << " (advective_rate=" << advective_rate
                 << ", diffusive_rate=" << diffusive_rate
-                << ", diffusion=" << solverChoice.sbm_diffusion_coeff << ")\n";
+                << ", diffusion=" << solverChoice.sbm_diffusion_coeff << ")"
+                << " host_carrier=reconstructed_u_rho\n";
         Print() << "SBM host low-order demand maximum at level " << level
                 << " = " << max_rate
                 << " (mathematical_bound=" << mathematical_bound

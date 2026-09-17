@@ -159,7 +159,7 @@ qualify DonorCell on one periodic refinement level at one and two MPI ranks.
 `ERF::sbm_admissible_timestep` in
 `Source/TimeIntegration/ERF_ComputeTimestep.cpp` is called from ERF's normal
 `ComputeDt` path. For static Cartesian geometry it computes, with one fixed
-MPI/global reduction, the actual bin-independent low-order demand
+MPI/global reduction, the host-side bin-independent low-order estimate
 
 ```text
 tau/(rho_anchor V) * [sum_d max(sigma_d mdot_d, 0)
@@ -176,7 +176,8 @@ EB, or missing host ghosts fail closed. `SBM_P2_HOST_CFL_VARIABLE_RHO_1` and
 `_2` exercise the variable-density counterexample, combined diffusion, and
 1/2-rank reductions; their evidence also records that native stepping was
 used and that the old velocity-only estimate would violate the mathematical
-bound.
+bound. The distinction between this reconstructed host estimate and the
+actual `avg_*mom` carrier oracle is closed by G10.
 
 `CapabilityInput` parsing and `evaluate_capability` in
 `ERF_SBMContracts.{H,cpp}` expose and validate `max_level`, every active
@@ -187,6 +188,47 @@ conservative: an unpopulated native-subcycling field cannot grant AMR
 qualification. The negative matrix rejects max level 2, non-factor-2
 spatial/time refinement, OneWay/nonperiodic AMR, prescribed inflow, implicit
 or tensor diffusion, terrain/EB, and P3 physics.
+
+## G10 — actual-stage carrier/CFL closure
+
+The production SBM handoff in `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp`
+passes the ERF face-centered `avg_xmom[lev]`, `avg_ymom[lev]`, and
+`avg_zmom[lev]` arrays directly to `ERF_SBMTransportPrototype::advance_stage`.
+These are the carrier arrays consumed by the low-order transport update; they
+are not reconstructed velocity fields. The density argument is the exact
+low-order density view selected by the temporal contract: the prepared anchor
+density for compressible RK3 and anelastic Heun correction, and the prepared
+evaluation/input density for the anelastic predictor.
+
+`measure_actual_stage_low_order_demand` in
+`Source/Microphysics/SBM/ERF_SBMTransportPrototype.cpp` evaluates the same
+outgoing advective and density-weighted diffusive demand from those exact
+arrays. It uses `StageContext::rhs_interval()` for the stage duration, so the
+qualified values are `h/3`, `h/2`, `h` for compressible RK3 and `h`, `h` for
+anelastic Heun. Diffusive face density is the production arithmetic mean of
+the two adjacent exact density values. A fixed two-reduction diagnostic
+(four-rate global maximum, then a worst-cell key) reports the maximum
+advective rate, diffusive rate, combined rate, `tau*rate`, level, stage, and
+cell metadata. It allocates no spectral or O(Nbin) diagnostic scratch and
+performs no retry or private subcycling. The existing low-order stage
+admissibility guard remains in place; the actual-carrier result is emitted as
+a production oracle so the selected host step is checked against the exact
+carrier without introducing a retry or subcycle controller.
+
+The host `sbm_admissible_timestep` remains the normal ERF `ComputeDt` path and
+continues to report its reconstructed `u_face*rho_face` estimate explicitly as
+`host_carrier=reconstructed_u_rho`. The actual-stage oracle is the closure
+check for the carrier consumed by SBM; the host bound's explicit 0.5 safety
+factor is retained. A manufactured variable-density comparison records
+`reconstructed_u_rho=0.098125` versus `actual_avg_xmom=0.125`, demonstrating
+why the host estimate is not treated as an identity.
+
+Path B is the selected acoustic policy. P2 capability evaluation rejects any
+active ERF acoustic substepping (`SubsteppingType` other than `None`) with the
+stable reason `P2 SBM host-CFL qualification does not yet cover ERF acoustic
+substepping`. This is separate from the qualified native AMR factor-2
+subcycling. The rejection is covered for DonorCell and GroupedFCT_WENOZ3 in
+both one- and two-moment modes, before the first coarse step.
 
 ## G7 — AMR synchronization, reflux, and qualified envelope
 
@@ -242,8 +284,11 @@ repeated runs covering deterministic endpoint-ghost initialization.
 
 Focused unit and production tests are registered in `Tests/CTestList.cmake`.
 The real P2 runners are `Tests/RunSBMP2AMR.cmake`,
-`Tests/RunSBMP2AMRSubcycle.cmake`, `Tests/RunSBMP2Timestep.cmake`, and
-`Tests/RunSBMP2VariableHostCFL.cmake`.
+`Tests/RunSBMP2AMRSubcycle.cmake`, `Tests/RunSBMP2Timestep.cmake`,
+`Tests/RunSBMP2VariableHostCFL.cmake`, and
+`Tests/RunSBMP2AcousticSubsteppingRejection.cmake`. The P1 prototype runner
+also validates actual-stage diagnostics for both compressible RK3 and
+anelastic Heun.
 The focused tests include the fine-FAB authority, attached-property donor,
 prepared 2M coarse/fine endpoint, canonical WENO randomized/reference, and
 host-CFL counterexample checks. Temporary negative controls were run for the

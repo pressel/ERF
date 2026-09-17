@@ -17,6 +17,7 @@ CapabilityReport evaluate_p1_capabilities(const CapabilityInput& input)
     report.spatial_ref_ratio = input.spatial_ref_ratio;
     report.time_refinement_factor = input.time_refinement_factor;
     report.two_way_coupling = input.two_way_coupling;
+    report.acoustic_substepping_enabled = input.acoustic_substepping_enabled;
     report.flags = {"single_level", "static_cartesian", "periodic_manufactured",
                     "runtime_bins", "first_order_donor", "qv_qc_qr", "double"};
     report.qualified_flags = report.flags;
@@ -60,12 +61,13 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
     report.spatial_ref_ratio = input.spatial_ref_ratio;
     report.time_refinement_factor = input.time_refinement_factor;
     report.two_way_coupling = input.two_way_coupling;
+    report.acoustic_substepping_enabled = input.acoustic_substepping_enabled;
     report.flags = {"multi_level", "static_cartesian", "runtime_bins", "one_moment", "two_moment",
                     "complete_groups", "constraints", "weno_z3_fct", "density_weighted_diffusion",
                     "periodic", "single_level_wall", "single_level_outflow", "periodic_amr",
                     "native_subcycling", "restart", "double",
                     "two_moment_endpoints", "explicit_density_weighted_diffusion",
-                    "conservative_amr", "strict_restart_schema"};
+                    "conservative_amr", "strict_restart_schema", "acoustic_substepping_none"};
     // Every flag in this inventory is covered for the declared supported
     // configuration by the production AMR, restart, active-limiter MPI, and
     // chunk-memory qualification fixtures.  Unsupported physics and geometry
@@ -111,6 +113,8 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
            "P2 AMR requires native time refinement factor exactly 2");
     reject(input.max_level > 0 && !input.two_way_coupling,
            "P2 AMR requires TwoWay coupling");
+    reject(input.acoustic_substepping_enabled,
+           "P2 SBM host-CFL qualification does not yet cover ERF acoustic substepping");
     reject(!input.periodic_cartesian && !input.impermeable_wall && !input.advective_outflow,
            "nonperiodic SBM transport requires an explicit wall or outward-only outflow boundary policy");
     reject(input.diffusion && !input.explicit_sbm_diffusion,
@@ -156,7 +160,8 @@ std::string CapabilityReport::stable_description() const
         << "spatial_ref_ratio=" << spatial_ref_ratio[0] << ','
         << spatial_ref_ratio[1] << ',' << spatial_ref_ratio[2] << "\n"
         << "time_refinement_factor=" << time_refinement_factor << "\n"
-        << "two_way_coupling=" << (two_way_coupling ? 1 : 0) << "\n";
+        << "two_way_coupling=" << (two_way_coupling ? 1 : 0) << "\n"
+        << "acoustic_substepping_enabled=" << (acoustic_substepping_enabled ? 1 : 0) << "\n";
     for (const auto& flag : flags) out << flag << ',';
     out << "\nqualified_flags=";
     for (const auto& flag : qualified_flags) out << flag << ',';

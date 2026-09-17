@@ -37,6 +37,7 @@ using amrex::BoxArray;
 using amrex::DistributionMapping;
 using amrex::Geometry;
 using amrex::IntVect;
+using amrex::MultiFab;
 
 erf_sbm::SBMLayout make_layout(const int nbins, const MomentMode mode,
                                const bool with_property = false,
@@ -560,6 +561,109 @@ TEST(SBMP2, CapabilityGateKeepsP2NegativeControlsFailClosed)
     input.native_subcycling = true;
     input.tensor_diffusion = true;
     EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
+
+    input.tensor_diffusion = false;
+    input.acoustic_substepping_enabled = true;
+    const auto acoustic_rejected = erf_sbm::evaluate_p2_capabilities(input);
+    EXPECT_FALSE(acoustic_rejected.supported);
+    EXPECT_NE(std::find(acoustic_rejected.rejected_reasons.begin(),
+                        acoustic_rejected.rejected_reasons.end(),
+                        "P2 SBM host-CFL qualification does not yet cover ERF acoustic substepping"),
+              acoustic_rejected.rejected_reasons.end());
+    EXPECT_NE(acoustic_rejected.stable_description().find(
+                  "acoustic_substepping_enabled=1"), std::string::npos);
+}
+
+TEST(SBMP2, ActualStageDemandUsesProductionCarrierAndExactStageDuration)
+{
+    const Box domain(IntVect(0, 0, 0), IntVect(1, 1, 1));
+    const BoxArray cell_boxes(domain);
+    const DistributionMapping dm(cell_boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(4.0, 2.0, 2.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    MultiFab density(cell_boxes, dm, 1, 2);
+    density.setVal(Real(1.0));
+    MultiFab carrier_x(amrex::convert(cell_boxes, IntVect(1, 0, 0)), dm, 1, 1);
+    MultiFab carrier_y(amrex::convert(cell_boxes, IntVect(0, 1, 0)), dm, 1, 1);
+    MultiFab carrier_z(amrex::convert(cell_boxes, IntVect(0, 0, 1)), dm, 1, 1);
+    carrier_x.setVal(Real(0.2));
+    carrier_y.setVal(Real(-0.3));
+    carrier_z.setVal(Real(0.0));
+
+    const auto context = erf_auxiliary::make_compressible_stage(
+        0, 0.0, 0.0, 1.0/3.0, 1.0, nullptr, nullptr);
+    const auto demand = erf_sbm::measure_actual_stage_low_order_demand(
+        context, density, carrier_x, carrier_y, carrier_z, geometry,
+        Real(0.1), 0);
+
+    // The real box is 4 x 2 x 2, so the independent two-direction carrier
+    // demand is .2/2 + .3/1 = .4.  Diffusion uses the same arithmetic
+    // rho-face convention as production: .1*(2*.25 + 2*1 + 2*1) = .45.
+    EXPECT_NEAR(demand.stage_duration, 1.0/3.0, 1.e-15);
+    EXPECT_NEAR(demand.advective_rate, Real(0.4), 1.e-14);
+    EXPECT_NEAR(demand.diffusive_rate, Real(0.45), 1.e-14);
+    EXPECT_NEAR(demand.maximum_rate, Real(0.85), 1.e-14);
+    EXPECT_NEAR(demand.maximum_tau_rate, Real(0.85/3.0), 1.e-14);
+    EXPECT_EQ(demand.level, 0);
+    EXPECT_EQ(demand.stage_index, 0);
+    EXPECT_EQ(demand.worst_i, 0);
+    EXPECT_EQ(demand.worst_j, 0);
+    EXPECT_EQ(demand.worst_k, 0);
+}
+
+TEST(SBMP2, ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux)
+{
+    const Box domain(IntVect(0, 0, 0), IntVect(1, 0, 0));
+    const BoxArray cell_boxes(domain);
+    const DistributionMapping dm(cell_boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(2.0, 1.0, 1.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    MultiFab density(cell_boxes, dm, 1, 2);
+    density.setVal(Real(0.0));
+    for (amrex::MFIter mfi(density); mfi.isValid(); ++mfi) {
+        const auto rho = density.array(mfi);
+        amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            rho(i,j,k) = i == 0 ? Real(1.0) : Real(2.0);
+        });
+    }
+    density.FillBoundary(geometry.periodicity());
+
+    MultiFab carrier_x(amrex::convert(cell_boxes, IntVect(1, 0, 0)), dm, 1, 1);
+    MultiFab carrier_y(amrex::convert(cell_boxes, IntVect(0, 1, 0)), dm, 1, 1);
+    MultiFab carrier_z(amrex::convert(cell_boxes, IntVect(0, 0, 1)), dm, 1, 1);
+    carrier_x.setVal(Real(0.0));
+    carrier_y.setVal(Real(0.0));
+    carrier_z.setVal(Real(0.0));
+    for (amrex::MFIter mfi(carrier_x); mfi.isValid(); ++mfi) {
+        const auto flux = carrier_x.array(mfi);
+        amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            // Negative x transport leaves the rho=2 cell through its left face.
+            if (i == 1) flux(i,j,k) = Real(-0.4);
+        });
+    }
+    carrier_x.FillBoundary(geometry.periodicity());
+    carrier_y.FillBoundary(geometry.periodicity());
+    carrier_z.FillBoundary(geometry.periodicity());
+
+    const auto context = erf_auxiliary::make_anelastic_stage(
+        0, 0.0, 0.0, 1.0, 1.0, nullptr, nullptr);
+    const auto demand = erf_sbm::measure_actual_stage_low_order_demand(
+        context, density, carrier_x, carrier_y, carrier_z, geometry,
+        Real(0.0), 0);
+
+    EXPECT_NEAR(demand.advective_rate, Real(0.2), 1.e-14);
+    EXPECT_NEAR(demand.diffusive_rate, Real(0.0), 1.e-14);
+    EXPECT_NEAR(demand.maximum_rate, Real(0.2), 1.e-14);
+    EXPECT_NEAR(demand.maximum_tau_rate, Real(0.2), 1.e-14);
+    EXPECT_EQ(demand.worst_i, 1);
+    EXPECT_EQ(demand.worst_j, 0);
+    EXPECT_EQ(demand.worst_k, 0);
 }
 
 TEST(SBMP2, SyntheticSubsetPopulationSurvivesGroupedLimitAndAMRViews)

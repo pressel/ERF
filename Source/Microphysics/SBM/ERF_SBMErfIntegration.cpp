@@ -852,6 +852,17 @@ void ERF::initialize_sbm_auxiliary(const int lev)
         core.FillBoundary(geom[lev].periodicity());
         core_old.FillBoundary(geom[lev].periodicity());
     }
+    if (lev == 0 && host_cfl_counterexample && ParallelDescriptor::IOProcessor()) {
+        const Real reconstructed_carrier = Real(0.125) *
+            Real(0.5) * (Real(0.37) + Real(1.20));
+        const Real actual_carrier = Real(0.125);
+        Print() << std::setprecision(17)
+                << "SBM manufactured carrier comparison reconstructed_u_rho="
+                << reconstructed_carrier
+                << " actual_avg_xmom=" << actual_carrier
+                << " actual_over_reconstructed=" << actual_carrier / reconstructed_carrier
+                << "\n";
+    }
 
     // The manufactured regression supplies a nonzero ERF carrier field while
     // production inputs retain the ordinary initialized velocity/momentum.
@@ -1123,6 +1134,7 @@ void ERF::advance_sbm_stage(const int lev,
     MultiFab rho_anchor(state_old[IntVars::cons], make_alias, Rho_comp, 1);
     MultiFab rho_input(state_eval[IntVars::cons], make_alias, Rho_comp, 1);
     MultiFab rho_target(state_new[IntVars::cons], make_alias, Rho_comp, 1);
+    ::erf_sbm::ActualStageDemand actual_stage_demand;
     ::erf_sbm::advance_stage(*sbm_auxiliary, *sbm_layout, context,
                             rho_anchor, rho_input, rho_target, state_new[IntVars::cons],
                             avg_xmom[lev], avg_ymom[lev], avg_zmom[lev], geom[lev],
@@ -1132,7 +1144,22 @@ void ERF::advance_sbm_stage(const int lev,
                                 ::erf_sbm::TransportMethod::DonorCell, lev,
                             solverChoice.sbm_diffusion_coeff, solverChoice.sbm_chunk_size,
                             solverChoice.sbm_composite_diagnostic_file.empty() ? nullptr : &stage_minimum_limiter,
-                            boundary_policy);
+                            boundary_policy, &actual_stage_demand);
+    if (verbose > 1 && ParallelDescriptor::IOProcessor()) {
+        const char* temporal_mode = anelastic ? "anelastic_heun" : "compressible_rk3";
+        Print() << std::setprecision(17)
+                << "SBM actual stage low-order demand level=" << actual_stage_demand.level
+                << " stage=" << actual_stage_demand.stage_index
+                << " temporal_mode=" << temporal_mode
+                << " acoustic_substepping=disabled"
+                << " tau=" << actual_stage_demand.stage_duration
+                << " actual_rate=" << actual_stage_demand.maximum_rate
+                << " actual_advective_rate=" << actual_stage_demand.advective_rate
+                << " actual_diffusive_rate=" << actual_stage_demand.diffusive_rate
+                << " tau_actual_rate=" << actual_stage_demand.maximum_tau_rate
+                << " worst_cell=(" << actual_stage_demand.worst_i << ","
+                << actual_stage_demand.worst_j << "," << actual_stage_demand.worst_k << ")\n";
+    }
     if (!solverChoice.sbm_composite_diagnostic_file.empty()) {
         sbm_minimum_accepted_limiter = amrex::min(sbm_minimum_accepted_limiter,
                                                   stage_minimum_limiter);

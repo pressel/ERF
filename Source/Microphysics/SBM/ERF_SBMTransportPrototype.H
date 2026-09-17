@@ -71,6 +71,36 @@ HostState accepted_ledger(const ::erf_auxiliary::StageContext& context,
                           double full_step);
 
 /**
+ * Fixed-cost low-order demand measured from the exact ERF carrier arrays
+ * passed to the SBM transport call.  This is an oracle/verification result,
+ * not a second timestep controller.
+ */
+struct ActualStageDemand {
+    double stage_duration{0.0};
+    double advective_rate{0.0};
+    double diffusive_rate{0.0};
+    double maximum_rate{0.0};
+    double maximum_tau_rate{0.0};
+    int level{0};
+    int stage_index{0};
+    int worst_i{-1};
+    int worst_j{-1};
+    int worst_k{-1};
+};
+
+/** Measure the bin-independent demand using the actual stage carrier. */
+[[nodiscard]] ActualStageDemand measure_actual_stage_low_order_demand(
+    const ::erf_auxiliary::StageContext& context,
+    const amrex::MultiFab& density,
+    const amrex::MultiFab& carrier_x,
+    const amrex::MultiFab& carrier_y,
+    const amrex::MultiFab& carrier_z,
+    const amrex::Geometry& geometry,
+    amrex::Real diffusion_coefficient,
+    int level,
+    const TransportBoundaryPolicy& boundary_policy = {});
+
+/**
  * First-order donor transport using ERF's already-constructed dry-air carrier
  * mass fluxes.  This is intentionally restricted to the qualified static
  * Cartesian P1/P2 auxiliary contract.
@@ -92,7 +122,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    amrex::Real diffusion_coefficient = amrex::Real(0.0),
                    int chunk_size = 0,
                    amrex::Real* minimum_accepted_limiter = nullptr,
-                   const TransportBoundaryPolicy& boundary_policy = {});
+                   const TransportBoundaryPolicy& boundary_policy = {},
+                   ActualStageDemand* actual_stage_demand = nullptr);
 
 /** Compatibility entry point for the pre-P2 two-density call contract. */
 void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
@@ -111,7 +142,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    amrex::Real diffusion_coefficient = amrex::Real(0.0),
                    int chunk_size = 0,
                    amrex::Real* minimum_accepted_limiter = nullptr,
-                   const TransportBoundaryPolicy& boundary_policy = {});
+                   const TransportBoundaryPolicy& boundary_policy = {},
+                   ActualStageDemand* actual_stage_demand = nullptr);
 
 /**
  * Compatibility entry point for callers that have one density view.  New
@@ -132,7 +164,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    amrex::Real diffusion_coefficient = amrex::Real(0.0),
                    int chunk_size = 0,
                    amrex::Real* minimum_accepted_limiter = nullptr,
-                   const TransportBoundaryPolicy& boundary_policy = {});
+                   const TransportBoundaryPolicy& boundary_policy = {},
+                   ActualStageDemand* actual_stage_demand = nullptr);
 
 /** Fail-closed finite/nonnegative check for authoritative spectral state. */
 void validate_nonnegative_state(const amrex::MultiFab& state, int ncomp,

@@ -1724,6 +1724,15 @@ struct SolverChoice {
                 capability.native_subcycling = capability.native_subcycling &&
                     native_substeps[static_cast<std::size_t>(lev)] == 2;
             }
+            // P2's host-CFL/carrier contract is qualified only for the
+            // no-acoustic-substepping ERF handoff.  This is intentionally
+            // separate from native AMR factor-2 subcycling above.
+            capability.acoustic_substepping_enabled = false;
+            for (int lev = 0; lev <= max_level; ++lev) {
+                capability.acoustic_substepping_enabled =
+                    capability.acoustic_substepping_enabled ||
+                    substepping_type[static_cast<std::size_t>(lev)] != SubsteppingType::None;
+            }
             capability.amr_nonperiodic = max_level > 0 && !capability.periodic_cartesian;
             for (int face = 0; face < AMREX_SPACEDIM*2; ++face) {
                 const auto bc = phys_bc_type[face];

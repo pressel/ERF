@@ -41,6 +41,10 @@ struct CapabilityInput {
     bool prescribed_sbm_inflow{false};
     bool periodic_amr{false};
     bool native_subcycling{false};
+    // P2 host-CFL qualification is currently limited to ERF's no-acoustic-
+    // substepping temporal handoff.  This is distinct from native AMR
+    // factor-2 subcycling.
+    bool acoustic_substepping_enabled{false};
     bool amr_nonperiodic{false};
     bool tensor_diffusion{false};
     bool double_precision{true};
@@ -55,6 +59,7 @@ struct CapabilityReport {
     amrex::IntVect spatial_ref_ratio{amrex::IntVect(1)};
     int time_refinement_factor{1};
     bool two_way_coupling{false};
+    bool acoustic_substepping_enabled{false};
     // `flags` is retained as the implementation inventory for source and
     // restart compatibility.  Qualification is intentionally reported
     // separately: an implemented path must not be presented as qualified

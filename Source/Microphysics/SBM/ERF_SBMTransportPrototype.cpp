@@ -5,6 +5,7 @@
 #include "ERF_Interpolation_WENO_Z.H"
 
 #include <AMReX_ParReduce.H>
+#include <AMReX_Reduce.H>
 #include <AMReX_MultiFabUtil.H>
 #include <AMReX_MFParallelFor.H>
 #include <AMReX_ParallelDescriptor.H>
@@ -207,6 +208,140 @@ void validate_dynamic_support_state(
     const amrex::MultiFab& support_bounds,
     const int level,
     const char* context);
+
+struct ActualCellDemand {
+    amrex::Real advective{0.0};
+    amrex::Real diffusive{0.0};
+    amrex::Real total{0.0};
+};
+
+AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+ActualCellDemand actual_cell_demand(
+    const amrex::Array4<const amrex::Real>& density,
+    const amrex::Array4<const amrex::Real>& carrier_x,
+    const amrex::Array4<const amrex::Real>& carrier_y,
+    const amrex::Array4<const amrex::Real>& carrier_z,
+    const int i, const int j, const int k,
+    const int domain_lo_x, const int domain_hi_x,
+    const int domain_lo_y, const int domain_hi_y,
+    const int domain_lo_z, const int domain_hi_z,
+    const int periodic_x, const int periodic_y, const int periodic_z,
+    const int xlow_kind, const int xhigh_kind,
+    const int ylow_kind, const int yhigh_kind,
+    const int zlow_kind, const int zhigh_kind,
+    const amrex::Real diffusion_coefficient,
+    const amrex::Real dxi, const amrex::Real dyi, const amrex::Real dzi) noexcept
+{
+    const amrex::Real invalid = std::numeric_limits<amrex::Real>::max();
+    const amrex::Real rho_i = density(i,j,k);
+    if (rho_i <= amrex::Real(0.0) || amrex::isnan(rho_i) || amrex::isinf(rho_i)) {
+        return {invalid, invalid, invalid};
+    }
+
+    const bool xlow = !periodic_x && i == domain_lo_x;
+    const bool xhigh = !periodic_x && i == domain_hi_x;
+    const bool ylow = !periodic_y && j == domain_lo_y;
+    const bool yhigh = !periodic_y && j == domain_hi_y;
+    const bool zlow = !periodic_z && k == domain_lo_z;
+    const bool zhigh = !periodic_z && k == domain_hi_z;
+    const int wall = static_cast<int>(BoundaryKind::ImpermeableWall);
+    const int outflow = static_cast<int>(BoundaryKind::AdvectiveOutflow);
+
+    const amrex::Real xlo_carrier = carrier_x(i,j,k);
+    const amrex::Real xhi_carrier = carrier_x(i+1,j,k);
+    const amrex::Real ylo_carrier = carrier_y(i,j,k);
+    const amrex::Real yhi_carrier = carrier_y(i,j+1,k);
+    const amrex::Real zlo_carrier = carrier_z(i,j,k);
+    const amrex::Real zhi_carrier = carrier_z(i,j,k+1);
+    if (amrex::isnan(xlo_carrier) || amrex::isinf(xlo_carrier) ||
+        amrex::isnan(xhi_carrier) || amrex::isinf(xhi_carrier) ||
+        amrex::isnan(ylo_carrier) || amrex::isinf(ylo_carrier) ||
+        amrex::isnan(yhi_carrier) || amrex::isinf(yhi_carrier) ||
+        amrex::isnan(zlo_carrier) || amrex::isinf(zlo_carrier) ||
+        amrex::isnan(zhi_carrier) || amrex::isinf(zhi_carrier)) {
+        return {invalid, invalid, invalid};
+    }
+
+    amrex::Real advective = amrex::Real(0.0);
+    if (!(xlow && xlow_kind == wall)) {
+        advective += amrex::max(-xlo_carrier, amrex::Real(0.0)) * dxi / rho_i;
+    }
+    if (!(xhigh && xhigh_kind == wall)) {
+        advective += amrex::max(xhi_carrier, amrex::Real(0.0)) * dxi / rho_i;
+    }
+    if (!(ylow && ylow_kind == wall)) {
+        advective += amrex::max(-ylo_carrier, amrex::Real(0.0)) * dyi / rho_i;
+    }
+    if (!(yhigh && yhigh_kind == wall)) {
+        advective += amrex::max(yhi_carrier, amrex::Real(0.0)) * dyi / rho_i;
+    }
+    if (!(zlow && zlow_kind == wall)) {
+        advective += amrex::max(-zlo_carrier, amrex::Real(0.0)) * dzi / rho_i;
+    }
+    if (!(zhigh && zhigh_kind == wall)) {
+        advective += amrex::max(zhi_carrier, amrex::Real(0.0)) * dzi / rho_i;
+    }
+
+    amrex::Real diffusive = amrex::Real(0.0);
+    if (diffusion_coefficient > amrex::Real(0.0)) {
+        if (!(xlow && xlow_kind == outflow)) {
+            const amrex::Real rho_face = amrex::Real(0.5) *
+                (rho_i + density(i-1,j,k));
+            if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
+                return {invalid, invalid, invalid};
+            }
+            diffusive += diffusion_coefficient * rho_face * dxi * dxi / rho_i;
+        }
+        if (!(xhigh && xhigh_kind == outflow)) {
+            const amrex::Real rho_face = amrex::Real(0.5) *
+                (rho_i + density(i+1,j,k));
+            if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
+                return {invalid, invalid, invalid};
+            }
+            diffusive += diffusion_coefficient * rho_face * dxi * dxi / rho_i;
+        }
+        if (!(ylow && ylow_kind == outflow)) {
+            const amrex::Real rho_face = amrex::Real(0.5) *
+                (rho_i + density(i,j-1,k));
+            if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
+                return {invalid, invalid, invalid};
+            }
+            diffusive += diffusion_coefficient * rho_face * dyi * dyi / rho_i;
+        }
+        if (!(yhigh && yhigh_kind == outflow)) {
+            const amrex::Real rho_face = amrex::Real(0.5) *
+                (rho_i + density(i,j+1,k));
+            if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
+                return {invalid, invalid, invalid};
+            }
+            diffusive += diffusion_coefficient * rho_face * dyi * dyi / rho_i;
+        }
+        if (!(zlow && zlow_kind == outflow)) {
+            const amrex::Real rho_face = amrex::Real(0.5) *
+                (rho_i + density(i,j,k-1));
+            if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
+                return {invalid, invalid, invalid};
+            }
+            diffusive += diffusion_coefficient * rho_face * dzi * dzi / rho_i;
+        }
+        if (!(zhigh && zhigh_kind == outflow)) {
+            const amrex::Real rho_face = amrex::Real(0.5) *
+                (rho_i + density(i,j,k+1));
+            if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
+                return {invalid, invalid, invalid};
+            }
+            diffusive += diffusion_coefficient * rho_face * dzi * dzi / rho_i;
+        }
+    }
+
+    const amrex::Real total = advective + diffusive;
+    if (amrex::isnan(advective) || amrex::isinf(advective) ||
+        amrex::isnan(diffusive) || amrex::isinf(diffusive) ||
+        amrex::isnan(total) || amrex::isinf(total)) {
+        return {invalid, invalid, invalid};
+    }
+    return {advective, diffusive, total};
+}
 
 // Prepare the coordinate representation consumed by every low-order donor
 // lookup.  The source remains authoritative (including its already prepared
@@ -1648,6 +1783,155 @@ HostState accepted_ledger(const ::erf_auxiliary::StageContext& context,
     return result;
 }
 
+ActualStageDemand measure_actual_stage_low_order_demand(
+    const ::erf_auxiliary::StageContext& context,
+    const amrex::MultiFab& density,
+    const amrex::MultiFab& carrier_x,
+    const amrex::MultiFab& carrier_y,
+    const amrex::MultiFab& carrier_z,
+    const amrex::Geometry& geometry,
+    const amrex::Real diffusion_coefficient,
+    const int level,
+    const TransportBoundaryPolicy& boundary_policy)
+{
+    const amrex::Real tau = static_cast<amrex::Real>(context.rhs_interval());
+    if (!std::isfinite(tau) || tau < amrex::Real(0.0)) {
+        throw std::invalid_argument("SBM actual-stage diagnostic requires a finite nonnegative stage duration");
+    }
+    if (!std::isfinite(diffusion_coefficient) || diffusion_coefficient < amrex::Real(0.0)) {
+        throw std::invalid_argument("SBM actual-stage diagnostic requires a finite nonnegative diffusion coefficient");
+    }
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        if (density.nGrowVect()[dir] < 1) {
+            throw std::invalid_argument("SBM actual-stage diagnostic requires one prepared density ghost cell");
+        }
+    }
+
+    const auto domain = geometry.Domain();
+    if (domain.isEmpty()) {
+        throw std::invalid_argument("SBM actual-stage diagnostic requires a nonempty domain");
+    }
+    const int periodic_x = geometry.isPeriodic(0) ? 1 : 0;
+    const int periodic_y = geometry.isPeriodic(1) ? 1 : 0;
+    const int periodic_z = geometry.isPeriodic(2) ? 1 : 0;
+    const int prescribed = static_cast<int>(BoundaryKind::PrescribedSpectralInflow);
+    const int xlow_kind = static_cast<int>(boundary_policy.face_kind[0]);
+    const int xhigh_kind = static_cast<int>(boundary_policy.face_kind[1]);
+    const int ylow_kind = static_cast<int>(boundary_policy.face_kind[2]);
+    const int yhigh_kind = static_cast<int>(boundary_policy.face_kind[3]);
+    const int zlow_kind = static_cast<int>(boundary_policy.face_kind[4]);
+    const int zhigh_kind = static_cast<int>(boundary_policy.face_kind[5]);
+    if ((!periodic_x || !periodic_y || !periodic_z) && !boundary_policy.configured) {
+        throw std::invalid_argument("SBM actual-stage diagnostic requires a configured nonperiodic boundary policy");
+    }
+    if ((!periodic_x && (xlow_kind == prescribed || xhigh_kind == prescribed)) ||
+        (!periodic_y && (ylow_kind == prescribed || yhigh_kind == prescribed)) ||
+        (!periodic_z && (zlow_kind == prescribed || zhigh_kind == prescribed))) {
+        throw std::invalid_argument("SBM actual-stage diagnostic does not support prescribed spectral inflow");
+    }
+
+    using RateReduce = amrex::ReduceOps<amrex::ReduceOpMax, amrex::ReduceOpMax,
+                                        amrex::ReduceOpMax, amrex::ReduceOpMax>;
+    using RateData = amrex::ReduceData<amrex::Real, amrex::Real,
+                                       amrex::Real, amrex::Real>;
+    RateReduce rate_reduce;
+    RateData rate_data(rate_reduce);
+    const amrex::Real dxi = static_cast<amrex::Real>(geometry.InvCellSize(0));
+    const amrex::Real dyi = static_cast<amrex::Real>(geometry.InvCellSize(1));
+    const amrex::Real dzi = static_cast<amrex::Real>(geometry.InvCellSize(2));
+    for (amrex::MFIter mfi(density, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box box = mfi.tilebox();
+        const auto rho = density.const_array(mfi);
+        const auto fx = carrier_x.const_array(mfi);
+        const auto fy = carrier_y.const_array(mfi);
+        const auto fz = carrier_z.const_array(mfi);
+        rate_reduce.eval(box, rate_data,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k)
+                -> amrex::GpuTuple<amrex::Real, amrex::Real, amrex::Real, amrex::Real> {
+                const auto cell = actual_cell_demand(
+                    rho, fx, fy, fz, i, j, k,
+                    domain.smallEnd(0), domain.bigEnd(0),
+                    domain.smallEnd(1), domain.bigEnd(1),
+                    domain.smallEnd(2), domain.bigEnd(2),
+                    periodic_x, periodic_y, periodic_z,
+                    xlow_kind, xhigh_kind, ylow_kind, yhigh_kind,
+                    zlow_kind, zhigh_kind, diffusion_coefficient,
+                    dxi, dyi, dzi);
+                return {cell.advective, cell.diffusive, cell.total, tau * cell.total};
+            });
+    }
+
+    const auto local = rate_data.value(rate_reduce);
+    double rates[4] = {static_cast<double>(amrex::get<0>(local)),
+                        static_cast<double>(amrex::get<1>(local)),
+                        static_cast<double>(amrex::get<2>(local)),
+                        static_cast<double>(amrex::get<3>(local))};
+    amrex::ParallelDescriptor::ReduceRealMax(rates, 4);
+
+    ActualStageDemand result;
+    result.stage_duration = static_cast<double>(tau);
+    result.advective_rate = rates[0];
+    result.diffusive_rate = rates[1];
+    result.maximum_rate = rates[2];
+    result.maximum_tau_rate = rates[3];
+    result.level = level;
+    result.stage_index = context.stage_index;
+
+    // A second fixed reduction identifies a cell attaining the global maximum
+    // without allocating a full-layout diagnostic FAB.  This remains
+    // independent of the number of bins and is only metadata for the oracle.
+    if (std::isfinite(result.maximum_rate)) {
+        using KeyReduce = amrex::ReduceOps<amrex::ReduceOpMin>;
+        using KeyData = amrex::ReduceData<amrex::Real>;
+        KeyReduce key_reduce;
+        KeyData key_data(key_reduce);
+        const amrex::Real rate = static_cast<amrex::Real>(result.maximum_rate);
+        const amrex::Real tolerance = amrex::Real(128.0) *
+            std::numeric_limits<amrex::Real>::epsilon() *
+            amrex::max(amrex::Real(1.0), amrex::Math::abs(rate));
+        const long long nx = domain.length(0);
+        const long long ny = domain.length(1);
+        for (amrex::MFIter mfi(density, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            const amrex::Box box = mfi.tilebox();
+            const auto rho = density.const_array(mfi);
+            const auto fx = carrier_x.const_array(mfi);
+            const auto fy = carrier_y.const_array(mfi);
+            const auto fz = carrier_z.const_array(mfi);
+            key_reduce.eval(box, key_data,
+                [=] AMREX_GPU_DEVICE (int i, int j, int k)
+                    -> amrex::GpuTuple<amrex::Real> {
+                    const auto cell = actual_cell_demand(
+                        rho, fx, fy, fz, i, j, k,
+                        domain.smallEnd(0), domain.bigEnd(0),
+                        domain.smallEnd(1), domain.bigEnd(1),
+                        domain.smallEnd(2), domain.bigEnd(2),
+                        periodic_x, periodic_y, periodic_z,
+                        xlow_kind, xhigh_kind, ylow_kind, yhigh_kind,
+                        zlow_kind, zhigh_kind, diffusion_coefficient,
+                        dxi, dyi, dzi);
+                    if (amrex::Math::abs(cell.total - rate) <= tolerance) {
+                        return {static_cast<amrex::Real>(
+                            (static_cast<long long>(i-domain.smallEnd(0)) +
+                             nx * (static_cast<long long>(j-domain.smallEnd(1)) +
+                                   ny * static_cast<long long>(k-domain.smallEnd(2)))))};
+                    }
+                    return {std::numeric_limits<amrex::Real>::max()};
+                });
+        }
+        const amrex::GpuTuple<amrex::Real> key_tuple = key_data.value(key_reduce);
+        amrex::Real key = amrex::get<0>(key_tuple);
+        amrex::ParallelDescriptor::ReduceRealMin(key);
+        if (key != std::numeric_limits<amrex::Real>::max()) {
+            const long long packed = static_cast<long long>(key + amrex::Real(0.5));
+            const long long plane = nx * ny;
+            result.worst_k = static_cast<int>(packed / plane) + domain.smallEnd(2);
+            result.worst_j = static_cast<int>((packed / nx) % ny) + domain.smallEnd(1);
+            result.worst_i = static_cast<int>(packed % nx) + domain.smallEnd(0);
+        }
+    }
+    return result;
+}
+
 void validate_nonnegative_state(const amrex::MultiFab& state, const int ncomp,
                                 const char* context)
 {
@@ -1822,7 +2106,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    const amrex::Real diffusion_coefficient,
                    const int chunk_size,
                    amrex::Real* minimum_accepted_limiter,
-                   const TransportBoundaryPolicy& boundary_policy)
+                   const TransportBoundaryPolicy& boundary_policy,
+                   ActualStageDemand* actual_stage_demand)
 {
     if (layout.populations().size() != 1 || !manager.has_level(level)) {
         throw std::invalid_argument("ERF SBM transport requires one initialized runtime population and level");
@@ -1922,6 +2207,35 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                 << " diffusion_coefficient=" << diffusion_coefficient;
         throw std::invalid_argument(message.str());
     }
+
+    // Measure the coefficient demand from the exact avg_*mom carrier arrays
+    // handed to this call, using the same density and face-diffusion
+    // convention as the low-order update.  This diagnostic is deliberately
+    // independent of the spectral bin count and is not a private
+    // retry/subcycle controller.  The established low-order stage guard below
+    // remains the fail-closed enforcement point.
+    const ActualStageDemand measured_stage_demand =
+        measure_actual_stage_low_order_demand(
+            context, transport_density, carrier_x, carrier_y, carrier_z,
+            geometry, diffusion_coefficient, level, boundary_policy);
+    if (actual_stage_demand != nullptr) {
+        const Real actual_tolerance = Real(128.0) * std::numeric_limits<Real>::epsilon() *
+            amrex::max(Real(1.0), amrex::Math::abs(
+                static_cast<Real>(measured_stage_demand.maximum_tau_rate)));
+        if (!std::isfinite(measured_stage_demand.maximum_tau_rate) ||
+            static_cast<Real>(measured_stage_demand.maximum_tau_rate) > Real(1.0) + actual_tolerance) {
+            std::ostringstream message;
+            message << "SBM actual stage low-order demand exceeds admissibility: level="
+                    << measured_stage_demand.level << " stage=" << measured_stage_demand.stage_index
+                    << " tau=" << measured_stage_demand.stage_duration
+                    << " maximum_rate=" << measured_stage_demand.maximum_rate
+                    << " tau_rate=" << measured_stage_demand.maximum_tau_rate
+                    << " worst_cell=(" << measured_stage_demand.worst_i << ","
+                    << measured_stage_demand.worst_j << "," << measured_stage_demand.worst_k << ")";
+            throw std::invalid_argument(message.str());
+        }
+    }
+    if (actual_stage_demand != nullptr) *actual_stage_demand = measured_stage_demand;
 
     if (method == TransportMethod::GroupedFCT_WENOZ3) {
         advance_stage_grouped_chunked(manager, layout, context, rho_anchor_prepared,
@@ -2597,7 +2911,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    const amrex::Real diffusion_coefficient,
                    const int chunk_size,
                    amrex::Real* minimum_accepted_limiter,
-                   const TransportBoundaryPolicy& boundary_policy)
+                   const TransportBoundaryPolicy& boundary_policy,
+                   ActualStageDemand* actual_stage_demand)
 {
     // The legacy entry point did not distinguish the density used by the
     // ERF boundary state.  Preserve its behavior while making the target
@@ -2605,7 +2920,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     advance_stage(manager, layout, context, rho_anchor, rho_input, rho_input,
                   core_state, carrier_x, carrier_y, carrier_z, geometry,
                   stage_flux, method, level, diffusion_coefficient, chunk_size,
-                  minimum_accepted_limiter, boundary_policy);
+                  minimum_accepted_limiter, boundary_policy, actual_stage_demand);
 }
 
 void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
@@ -2623,12 +2938,13 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    const amrex::Real diffusion_coefficient,
                    const int chunk_size,
                    amrex::Real* minimum_accepted_limiter,
-                   const TransportBoundaryPolicy& boundary_policy)
+                   const TransportBoundaryPolicy& boundary_policy,
+                   ActualStageDemand* actual_stage_demand)
 {
     advance_stage(manager, layout, context, rho_evaluation, rho_evaluation, rho_evaluation,
                   core_state, carrier_x, carrier_y, carrier_z, geometry,
                   stage_flux, method, level, diffusion_coefficient, chunk_size,
-                  minimum_accepted_limiter, boundary_policy);
+                  minimum_accepted_limiter, boundary_policy, actual_stage_demand);
 }
 
 std::size_t grouped_fct_peak_working_bytes(

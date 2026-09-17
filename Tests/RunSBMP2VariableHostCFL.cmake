@@ -31,6 +31,46 @@ endif()
 
 file(READ "${_diff_log}" _diff_text)
 file(READ "${_zero_log}" _zero_text)
+
+function(parse_actual_stage_demand TEXT PREFIX)
+    string(REGEX MATCHALL
+        "SBM actual stage low-order demand level=[0-9]+ stage=[0-9]+ temporal_mode=[A-Za-z0-9_]+ acoustic_substepping=disabled tau=[0-9eE+.-]+ actual_rate=[0-9eE+.-]+ actual_advective_rate=[0-9eE+.-]+ actual_diffusive_rate=[0-9eE+.-]+ tau_actual_rate=[0-9eE+.-]+"
+        _matches "${TEXT}")
+    list(LENGTH _matches _count)
+    if(_count LESS 3)
+        message(FATAL_ERROR "${PREFIX} run did not report all three compressible actual-stage demands")
+    endif()
+    set(_max_rate 0.0)
+    set(_max_tau_rate 0.0)
+    set(_modes)
+    foreach(_line IN LISTS _matches)
+        string(REGEX MATCH
+            "level=([0-9]+) stage=([0-9]+) temporal_mode=([A-Za-z0-9_]+) acoustic_substepping=disabled tau=([0-9eE+.-]+) actual_rate=([0-9eE+.-]+) actual_advective_rate=([0-9eE+.-]+) actual_diffusive_rate=([0-9eE+.-]+) tau_actual_rate=([0-9eE+.-]+)"
+            _match "${_line}")
+        if(NOT _match)
+            message(FATAL_ERROR "${PREFIX} actual-stage diagnostic line was not parseable")
+        endif()
+        if(CMAKE_MATCH_5 GREATER _max_rate)
+            set(_max_rate "${CMAKE_MATCH_5}")
+        endif()
+        if(CMAKE_MATCH_8 GREATER _max_tau_rate)
+            set(_max_tau_rate "${CMAKE_MATCH_8}")
+        endif()
+        list(APPEND _modes "${CMAKE_MATCH_3}")
+    endforeach()
+    if(_max_tau_rate GREATER 1.0000000001)
+        message(FATAL_ERROR "${PREFIX} selected host timestep violates actual stage demand: ${_max_tau_rate}")
+    endif()
+    list(REMOVE_DUPLICATES _modes)
+    set(${PREFIX}_actual_stage_count "${_count}" PARENT_SCOPE)
+    set(${PREFIX}_actual_stage_max_rate "${_max_rate}" PARENT_SCOPE)
+    set(${PREFIX}_actual_stage_max_tau_rate "${_max_tau_rate}" PARENT_SCOPE)
+    set(${PREFIX}_actual_stage_temporal_modes "${_modes}" PARENT_SCOPE)
+endfunction()
+
+parse_actual_stage_demand("${_diff_text}" diff)
+parse_actual_stage_demand("${_zero_text}" zero)
+
 foreach(_kind IN ITEMS diff zero)
     if(_kind STREQUAL "diff")
         set(_text "${_diff_text}")
@@ -96,6 +136,14 @@ file(WRITE "${LOG}"
     "host_cfl_diffusion_advective_rate=${_diff_adv}\n"
     "host_cfl_diffusion_selected_dt=${_diff_dt}\n"
     "host_cfl_diffusion_bound=${_diff_bound}\n"
+    "host_cfl_diff_actual_stage_count=${diff_actual_stage_count}\n"
+    "host_cfl_diff_actual_stage_max_rate=${diff_actual_stage_max_rate}\n"
+    "host_cfl_diff_actual_stage_max_tau_rate=${diff_actual_stage_max_tau_rate}\n"
+    "host_cfl_diff_actual_stage_temporal_modes=${diff_actual_stage_temporal_modes}\n"
+    "host_cfl_zero_actual_stage_count=${zero_actual_stage_count}\n"
+    "host_cfl_zero_actual_stage_max_rate=${zero_actual_stage_max_rate}\n"
+    "host_cfl_zero_actual_stage_max_tau_rate=${zero_actual_stage_max_tau_rate}\n"
+    "host_cfl_zero_actual_stage_temporal_modes=${zero_actual_stage_temporal_modes}\n"
     "host_cfl_old_velocity_only_bound=0.25\n"
     "host_cfl_old_velocity_only_product=1.06081081075\n"
     "host_cfl_no_substepping=verified\n"
