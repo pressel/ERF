@@ -1156,6 +1156,32 @@ function(add_test_sbm_p2_timestep TEST_NAME NRANKS)
         ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/diffusion.log;${_test_dir}/zero_diffusion.log")
 endfunction(add_test_sbm_p2_timestep)
 
+function(add_test_sbm_p2_variable_host_cfl TEST_NAME NRANKS)
+    set(_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_variable_host_cfl")
+    set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
+    file(MAKE_DIRECTORY "${_test_dir}")
+    file(COPY "${_source_input}" DESTINATION "${_test_dir}")
+    resolve_test_exe("" "erf_exec" TEST_EXE)
+    add_test(${TEST_NAME} ${CMAKE_COMMAND}
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}
+        -DNRANKS=${NRANKS}
+        -DTEST_EXE=${TEST_EXE}
+        -DINPUT=${_test_dir}/inputs_sbm_p2_variable_host_cfl
+        -DWORKING_DIRECTORY=${_test_dir}
+        -DLOG=${_test_dir}/${TEST_NAME}.log
+        -P ${PROJECT_SOURCE_DIR}/Tests/RunSBMP2VariableHostCFL.cmake)
+    set_tests_properties(${TEST_NAME}
+        PROPERTIES
+        TIMEOUT 1200
+        PROCESSORS ${NRANKS}
+        WORKING_DIRECTORY "${_test_dir}/"
+        LABELS "regression;sbm;sbm-p2;mpi;cfl"
+        ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/diffusion.log;${_test_dir}/zero_diffusion.log")
+endfunction(add_test_sbm_p2_variable_host_cfl)
+
 #=============================================================================
 # Regression tests
 #=============================================================================
@@ -1179,6 +1205,8 @@ if(ERF_ENABLE_TESTS AND ERF_ENABLE_MPI)
         "erf.sbm_transport_method=DonorCell")
     add_test_sbm_p2_boundaries(SBM_P2_BOUNDARIES_2M)
     add_test_sbm_p2_timestep(SBM_P2_HOST_TIMESTEP_2M 2)
+    add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_1 1)
+    add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_2 2)
 
     # The checker is a small AMReX PlotFileData consumer and is built only
     # when regression tests are enabled.  All SHOC cases use explicit

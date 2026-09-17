@@ -1,4 +1,5 @@
 #include <AMReX_Reduce.H>
+#include <AMReX_GpuContainers.H>
 #include "ERF_Constants.H"
 
 #include <ERF_EOS.H>
@@ -66,39 +67,120 @@ double ERF::sbm_admissible_timestep(const int level) const
         return std::numeric_limits<double>::max();
     }
 
-    // The explicit spectral update uses the same dry-air carrier as ERF's
-    // face transport.  A face-speed reduction supplies the advective bound;
-    // no spectral-bin loop is involved.
-    double advective_rate = 0.0;
-    const MultiFab* velocities[] = {
-        &vars_new[level][Vars::xvel], &vars_new[level][Vars::yvel],
-        &vars_new[level][Vars::zvel]};
+    // P2 is qualified only for static Cartesian geometry.  Metric factors,
+    // EB fractions, and moving terrain would change both the carrier face
+    // construction and A_f/(V_i d_if), so those configurations fail closed
+    // at the host coupling boundary.
+    if (solverChoice.terrain_type != TerrainType::None) return 0.0;
+
+    const MultiFab& state = vars_new[level][Vars::cons];
+    const MultiFab& xvel = vars_new[level][Vars::xvel];
+    const MultiFab& yvel = vars_new[level][Vars::yvel];
+    const MultiFab& zvel = vars_new[level][Vars::zvel];
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
-        double max_speed = static_cast<double>(velocities[dir]->norm0(0));
-        ParallelDescriptor::ReduceRealMax(max_speed);
-        advective_rate += max_speed * static_cast<double>(geom[level].InvCellSize(dir));
+        if (state.nGrowVect()[dir] < 1) return 0.0;
     }
-    // Combine advection and diffusion before applying the safety factor.  Two
-    // individually safe limits are not a safe limit for their sum.
-    const double diffusion = static_cast<double>(solverChoice.sbm_diffusion_coeff);
-    double diffusive_rate = 0.0;
-    if (diffusion > 0.0 && std::isfinite(diffusion)) {
-        double sum_inv_dx2 = 0.0;
-        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
-            const double inv_dx = static_cast<double>(geom[level].InvCellSize(dir));
-            sum_inv_dx2 += inv_dx * inv_dx;
-        }
-        if (sum_inv_dx2 > 0.0 && std::isfinite(sum_inv_dx2)) {
-            diffusive_rate = diffusion * sum_inv_dx2;
-        }
+
+    // One fixed reduction over the host state returns the actual variable-
+    // density low-order demand components.  In static Cartesian geometry
+    // ERF's VelocityToMomentum construction is
+    //   mdot_x(i)=u(i)*0.5*(rho(i)+rho(i-1)),
+    // and analogously in y/z.  The donor demand for a cell is the outward
+    // positive part of those face mass fluxes divided by rho_anchor*V, plus
+    // rho_face*K*A/(V*d) for every face.  No spectral-bin loop is involved.
+    ReduceOps<ReduceOpMax, ReduceOpMax, ReduceOpMax> reduce_op;
+    ReduceData<Real, Real, Real> reduce_data(reduce_op);
+    for (MFIter mfi(state, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.tilebox();
+        const auto s = state.const_array(mfi);
+        const auto u = xvel.const_array(mfi);
+        const auto v = yvel.const_array(mfi);
+        const auto w = zvel.const_array(mfi);
+        const Real dxi = geom[level].InvCellSize(0);
+        const Real dyi = geom[level].InvCellSize(1);
+        const Real dzi = geom[level].InvCellSize(2);
+        const Real K = solverChoice.sbm_diffusion_coeff;
+        reduce_op.eval(bx, reduce_data,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+                -> GpuTuple<Real,Real,Real> {
+                const Real rho_i = s(i,j,k,Rho_comp);
+                const Real rho_xlo = Real(0.5) *
+                    (rho_i + s(i-1,j,k,Rho_comp));
+                const Real rho_xhi = Real(0.5) *
+                    (rho_i + s(i+1,j,k,Rho_comp));
+                const Real rho_ylo = Real(0.5) *
+                    (rho_i + s(i,j-1,k,Rho_comp));
+                const Real rho_yhi = Real(0.5) *
+                    (rho_i + s(i,j+1,k,Rho_comp));
+                const Real rho_zlo = Real(0.5) *
+                    (rho_i + s(i,j,k-1,Rho_comp));
+                const Real rho_zhi = Real(0.5) *
+                    (rho_i + s(i,j,k+1,Rho_comp));
+                const bool invalid_density =
+                    rho_i <= Real(0.0) || rho_xlo <= Real(0.0) ||
+                    rho_xhi <= Real(0.0) || rho_ylo <= Real(0.0) ||
+                    rho_yhi <= Real(0.0) || rho_zlo <= Real(0.0) ||
+                    rho_zhi <= Real(0.0) ||
+                    amrex::isnan(rho_i) || amrex::isinf(rho_i) ||
+                    amrex::isnan(rho_xlo) || amrex::isinf(rho_xlo) ||
+                    amrex::isnan(rho_xhi) || amrex::isinf(rho_xhi) ||
+                    amrex::isnan(rho_ylo) || amrex::isinf(rho_ylo) ||
+                    amrex::isnan(rho_yhi) || amrex::isinf(rho_yhi) ||
+                    amrex::isnan(rho_zlo) || amrex::isinf(rho_zlo) ||
+                    amrex::isnan(rho_zhi) || amrex::isinf(rho_zhi) ||
+                    amrex::isnan(K) || amrex::isinf(K) || K < Real(0.0);
+                const bool invalid_velocity =
+                    amrex::isnan(u(i,j,k)) || amrex::isinf(u(i,j,k)) ||
+                    amrex::isnan(u(i+1,j,k)) || amrex::isinf(u(i+1,j,k)) ||
+                    amrex::isnan(v(i,j,k)) || amrex::isinf(v(i,j,k)) ||
+                    amrex::isnan(v(i,j+1,k)) || amrex::isinf(v(i,j+1,k)) ||
+                    amrex::isnan(w(i,j,k)) || amrex::isinf(w(i,j,k)) ||
+                    amrex::isnan(w(i,j,k+1)) || amrex::isinf(w(i,j,k+1));
+                if (invalid_density || invalid_velocity) {
+                    const Real fail_closed = std::numeric_limits<Real>::max();
+                    return {fail_closed, fail_closed, fail_closed};
+                }
+                const Real mxlo = u(i,j,k) * rho_xlo;
+                const Real mxhi = u(i+1,j,k) * rho_xhi;
+                const Real mylo = v(i,j,k) * rho_ylo;
+                const Real myhi = v(i,j+1,k) * rho_yhi;
+                const Real mzlo = w(i,j,k) * rho_zlo;
+                const Real mzhi = w(i,j,k+1) * rho_zhi;
+                const Real advective_rate =
+                    (amrex::max(-mxlo, Real(0.0)) + amrex::max(mxhi, Real(0.0))) * dxi / rho_i +
+                    (amrex::max(-mylo, Real(0.0)) + amrex::max(myhi, Real(0.0))) * dyi / rho_i +
+                    (amrex::max(-mzlo, Real(0.0)) + amrex::max(mzhi, Real(0.0))) * dzi / rho_i;
+                const Real diffusive_rate = K * (
+                    (rho_xlo + rho_xhi) * dxi * dxi +
+                    (rho_ylo + rho_yhi) * dyi * dyi +
+                    (rho_zlo + rho_zhi) * dzi * dzi) / rho_i;
+                return {advective_rate, diffusive_rate,
+                        advective_rate + diffusive_rate};
+            });
     }
+
+    const GpuTuple<Real,Real,Real> local = reduce_data.value(reduce_op);
+    double rates[3] = {static_cast<double>(amrex::get<0>(local)),
+                       static_cast<double>(amrex::get<1>(local)),
+                       static_cast<double>(amrex::get<2>(local))};
+    ParallelDescriptor::ReduceRealMax(rates, 3);
+    const double advective_rate = rates[0];
+    const double diffusive_rate = rates[1];
+    const double max_rate = rates[2];
+    const double mathematical_bound = max_rate > 0.0 &&
+        std::isfinite(max_rate) ? 1.0 / max_rate :
+        (max_rate == 0.0 ? std::numeric_limits<double>::max() : 0.0);
     const double bound = ::erf_sbm::admissible_host_timestep(advective_rate,
                                                               diffusive_rate);
     if (verbose > 1 && ParallelDescriptor::IOProcessor()) {
         Print() << "SBM host stability bound at level " << level << " = " << bound
                 << " (advective_rate=" << advective_rate
                 << ", diffusive_rate=" << diffusive_rate
-                << ", diffusion=" << diffusion << ")\n";
+                << ", diffusion=" << solverChoice.sbm_diffusion_coeff << ")\n";
+        Print() << "SBM host low-order demand maximum at level " << level
+                << " = " << max_rate
+                << " (mathematical_bound=" << mathematical_bound
+                << ", host_safety_factor=0.5)\n";
     }
     return bound;
 }

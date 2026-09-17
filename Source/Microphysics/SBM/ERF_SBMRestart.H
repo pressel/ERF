@@ -10,7 +10,7 @@
 namespace erf_sbm {
 
 inline constexpr const char* SBM_CONSTRAINT_POLICY_ID = "complete-groups-donor-support-v2";
-inline constexpr const char* SBM_TRANSPORT_POLICY_ID = "WENO_Z3-group-FCT-v3";
+inline constexpr const char* SBM_TRANSPORT_POLICY_ID = "WENO_Z3-group-FCT-v4";
 inline constexpr const char* SBM_AMR_TRANSFER_POLICY_ID = "carrier-weighted-mixing-ratio-AMR-v1";
 inline constexpr const char* SBM_BOUNDARY_POLICY_ID = "periodic+wall+outflow-no-inflow-v1";
 

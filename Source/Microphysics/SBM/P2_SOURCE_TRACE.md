@@ -21,20 +21,23 @@ and paths below are the source of truth for the qualified P2 envelope.
 The production helper is `sbm_weno_z3_face` in
 `Source/Microphysics/SBM/ERF_SBMTransportPrototype.cpp` (near line 166),
 called by `ERF_SBMTransportPrototype::advance_stage` (near line 990). It uses
-the ERF-compatible local finite-volume WENO-Z3 candidate and weight algebra
-on the prepared two-ghost intensive `X/rho` stencil. Its regularizer is based
-only on local smoothness differences; it has no `abs(q)`/amplitude branch and
-no offset-dependent scale.
+the ERF local finite-volume WENO-Z3 candidate and canonical fixed-precision
+epsilon and weight algebra on the prepared two-ghost intensive `X/rho`
+stencil. It has no beta-dependent epsilon floor, `abs(q)`/amplitude branch,
+or offset-dependent scale.
 
 The face index is the finite-volume face between cells `i-1` and `i` (and the
 analogous index in `y`/`z`). A positive carrier uses the left/upwind donor side
 and a negative carrier uses the right/upwind donor side. The independent tests
-`WENOZ3TranslationCovarianceSmoothAndSteep`,
+`WENOZ3TranslationCovarianceForSmoothAndDiscontinuousStencils`,
+`WENOZ3CanonicalERFEquivalenceRandomized`,
+`WENOZ3CanonicalERFDiscontinuityAndConstantStencils`,
 `CoarseFineWENOInterfaceOracleUsesBothUpwindSigns`, and
-`FiniteVolumeWENOQuadraticOracleBothSigns` exercise additive offsets,
-discontinuous stencils, both signs, and exact cell-average quadratic data.
-The production/helper equivalence test compares the adapter against a
-separately written scalar reference. Retained smooth constant-density
+`FiniteVolumeWENOQuadraticOptimalCandidateIsExact` exercise additive offsets,
+randomized algebraic equivalence, discontinuous `[0,1,1,1]` and mirror
+stencils, both signs, finite constant data, and exact cell-average quadratic
+data. The production/helper equivalence tests compare the adapter against a
+separately written canonical scalar reference. Retained smooth constant-density
 convergence data is an approximately third-order spatial operator result; it
 is not a claim about nonlinear ERF time-integration order.
 
@@ -87,6 +90,13 @@ density is required wherever a supported value is formed, and the same
 multiplier is applied to every component in an atomic group. Tiny exact zeros
 remain exact zeros.
 
+The carrier-weighted stage transaction is ordered explicitly: preserve fine
+valid cells, write coarse-derived values into the grown ghost region, then
+perform the final fine-level `FillBoundary(fine_geometry.periodicity())`.
+That final operation restores same-level and periodic fine authority; a true
+uncovered coarse/fine ghost has no same-level owner and therefore retains the
+coarse-derived value.
+
 Callsites are `ERF::MakeNewLevelFromCoarse` in
 `Source/ERF_MakeNewLevel.cpp` (near line 516), after host `FillCoarsePatch`
 has built the target fine density; `ERF::RemakeLevel` in the same file (near
@@ -105,11 +115,15 @@ projection services. Host density sources are the actual ERF
 `Rho_comp` aliases constructed at the callsites; stage target density is the
 current host state passed through the production adapter.
 
-The manager unit coverage verifies the carrier identity and the production
-variable-density periodic two-level fixture verifies it through creation,
-stage transport, and dynamic regrid/remake. The host manufactured density is
-positive and material-varying and preserves the volume-weighted restriction
-identity, so `U/rho` remains constant at machine scale.
+The manager unit coverage verifies the carrier identity and
+`CarrierWeightedStageFillPreservesFineFABAuthority` independently checks two
+fine FABs, nonuniform target density, same-level overlap, and a true
+coarse/fine ghost. `AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary`
+then forces transport across the internal fine-FAB boundary and checks the
+analytic donor envelope `[3,7]` and fine donor ratio 7, rather than deriving
+the expected value through a production support helper. The production
+variable-density periodic two-level fixture continues to verify creation,
+stage transport, and dynamic regrid/remake.
 
 ## G4 — compact ghost projection
 
@@ -127,23 +141,42 @@ and requires machine-scale agreement with the spectral ghost projection.
 
 `TransportMethod::DonorCell` and `TransportMethod::GroupedFCT_WENOZ3` enter
 the same prepared-state, carrier-weighted density, accepted-ledger, compact
-projection, flux-register, reflux, and fail-closed validation path. Donor
-support is derived from the low-order source, actual upwind donors, active
-diffusion neighbors, and the Heun old state; no universal carrier floor is
-introduced. The real fixtures `SBM_P2_AMR_DONOR_2M` and
-`SBM_P2_AMR_DONOR_SUBCYCLE_2M` qualify DonorCell on one periodic refinement
-level at one and two MPI ranks.
+projection, flux-register, reflux, and fail-closed validation path. The
+shared `prepare_transport_coordinates` helper evaluates the complete
+`fabbox()` (not only `validbox()`), uses already prepared fine and true
+coarse/fine source ghosts, and converts 1M `(M,C)` to `(L,H)` with
+`std::fma`, a scale-aware cancellation tolerance, and no order-one floor.
+Donor support is derived from the low-order source, actual upwind donors,
+active diffusion neighbors, and the Heun old state; no universal carrier
+floor is introduced. `DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors`
+is an independent two-level oracle with both carrier signs, accepted-flux,
+endpoint-realizability, compact-projection, and rank-equivalence checks. The
+real fixtures `SBM_P2_AMR_DONOR_2M` and `SBM_P2_AMR_DONOR_SUBCYCLE_2M`
+qualify DonorCell on one periodic refinement level at one and two MPI ranks.
 
 ## G6 — timestep and capability policy
 
 `ERF::sbm_admissible_timestep` in
 `Source/TimeIntegration/ERF_ComputeTimestep.cpp` is called from ERF's normal
-`ComputeDt` path. It computes a bin-independent global rate from host face
-mass-flux speeds and Cartesian inverse cell sizes, adds the explicit scalar
-diffusive rate `K*sum(InvCellSize(dir)^2)`, and returns the combined bound
-`0.5/(advective_rate+diffusive_rate)` (or an unlimited value for exactly zero
-transport). MPI reductions are over host cells/faces only. The production
-stage check remains a defensive admissibility guard.
+`ComputeDt` path. For static Cartesian geometry it computes, with one fixed
+MPI/global reduction, the actual bin-independent low-order demand
+
+```text
+tau/(rho_anchor V) * [sum_d max(sigma_d mdot_d, 0)
+                      + sum_faces A_f rho_face K/d_if] <= 1,
+mdot_d = u_face,d rho_face.
+```
+
+It returns the mathematical bound `1/(advective_rate+diffusive_rate)` to the
+host admissibility helper, which retains the explicit `0.5` safety factor;
+both values and the selected timestep are logged. The production stage check
+remains an exact stage-local defensive guard, with no hidden subcycling or
+velocity-only replacement. Invalid density/velocity/coefficient, terrain,
+EB, or missing host ghosts fail closed. `SBM_P2_HOST_CFL_VARIABLE_RHO_1` and
+`_2` exercise the variable-density counterexample, combined diffusion, and
+1/2-rank reductions; their evidence also records that native stepping was
+used and that the old velocity-only estimate would violate the mathematical
+bound.
 
 `CapabilityInput` parsing and `evaluate_capability` in
 `ERF_SBMContracts.{H,cpp}` expose and validate `max_level`, every active
@@ -192,24 +225,30 @@ and all P3 physics fail closed.
 
 ```text
 constraint: complete-groups-donor-support-v2
-transport: WENO_Z3-group-FCT-v3
+transport: WENO_Z3-group-FCT-v4
 AMR transfer: carrier-weighted-mixing-ratio-AMR-v1
 boundary: periodic+wall+outflow-no-inflow-v1
-schema: ERF-SBM-P2-3
+schema: ERF-SBM-P2-4
 ```
 
 The transport and AMR-transfer identities are part of the exact checkpoint
-schema comparison. Old WENO v2 and old direct-extensive AMR-transfer payloads
-reject; mismatched grid, layout, or checkpointed compact projection also
-reject. New-versus-restarted two-level trajectories are compared using the
-authoritative `SBMAux_*`, compact cell fields, and schema payloads, with
+schema comparison. Old WENO v2/v3 and old direct-extensive AMR-transfer
+payloads reject; mismatched grid, layout, or checkpointed compact projection
+also reject. New-versus-restarted two-level trajectories are compared using
+the authoritative `SBMAux_*`, compact cell fields, and schema payloads, with
 repeated runs covering deterministic endpoint-ghost initialization.
 
 ## G9 — evidence locations
 
 Focused unit and production tests are registered in `Tests/CTestList.cmake`.
 The real P2 runners are `Tests/RunSBMP2AMR.cmake`,
-`Tests/RunSBMP2AMRSubcycle.cmake`, and `Tests/RunSBMP2Timestep.cmake`.
+`Tests/RunSBMP2AMRSubcycle.cmake`, `Tests/RunSBMP2Timestep.cmake`, and
+`Tests/RunSBMP2VariableHostCFL.cmake`.
+The focused tests include the fine-FAB authority, attached-property donor,
+prepared 2M coarse/fine endpoint, canonical WENO randomized/reference, and
+host-CFL counterexample checks. Temporary negative controls were run for the
+F01 final-sync bypass, F02 validbox-only scratch, F03 velocity-only host
+bound, and F04 adaptive WENO epsilon, and were restored before qualification.
 Independent convergence and scratch-memory evidence is written under
 `/private/tmp/erf_sbm_p2_*.csv`; final machine-generated qualification values
 and exact command/rank matrix belong in

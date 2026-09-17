@@ -731,6 +731,7 @@ struct SolverChoice {
             pp.queryAdd("sbm_manufactured_initialization", sbm_manufactured_initialization);
             pp.queryAdd("sbm_manufactured_velocity", sbm_manufactured_velocity);
             pp.queryAdd("sbm_manufactured_variable_density", sbm_manufactured_variable_density);
+            pp.queryAdd("sbm_manufactured_host_cfl_counterexample", sbm_manufactured_host_cfl_counterexample);
             pp.queryAdd("sbm_diagnostic_file", sbm_diagnostic_file);
             pp.queryAdd("sbm_composite_diagnostic_file", sbm_composite_diagnostic_file);
             pp.queryAdd("sbm_test_dynamic_regrid", sbm_test_dynamic_regrid);
@@ -2425,6 +2426,7 @@ struct SolverChoice {
     bool sbm_manufactured_initialization{false};
     amrex::Real sbm_manufactured_velocity{0.0};
     bool sbm_manufactured_variable_density{false};
+    bool sbm_manufactured_host_cfl_counterexample{false};
     std::string sbm_diagnostic_file;
     std::string sbm_composite_diagnostic_file;
     bool sbm_test_dynamic_regrid{false};

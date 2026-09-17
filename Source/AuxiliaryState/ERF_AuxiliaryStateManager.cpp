@@ -515,6 +515,11 @@ void AuxiliaryStateManager::fill_stage_from_coarse(
         carrier_weighted_fill(target, *coarse_ratio, coarse_geometry, fine_geometry,
                               ref_ratio, *fine_rho_target,
                               fine_geometry.periodicity(), m_layout.ncomp(), false);
+        // The coarse write intentionally prepares every uncovered ghost in the
+        // grown target box.  Restore same-level and periodic fine authority
+        // after that write; a true coarse/fine ghost has no same-level valid
+        // owner and therefore remains the carrier-weighted interpolation.
+        target.FillBoundary(fine_geometry.periodicity());
         return;
     }
     amrex::Vector<amrex::MultiFab*> coarse_states{&old(coarse_level), &output(coarse_level)};

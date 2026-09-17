@@ -820,12 +820,15 @@ void ERF::initialize_sbm_auxiliary(const int lev)
     const int nbins = population.grid.nbins();
     const int offset = population.mass_offset;
 
-    // The variable-density qualification fixture uses the host's actual dry
-    // density state as the carrier throughout regrid and transport.  Its
+    // The variable-density qualification fixtures use the host's actual dry
+    // density state as the carrier throughout regrid and transport.  Their
     // divergence-free manufactured carrier keeps that field stationary in
     // both host temporal contracts.  This is a manufactured P2 test field,
     // not a new thermodynamic or P3 process.
-    if (lev == 0 && solverChoice.sbm_manufactured_variable_density) {
+    const bool host_cfl_counterexample =
+        solverChoice.sbm_manufactured_host_cfl_counterexample;
+    if (lev == 0 && (solverChoice.sbm_manufactured_variable_density ||
+                     host_cfl_counterexample)) {
         auto& core_old = vars_old[lev][Vars::cons];
         const Real xlo = geom[lev].ProbLo(0);
         const Real xlen = geom[lev].ProbHi(0) - xlo;
@@ -836,7 +839,9 @@ void ERF::initialize_sbm_auxiliary(const int lev)
             const auto old_state = core_old.array(mfi);
             ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 const Real x = xlo + (Real(i) + Real(0.5)) * dx;
-                const Real rho = Real(1.0) + Real(0.15) *
+                const Real rho = host_cfl_counterexample ?
+                    ((i % 2 == 0) ? Real(0.37) : Real(1.20)) :
+                    Real(1.0) + Real(0.15) *
                     std::sin(Real(6.2831853071795864769) * (x - xlo) / xlen);
                 state(i,j,k,Rho_comp) = rho;
                 old_state(i,j,k,Rho_comp) = rho;
@@ -901,7 +906,8 @@ void ERF::initialize_sbm_auxiliary(const int lev)
                 // constrained instead of being hidden by a large inflow.
                 const bool active_cell = solverChoice.sbm_test_active_limiter &&
                     (i % 16 == 7);
-                const Real variation = solverChoice.sbm_manufactured_variable_density ? Real(1.0) :
+                const Real variation = (solverChoice.sbm_manufactured_variable_density ||
+                    host_cfl_counterexample) ? Real(1.0) :
                     solverChoice.sbm_test_active_limiter ?
                     (active_cell ? Real(0.001) : Real(1.999)) :
                     Real(1.0) + Real(0.25) *
@@ -1078,7 +1084,8 @@ void ERF::advance_sbm_stage(const int lev,
             });
         }
     }
-    if (solverChoice.sbm_manufactured_variable_density) {
+    if (solverChoice.sbm_manufactured_variable_density ||
+        solverChoice.sbm_manufactured_host_cfl_counterexample) {
         // Keep the variable-density qualification carrier synchronized with
         // the manufactured host state at the final production hand-off.  A
         // uniform mass flux is divergence-free on the periodic fixture, so

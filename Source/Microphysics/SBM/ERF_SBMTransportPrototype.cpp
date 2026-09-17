@@ -208,6 +208,94 @@ void validate_dynamic_support_state(
     const int level,
     const char* context);
 
+// Prepare the coordinate representation consumed by every low-order donor
+// lookup.  The source remains authoritative (including its already prepared
+// AMR ghosts); this FAB is only transport scratch.  In particular, evaluating
+// over fabbox() is what makes a true coarse/fine donor available to DonorCell,
+// while the final FillBoundary restores same-level/periodic fine ownership.
+void prepare_transport_coordinates(
+    const SBMLayout& layout,
+    const std::vector<int>& components,
+    const std::vector<int>& global_to_local,
+    const amrex::MultiFab& source_state,
+    const amrex::MultiFab& density_state,
+    amrex::MultiFab& result,
+    const amrex::Geometry& geometry)
+{
+    if (components.empty() || result.nComp() != static_cast<int>(components.size()) ||
+        global_to_local.size() < static_cast<std::size_t>(layout.ncomp())) {
+        throw std::invalid_argument("invalid SBM transport coordinate component map");
+    }
+    result.setVal(Real(0.0));
+    const auto& population = layout.populations().front();
+    const bool two_moment = population.moment_mode == MomentMode::TwoMoment;
+    const amrex::Box domain = geometry.Domain();
+    const int periodic_x = geometry.isPeriodic(0) ? 1 : 0;
+    const int periodic_y = geometry.isPeriodic(1) ? 1 : 0;
+    const int periodic_z = geometry.isPeriodic(2) ? 1 : 0;
+
+    for (amrex::MFIter mfi(result); mfi.isValid(); ++mfi) {
+        const amrex::Box box = mfi.fabbox();
+        const auto source = source_state.const_array(mfi);
+        const auto rho = density_state.const_array(mfi);
+        const auto out = result.array(mfi);
+        for (std::size_t local = 0; local < components.size(); ++local) {
+            const int global = components[local];
+            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const Real density = rho(i,j,k);
+                const bool physical_ghost =
+                    ((i < domain.smallEnd(0) || i > domain.bigEnd(0)) && !periodic_x) ||
+                    ((j < domain.smallEnd(1) || j > domain.bigEnd(1)) && !periodic_y) ||
+                    ((k < domain.smallEnd(2) || k > domain.bigEnd(2)) && !periodic_z);
+                out(i,j,k,static_cast<int>(local)) = density > Real(0.0) ?
+                    source(i,j,k,global) / density :
+                    (physical_ghost ? Real(0.0) :
+                     std::numeric_limits<Real>::quiet_NaN());
+            });
+        }
+
+        if (two_moment) {
+            for (int bin = 0; bin < population.grid.nbins(); ++bin) {
+                const int mass = population.mass_offset + bin;
+                const int number = population.number_offset + bin;
+                const int mass_local = global_to_local[static_cast<std::size_t>(mass)];
+                const int number_local = global_to_local[static_cast<std::size_t>(number)];
+                if (mass_local < 0 || number_local < 0) continue;
+                const Real lower = population.grid.edges()[static_cast<std::size_t>(bin)];
+                const Real upper = population.grid.edges()[static_cast<std::size_t>(bin + 1)];
+                const Real denominator = upper - lower;
+                ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                    const Real density = rho(i,j,k);
+                    const bool physical_ghost =
+                        ((i < domain.smallEnd(0) || i > domain.bigEnd(0)) && !periodic_x) ||
+                        ((j < domain.smallEnd(1) || j > domain.bigEnd(1)) && !periodic_y) ||
+                        ((k < domain.smallEnd(2) || k > domain.bigEnd(2)) && !periodic_z);
+                    if (density <= Real(0.0)) {
+                        const Real invalid = physical_ghost ? Real(0.0) :
+                            std::numeric_limits<Real>::quiet_NaN();
+                        out(i,j,k,mass_local) = invalid;
+                        out(i,j,k,number_local) = invalid;
+                        return;
+                    }
+                    const Real M = source(i,j,k,mass) / density;
+                    const Real C = source(i,j,k,number) / density;
+                    const Real scale = amrex::Math::abs(M) +
+                        amrex::Math::abs(lower*C) + amrex::Math::abs(upper*C);
+                    const Real tolerance = Real(128.0) *
+                        std::numeric_limits<Real>::epsilon() * scale;
+                    Real L = std::fma(upper, C, -M) / denominator;
+                    Real H = std::fma(-lower, C, M) / denominator;
+                    if (L < Real(0.0) && L >= -tolerance) L = Real(0.0);
+                    if (H < Real(0.0) && H >= -tolerance) H = Real(0.0);
+                    out(i,j,k,mass_local) = L;
+                    out(i,j,k,number_local) = H;
+                });
+            }
+        }
+    }
+    result.FillBoundary(geometry.periodicity());
+}
+
 /**
  * Production grouped transport implementation.  Every allocation in this
  * routine is sized by one complete closure chunk; the authoritative state and
@@ -315,90 +403,6 @@ void advance_stage_grouped_chunked(
     auto group_in_chunk = [](const ConstraintClosureChunk& chunk, const int group_index) {
         return std::find(chunk.group_indices.begin(), chunk.group_indices.end(), group_index) !=
                chunk.group_indices.end();
-    };
-
-    // Build a local intensive/end-point representation.  Endpoint conversion
-    // is confined to this scratch FAB; authoritative (M,C) storage is never
-    // clipped or overwritten.
-    auto build_ratio = [&](const ConstraintClosureChunk& chunk,
-                           const amrex::MultiFab& source_state,
-                           const amrex::MultiFab& density_state,
-                           amrex::MultiFab& ratio,
-                           const std::vector<int>& global_to_local) {
-        // FillBoundary only communicates values for cells covered by another
-        // FAB (or a periodic image). Fine AMR FABs can also have physical or
-        // uncovered ghost cells, and those cells must never inherit allocator
-        // contents before a donor lookup. The zero fill is harmless for
-        // unused ghosts and makes the endpoint scratch deterministic.
-        ratio.setVal(Real(0.0));
-        const amrex::Box domain = geometry.Domain();
-        const int periodic_x = geometry.isPeriodic(0) ? 1 : 0;
-        const int periodic_y = geometry.isPeriodic(1) ? 1 : 0;
-        const int periodic_z = geometry.isPeriodic(2) ? 1 : 0;
-        for (amrex::MFIter mfi(ratio); mfi.isValid(); ++mfi) {
-            const amrex::Box box = mfi.fabbox();
-            const auto source = source_state.const_array(mfi);
-            const auto rho = density_state.const_array(mfi);
-            const auto result = ratio.array(mfi);
-            for (std::size_t local = 0; local < chunk.components.size(); ++local) {
-                const int global = chunk.components[local];
-                ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                        const Real density = rho(i,j,k);
-                        const bool physical_ghost =
-                            ((i < domain.smallEnd(0) || i > domain.bigEnd(0)) && !periodic_x) ||
-                            ((j < domain.smallEnd(1) || j > domain.bigEnd(1)) && !periodic_y) ||
-                            ((k < domain.smallEnd(2) || k > domain.bigEnd(2)) && !periodic_z);
-                        // A physical ghost is deliberately not a transport
-                        // contributor: supported wall/outflow faces use the
-                        // boundary policy and never read it. Any invalid
-                        // density in a cell that can be read remains NaN so
-                        // the finite-ratio validation fails closed.
-                        result(i,j,k,static_cast<int>(local)) = density > Real(0.0) ?
-                            source(i,j,k,global) / density :
-                            (physical_ghost ? Real(0.0) :
-                             std::numeric_limits<Real>::quiet_NaN());
-                });
-            }
-            if (two_moment) {
-                for (const int group_index : chunk.group_indices) {
-                    const auto& group = groups[static_cast<std::size_t>(group_index)];
-                    const int bin = group.bin;
-                    const int mass = population.mass_offset + bin;
-                    const int number = population.number_offset + bin;
-                    const int mass_local = global_to_local[static_cast<std::size_t>(mass)];
-                    const int number_local = global_to_local[static_cast<std::size_t>(number)];
-                    const Real lower = population.grid.edges()[static_cast<std::size_t>(bin)];
-                    const Real upper = population.grid.edges()[static_cast<std::size_t>(bin + 1)];
-                    const Real denominator = upper - lower;
-                    ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                        const Real density = rho(i,j,k);
-                        const bool physical_ghost =
-                            ((i < domain.smallEnd(0) || i > domain.bigEnd(0)) && !periodic_x) ||
-                            ((j < domain.smallEnd(1) || j > domain.bigEnd(1)) && !periodic_y) ||
-                            ((k < domain.smallEnd(2) || k > domain.bigEnd(2)) && !periodic_z);
-                        if (density <= Real(0.0)) {
-                            const Real invalid = physical_ghost ? Real(0.0) :
-                                std::numeric_limits<Real>::quiet_NaN();
-                            result(i,j,k,mass_local) = invalid;
-                            result(i,j,k,number_local) = invalid;
-                            return;
-                        }
-                        const Real M = source(i,j,k,mass) / density;
-                        const Real C = source(i,j,k,number) / density;
-                        const Real scale = amrex::Math::abs(M) +
-                            amrex::Math::abs(lower*C) + amrex::Math::abs(upper*C);
-                        const Real tolerance = Real(128.0) * std::numeric_limits<Real>::epsilon() * scale;
-                        Real L = std::fma(upper, C, -M) / denominator;
-                        Real H = std::fma(-lower, C, M) / denominator;
-                        if (L < Real(0.0) && L >= -tolerance) L = Real(0.0);
-                        if (H < Real(0.0) && H >= -tolerance) H = Real(0.0);
-                        result(i,j,k,mass_local) = L;
-                        result(i,j,k,number_local) = H;
-                    });
-                }
-            }
-        }
-        ratio.FillBoundary(geometry.periodicity());
     };
 
     auto build_low = [&](const ConstraintClosureChunk& chunk,
@@ -527,7 +531,8 @@ void advance_stage_grouped_chunked(
         for (int local = 0; local < nlocal; ++local) {
             global_to_local[static_cast<std::size_t>(chunk.components[static_cast<std::size_t>(local)])] = local;
         }
-        build_ratio(chunk, low_source, low_density, ratio, global_to_local);
+        prepare_transport_coordinates(layout, chunk.components, global_to_local,
+                                      low_source, low_density, ratio, geometry);
         validate_finite_multifab(ratio, nlocal,
                                  "SBM grouped-FCT endpoint ratio", ratio.nGrowVect());
         build_low(chunk, ratio, low_density, low_adv, low_diff);
@@ -630,7 +635,8 @@ void advance_stage_grouped_chunked(
         ::erf_auxiliary::AuxiliaryFaceTransfer low_adv, low_diff;
         low_adv.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
         low_diff.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
-        build_ratio(chunk, low_source, low_density, ratio, global_to_local);
+        prepare_transport_coordinates(layout, chunk.components, global_to_local,
+                                      low_source, low_density, ratio, geometry);
         build_low(chunk, ratio, low_density, low_adv, low_diff);
 
         std::vector<ConstraintDescriptor> local_descriptor_values;
@@ -733,8 +739,10 @@ void advance_stage_grouped_chunked(
         low_diff.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
         high.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
         amrex::MultiFab high_ratio(output.boxArray(), output.DistributionMap(), nlocal, 2);
-        build_ratio(chunk, low_source, low_density, ratio, global_to_local);
-        build_ratio(chunk, high_source, high_density, high_ratio, global_to_local);
+        prepare_transport_coordinates(layout, chunk.components, global_to_local,
+                                      low_source, low_density, ratio, geometry);
+        prepare_transport_coordinates(layout, chunk.components, global_to_local,
+                                      high_source, high_density, high_ratio, geometry);
         build_low(chunk, ratio, low_density, low_adv, low_diff);
 
         // Derive a chunk-local attached-property support envelope from the
@@ -1934,41 +1942,19 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     stage_flux.setVal(amrex::Real(0.0));
 
     // Two-moment storage is (M,C), while transport uses nonnegative endpoint
-    // variables (L,H).  The existing per-level scratch FAB holds endpoint
-    // ratios, so the temporary is bounded by the local tile and never grows
-    // with a compile-time MAX_BINS constant.
+    // variables (L,H).  The same fabbox-wide preparation used by grouped FCT
+    // also initializes true coarse/fine donors here; FillBoundary alone cannot
+    // create those values.  The temporary is bounded by the runtime layout.
     if (two_moment) {
-        for (amrex::MFIter mfi(transport_scratch); mfi.isValid(); ++mfi) {
-            const amrex::Box box = mfi.validbox();
-            const auto source = evaluation.const_array(mfi);
-            const auto rho = transport_density.const_array(mfi);
-            const auto scratch = transport_scratch.array(mfi);
-            ParallelFor(box, layout.ncomp(), [=] AMREX_GPU_DEVICE (int i, int j, int k, int c) noexcept {
-                const Real density = rho(i,j,k);
-                scratch(i,j,k,c) = density > Real(0.0) ? source(i,j,k,c)/density : Real(0.0);
-            });
-            for (int b = 0; b < nbins; ++b) {
-                const int mass = first + b;
-                const int number = population.number_offset + b;
-                const Real lower = population.grid.edges()[static_cast<std::size_t>(b)];
-                const Real upper = population.grid.edges()[static_cast<std::size_t>(b+1)];
-                const Real denominator = upper - lower;
-                ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                    const Real M = source(i,j,k,mass);
-                    const Real C = source(i,j,k,number);
-                    const Real scale = amrex::Math::abs(M) + upper*amrex::Math::abs(C) + lower*amrex::Math::abs(C);
-                    const Real tolerance = Real(128.0) * std::numeric_limits<Real>::epsilon() * scale;
-                    Real L = (upper*C - M) / denominator;
-                    Real H = (M - lower*C) / denominator;
-                    if (L < Real(0.0) && L >= -tolerance) L = Real(0.0);
-                    if (H < Real(0.0) && H >= -tolerance) H = Real(0.0);
-                    const Real density = rho(i,j,k);
-                    scratch(i,j,k,mass) = density > Real(0.0) ? L/density : Real(0.0);
-                    scratch(i,j,k,number) = density > Real(0.0) ? H/density : Real(0.0);
-                });
-            }
+        std::vector<int> components(static_cast<std::size_t>(layout.ncomp()));
+        std::vector<int> global_to_local(static_cast<std::size_t>(layout.ncomp()), -1);
+        for (int component = 0; component < layout.ncomp(); ++component) {
+            components[static_cast<std::size_t>(component)] = component;
+            global_to_local[static_cast<std::size_t>(component)] = component;
         }
-        transport_scratch.FillBoundary(geometry.periodicity());
+        prepare_transport_coordinates(layout, components, global_to_local,
+                                      evaluation, transport_density,
+                                      transport_scratch, geometry);
     }
 
     // Construct each numerical face flux exactly once on its face-centered

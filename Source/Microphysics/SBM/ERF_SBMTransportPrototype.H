@@ -39,18 +39,15 @@ amrex::Real weno_z3_face_from_stencil(const amrex::Real qm2,
     const amrex::Real beta0 = positive ? (qm1 - qm2) * (qm1 - qm2) :
         (qp1 - q) * (qp1 - q);
     const amrex::Real beta1 = (q - qm1) * (q - qm1);
-    // The regularizer is deliberately translation invariant and homogeneous
-    // in local first differences.  That avoids the old abs(q)-based branch,
-    // preserves proportional transport across complete groups, and retains
-    // the finite-volume order at smooth critical points.  The tiny floor
-    // keeps the candidate finite when the local stencil is constant.
+    // Match ERF's canonical WENO_Z3 regularizer exactly: fixed precision
+    // epsilon, with no beta-dependent floor or tracer-amplitude dependence.
+    // Keeping this algebra identical makes the SBM adapter interchangeable
+    // with ERF's native scalar reconstruction.
 #ifdef AMREX_USE_FLOAT
-    constexpr amrex::Real epsilon_floor = amrex::Real(1.0e-12);
+    constexpr amrex::Real epsilon = amrex::Real(1.0e-12);
 #else
-    constexpr amrex::Real epsilon_floor = amrex::Real(1.0e-40);
+    constexpr amrex::Real epsilon = amrex::Real(1.0e-40);
 #endif
-    const amrex::Real epsilon = epsilon_floor +
-        amrex::Real(64.0) * (beta0 + beta1);
     const amrex::Real tau = amrex::Math::abs(beta1 - beta0);
     const amrex::Real w0 = (amrex::Real(1.0) / amrex::Real(3.0)) *
         (amrex::Real(1.0) + (tau * tau) /

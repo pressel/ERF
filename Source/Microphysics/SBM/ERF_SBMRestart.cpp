@@ -17,7 +17,7 @@ SBMCheckpointSchema make_checkpoint_schema(const SBMLayout& layout,
                                            const std::string& amr_transfer_policy)
 {
     SBMCheckpointSchema result;
-    result.schema_version = "ERF-SBM-P2-3";
+    result.schema_version = "ERF-SBM-P2-4";
     std::ostringstream ids, moments, grids;
     for (const auto& population : layout.populations()) {
         ids << population.population_id << ':' << population.semantic_id << ';';
