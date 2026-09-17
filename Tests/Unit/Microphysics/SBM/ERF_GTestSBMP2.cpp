@@ -11,7 +11,10 @@
 #include "ERF_SBMRestart.H"
 #include "ERF_SBMLayout.H"
 #include "ERF_SBMTransportPrototype.H"
+#include "ERF_SBMErfBoundary.H"
+#include "ERF_SBMHostCFL.H"
 #include "ERF_Interpolation_WENO_Z.H"
+#include "ERF_Advection.H"
 #include "ERF_IndexDefines.H"
 
 #include <AMReX_MFParallelFor.H>
@@ -33,9 +36,11 @@ namespace {
 
 using erf_sbm::MomentMode;
 using Real = amrex::Real;
+using amrex::Array4;
 using amrex::Box;
 using amrex::BoxArray;
 using amrex::DistributionMapping;
+using amrex::FArrayBox;
 using amrex::Geometry;
 using amrex::IntVect;
 using amrex::MultiFab;
@@ -196,14 +201,13 @@ ProductionChunkRun run_production_chunk_case(const int nbins, const MomentMode m
 Real max_multifab_difference(const amrex::MultiFab& left,
                              const amrex::MultiFab& right, const int ncomp)
 {
+    // A one-box decomposition leaves non-owning MPI ranks with no local FABs.
+    // Do this check before constructing/subtracting the temporary: AMReX's
+    // local Subtract path requires matching local FAB storage.
+    if (left.local_size() == 0 || right.local_size() == 0) return Real(0.0);
     amrex::MultiFab difference(left.boxArray(), left.DistributionMap(), ncomp, 0);
     amrex::MultiFab::Copy(difference, left, 0, 0, ncomp, 0);
     amrex::MultiFab::Subtract(difference, right, 0, 0, ncomp, 0);
-    // Keep this comparison local.  The helper is called once per rank and a
-    // valid one-box decomposition leaves non-owning MPI ranks with no FABs;
-    // an empty-rank collective norm is not a useful comparison and is not
-    // required because the same DistributionMapping is used for both runs.
-    if (difference.local_size() == 0) return Real(0.0);
     return difference.norm0(0, ncomp, amrex::IntVect(0), true);
 }
 
@@ -732,6 +736,232 @@ TEST(SBMP2, ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues)
     EXPECT_NEAR(demand.maximum_tau_rate, Real(4.0/3.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
 }
 
+TEST(SBMP2, HostCFLBoundarySemanticsSkipWallPoisonAndRejectInwardOutflow)
+{
+    const Box domain(IntVect(0, 0, 0), IntVect(0, 0, 0));
+    const BoxArray boxes(domain);
+    const DistributionMapping dm(boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(0, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    const int wall = static_cast<int>(erf_sbm::BoundaryKind::ImpermeableWall);
+    const int outflow = static_cast<int>(erf_sbm::BoundaryKind::AdvectiveOutflow);
+    const int periodic = static_cast<int>(erf_sbm::BoundaryKind::Periodic);
+
+    MultiFab state(boxes, dm, Rho_comp + 1, 1);
+    state.setVal(Real(1.0));
+    const Real nan = std::numeric_limits<Real>::quiet_NaN();
+    for (amrex::MFIter mfi(state); mfi.isValid(); ++mfi) {
+        const auto values = state.array(mfi);
+        amrex::ParallelFor(mfi.fabbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (i < domain.smallEnd(0)) values(i,j,k,Rho_comp) = nan;
+        });
+    }
+    amrex::Gpu::synchronize();
+    MultiFab xvel(amrex::convert(boxes, IntVect(1, 0, 0)), dm, 1, 0);
+    MultiFab yvel(amrex::convert(boxes, IntVect(0, 1, 0)), dm, 1, 0);
+    MultiFab zvel(amrex::convert(boxes, IntVect(0, 0, 1)), dm, 1, 0);
+    xvel.setVal(Real(0.0));
+    yvel.setVal(Real(0.0));
+    zvel.setVal(Real(0.0));
+    ASSERT_EQ(state.size(), 1);
+    // The MPI GoogleTest executable runs this test on every rank, while the
+    // one-cell FAB belongs to only one rank.  Non-owning ranks have no local
+    // array to inspect and must leave before indexing state[0].
+    if (state.local_size() == 0) return;
+    const auto wall_case = erf_sbm::host_cell_demand(
+        state[0].const_array(), xvel[0].const_array(), yvel[0].const_array(), zvel[0].const_array(),
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 1, wall, wall, periodic, periodic, periodic, periodic,
+        Real(1.0), Real(1.0), Real(1.0), Real(1.0));
+    EXPECT_EQ(wall_case.valid, 1);
+    EXPECT_NEAR(wall_case.advective, Real(0.0), 0.0);
+    EXPECT_NEAR(wall_case.diffusive, Real(4.0), 0.0);
+    EXPECT_NEAR(wall_case.total, Real(4.0), 0.0);
+
+    for (amrex::MFIter mfi(state); mfi.isValid(); ++mfi) {
+        const auto values = state.array(mfi);
+        amrex::ParallelFor(mfi.fabbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (i > domain.bigEnd(0)) values(i,j,k,Rho_comp) = Real(1.0);
+        });
+    }
+    amrex::Gpu::synchronize();
+    for (amrex::MFIter mfi(xvel); mfi.isValid(); ++mfi) {
+        const auto values = xvel.array(mfi);
+        amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (i == domain.bigEnd(0) + 1) values(i,j,k) = Real(0.25);
+        });
+    }
+    amrex::Gpu::synchronize();
+    const auto outflow_case = erf_sbm::host_cell_demand(
+        state[0].const_array(), xvel[0].const_array(), yvel[0].const_array(), zvel[0].const_array(),
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 1, wall, outflow, periodic, periodic, periodic, periodic,
+        Real(1.0), Real(1.0), Real(1.0), Real(1.0));
+    EXPECT_EQ(outflow_case.valid, 1);
+    EXPECT_NEAR(outflow_case.advective, Real(0.25), 0.0);
+    EXPECT_NEAR(outflow_case.diffusive, Real(4.0), 0.0);
+    EXPECT_NEAR(outflow_case.total, Real(4.25), 0.0);
+
+    for (amrex::MFIter mfi(xvel); mfi.isValid(); ++mfi) {
+        const auto values = xvel.array(mfi);
+        amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (i == domain.bigEnd(0) + 1) values(i,j,k) = Real(-0.25);
+        });
+    }
+    amrex::Gpu::synchronize();
+    const auto inward = erf_sbm::host_face_demand(
+        Real(1.0), Real(1.0), Real(-0.25), outflow, false, Real(1.0), Real(1.0));
+    EXPECT_EQ(inward.valid, 0);
+}
+
+TEST(SBMP2, ERFBoundaryPolicyMapsPhysicalFacesAndHonorsPeriodicity)
+{
+    EXPECT_EQ(erf_sbm::classify_erf_boundary(ERF_BC::symmetry),
+              erf_sbm::BoundaryKind::ImpermeableWall);
+    EXPECT_EQ(erf_sbm::classify_erf_boundary(ERF_BC::ho_outflow),
+              erf_sbm::BoundaryKind::AdvectiveOutflow);
+    EXPECT_EQ(erf_sbm::classify_erf_boundary(ERF_BC::periodic),
+              erf_sbm::BoundaryKind::Periodic);
+    EXPECT_EQ(erf_sbm::classify_erf_boundary(ERF_BC::inflow),
+              erf_sbm::BoundaryKind::PrescribedSpectralInflow);
+
+    const Box domain(IntVect(0, 0, 0), IntVect(0, 0, 0));
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 0, 0)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> physical{
+        // AMReX's ERF face array is ordered low x/y/z, then high x/y/z.
+        ERF_BC::inflow, ERF_BC::no_slip_wall,
+        ERF_BC::surface_layer, ERF_BC::outflow,
+        ERF_BC::ho_outflow, ERF_BC::undefined};
+    const auto policy = erf_sbm::make_erf_transport_boundary_policy(
+        geometry, physical);
+    EXPECT_TRUE(policy.configured);
+    EXPECT_EQ(policy.face_kind[0], erf_sbm::BoundaryKind::Periodic);
+    EXPECT_EQ(policy.face_kind[1], erf_sbm::BoundaryKind::Periodic);
+    EXPECT_EQ(policy.face_kind[2], erf_sbm::BoundaryKind::ImpermeableWall);
+    EXPECT_EQ(policy.face_kind[3], erf_sbm::BoundaryKind::AdvectiveOutflow);
+    EXPECT_EQ(policy.face_kind[4], erf_sbm::BoundaryKind::PrescribedSpectralInflow);
+    EXPECT_EQ(policy.face_kind[5], erf_sbm::BoundaryKind::PrescribedSpectralInflow);
+}
+
+TEST(SBMP2, StageZeroAdvectionCarrierMatchesArithmeticFaceMomentum)
+{
+    const Box domain(IntVect(0, 0, 0), IntVect(1, 1, 1));
+    const Box xbox = amrex::surroundingNodes(domain, 0);
+    const Box ybox = amrex::surroundingNodes(domain, 1);
+    const Box zbox = amrex::surroundingNodes(domain, 2);
+    Box density_box = domain;
+    density_box.grow(1);
+    FArrayBox density(density_box, 1);
+    FArrayBox rho_u(xbox, 1), rho_v(ybox, 1), omega(zbox, 1);
+    FArrayBox avg_xmom(xbox, 1), avg_ymom(ybox, 1), avg_zmom(zbox, 1);
+    FArrayBox ax(xbox, 1), ay(ybox, 1), az(zbox, 1), detJ(domain, 1);
+    FArrayBox mf_mx(domain, 1), mf_my(domain, 1);
+    FArrayBox mf_uy(xbox, 1), mf_vx(ybox, 1);
+    FArrayBox source(domain, 1);
+    std::array<FArrayBox, AMREX_SPACEDIM> flux{
+        FArrayBox(xbox, 1), FArrayBox(ybox, 1), FArrayBox(zbox, 1)};
+    density.setVal(Real(1.0));
+    ax.setVal(Real(1.0)); ay.setVal(Real(1.0)); az.setVal(Real(1.0));
+    detJ.setVal(Real(1.0)); mf_mx.setVal(Real(1.0)); mf_my.setVal(Real(1.0));
+    mf_uy.setVal(Real(1.0)); mf_vx.setVal(Real(1.0)); omega.setVal(Real(0.0));
+    avg_xmom.setVal(Real(0.0)); avg_ymom.setVal(Real(0.0)); avg_zmom.setVal(Real(0.0));
+    source.setVal(Real(0.0));
+    for (auto& face_flux : flux) face_flux.setVal(Real(0.0));
+
+    for (int k = density.box().smallEnd(2); k <= density.box().bigEnd(2); ++k) {
+        for (int j = density.box().smallEnd(1); j <= density.box().bigEnd(1); ++j) {
+            for (int i = density.box().smallEnd(0); i <= density.box().bigEnd(0); ++i) {
+                const int wi = ((i % 2) + 2) % 2;
+                const int wj = ((j % 2) + 2) % 2;
+                const int wk = ((k % 2) + 2) % 2;
+                density.array()(i,j,k) = Real(1.0) + Real(0.05) * wi +
+                    Real(0.07) * wj + Real(0.09) * wk;
+            }
+        }
+    }
+    const auto rho = density.const_array();
+    const auto x_velocity = [](const int i, const int j, const int k) {
+        return Real(0.20) + Real(0.03) * i - Real(0.01) * j + Real(0.02) * k;
+    };
+    const auto y_velocity = [](const int i, const int j, const int k) {
+        return Real(-0.15) + Real(0.02) * i + Real(0.04) * j - Real(0.01) * k;
+    };
+    const auto z_velocity = [](const int i, const int j, const int k) {
+        return Real(0.11) - Real(0.01) * i + Real(0.02) * j + Real(0.03) * k;
+    };
+    for (int k = xbox.smallEnd(2); k <= xbox.bigEnd(2); ++k) {
+        for (int j = xbox.smallEnd(1); j <= xbox.bigEnd(1); ++j) {
+            for (int i = xbox.smallEnd(0); i <= xbox.bigEnd(0); ++i) {
+                if (xbox.contains(IntVect(i,j,k))) {
+                    rho_u.array()(i,j,k) = x_velocity(i,j,k) *
+                        Real(0.5) * (rho(i-1,j,k) + rho(i,j,k));
+                }
+            }
+        }
+    }
+    for (int k = ybox.smallEnd(2); k <= ybox.bigEnd(2); ++k) {
+        for (int j = ybox.smallEnd(1); j <= ybox.bigEnd(1); ++j) {
+            for (int i = ybox.smallEnd(0); i <= ybox.bigEnd(0); ++i) {
+                if (ybox.contains(IntVect(i,j,k))) {
+                    rho_v.array()(i,j,k) = y_velocity(i,j,k) *
+                        Real(0.5) * (rho(i,j-1,k) + rho(i,j,k));
+                }
+            }
+        }
+    }
+    for (int k = zbox.smallEnd(2); k <= zbox.bigEnd(2); ++k) {
+        for (int j = zbox.smallEnd(1); j <= zbox.bigEnd(1); ++j) {
+            for (int i = zbox.smallEnd(0); i <= zbox.bigEnd(0); ++i) {
+                if (zbox.contains(IntVect(i,j,k))) {
+                    omega.array()(i,j,k) = z_velocity(i,j,k) *
+                        Real(0.5) * (rho(i,j,k-1) + rho(i,j,k));
+                }
+            }
+        }
+    }
+
+    const amrex::GpuArray<Real, AMREX_SPACEDIM> inverse_cell_size{
+        AMREX_D_DECL(Real(1.0), Real(1.0), Real(1.0))};
+    const amrex::GpuArray<const Array4<Real>, AMREX_SPACEDIM> flux_arrays{
+        AMREX_D_DECL(flux[0].array(), flux[1].array(), flux[2].array())};
+    AdvectionSrcForRho(domain, source.array(), rho_u.const_array(), rho_v.const_array(),
+                       omega.const_array(), avg_xmom.array(), avg_ymom.array(),
+                       avg_zmom.array(), ax.const_array(), ay.const_array(),
+                       az.const_array(), detJ.const_array(), inverse_cell_size,
+                       mf_mx.const_array(), mf_my.const_array(), mf_uy.const_array(),
+                       mf_vx.const_array(), flux_arrays, false);
+    amrex::Gpu::synchronize();
+
+    for (int k = domain.smallEnd(2); k <= domain.bigEnd(2); ++k) {
+        for (int j = domain.smallEnd(1); j <= domain.bigEnd(1); ++j) {
+            for (int i = domain.smallEnd(0); i <= domain.bigEnd(0) + 1; ++i) {
+                EXPECT_DOUBLE_EQ(avg_xmom.const_array()(i,j,k), rho_u.const_array()(i,j,k));
+            }
+        }
+    }
+    for (int k = domain.smallEnd(2); k <= domain.bigEnd(2); ++k) {
+        for (int j = domain.smallEnd(1); j <= domain.bigEnd(1) + 1; ++j) {
+            for (int i = domain.smallEnd(0); i <= domain.bigEnd(0); ++i) {
+                EXPECT_DOUBLE_EQ(avg_ymom.const_array()(i,j,k), rho_v.const_array()(i,j,k));
+            }
+        }
+    }
+    for (int k = domain.smallEnd(2); k <= domain.bigEnd(2) + 1; ++k) {
+        for (int j = domain.smallEnd(1); j <= domain.bigEnd(1); ++j) {
+            for (int i = domain.smallEnd(0); i <= domain.bigEnd(0); ++i) {
+                EXPECT_DOUBLE_EQ(avg_zmom.const_array()(i,j,k), omega.const_array()(i,j,k));
+            }
+        }
+    }
+}
+
 TEST(SBMP2, SyntheticSubsetPopulationSurvivesGroupedLimitAndAMRViews)
 {
     erf_sbm::SpectralPopulationSpec liquid;
@@ -885,7 +1115,17 @@ TEST(SBMP2, ProductionCombinedAdvectionDiffusionFailsClosed)
     } catch (const std::exception& error) {
         diagnostic = error.what();
     }
-    EXPECT_NE(diagnostic.find("combined low-order advection+diffusion"), std::string::npos);
+    // The unconditional exact-stage guard is deliberately before spectral
+    // transport.  This fixture supplies a null diagnostic pointer, so it
+    // also proves that the pointer cannot bypass the invariant.
+    EXPECT_NE(diagnostic.find("SBM actual stage low-order demand exceeds admissibility"),
+              std::string::npos);
+    const auto recommendation = diagnostic.find("recommended_max_host_dt=");
+    ASSERT_NE(recommendation, std::string::npos) << diagnostic;
+    const double recommended_dt = std::stod(
+        diagnostic.substr(recommendation + std::string("recommended_max_host_dt=").size()));
+    EXPECT_GT(recommended_dt, 0.0);
+    EXPECT_LT(recommended_dt, 0.8);
 }
 
 TEST(SBMP2, ProductionVariableDensityHostCFLBypassFailsClosed)
@@ -925,7 +1165,10 @@ TEST(SBMP2, ProductionVariableDensityHostCFLBypassFailsClosed)
     for (amrex::MFIter mfi(xflux); mfi.isValid(); ++mfi) {
         const auto flux = xflux.array(mfi);
         amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            if (i == 1) flux(i,j,k) = Real(0.1);
+            // The ERF carrier passed to the production hook is rho*u at the
+            // face, not the velocity alone.  With rho=(0.01,1.0), u=0.1,
+            // the arithmetic face carrier is 0.0505.
+            if (i == 1) flux(i,j,k) = Real(0.0505);
         });
     }
     xflux.FillBoundary(geometry.periodicity());
@@ -935,19 +1178,36 @@ TEST(SBMP2, ProductionVariableDensityHostCFLBypassFailsClosed)
     core.setVal(Real(0.0));
     erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
     stage_flux.define(boxes, dm, layout.ncomp(), 0);
-    const auto context = erf_auxiliary::make_compressible_stage(
+    const auto unsafe_context = erf_auxiliary::make_compressible_stage(
         2, 0.0, 0.0, Real(0.25), Real(0.25), nullptr, nullptr);
     std::string diagnostic;
     try {
-        erf_sbm::advance_stage(manager, layout, context, rho, core,
+        erf_sbm::advance_stage(manager, layout, unsafe_context, rho, core,
                                xflux, yflux, zflux, geometry, stage_flux,
                                erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
                                0, Real(0.0), 1);
     } catch (const std::exception& error) {
         diagnostic = error.what();
     }
-    EXPECT_NE(diagnostic.find("combined low-order advection+diffusion"), std::string::npos)
-        << diagnostic;
+    EXPECT_NE(diagnostic.find("SBM actual stage low-order demand exceeds admissibility"),
+              std::string::npos) << diagnostic;
+    const auto recommendation = diagnostic.find("recommended_max_host_dt=");
+    ASSERT_NE(recommendation, std::string::npos) << diagnostic;
+    const double recommended_dt = std::stod(
+        diagnostic.substr(recommendation + std::string("recommended_max_host_dt=").size()));
+    EXPECT_GT(recommended_dt, 0.0);
+    EXPECT_LT(recommended_dt, 0.25);
+
+    // The manufactured carrier is intentionally too large for the selected
+    // host step, but the reported host cap is sufficient when used to rerun
+    // the same otherwise-unchanged stage.
+    const auto safe_context = erf_auxiliary::make_compressible_stage(
+        2, 0.0, 0.0, Real(0.9) * recommended_dt,
+        Real(0.9) * recommended_dt, nullptr, nullptr);
+    EXPECT_NO_THROW(erf_sbm::advance_stage(
+        manager, layout, safe_context, rho, core, xflux, yflux, zflux,
+        geometry, stage_flux, erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
+        0, Real(0.0), 1));
 }
 
 TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
@@ -963,7 +1223,7 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
         const BoxArray boxes(domain);
         const DistributionMapping dm(boxes);
         const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
-                                      {AMREX_D_DECL(2.0, 1.0, 1.0)});
+                                      {AMREX_D_DECL(2.0, 100.0, 100.0)});
         const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
         const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
                                 periodicity.data());
@@ -1032,25 +1292,28 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
         return diagnostic;
     };
 
-    // B=1, D^out=.6 is valid even though the post-low-order state is .4.
+    // The exact host-stage guard is now the first production invariant.  Keep
+    // these cases below its bound so that the subsequent production
+    // low-order budget still gets exercised for admissible stages.
     for (const auto& contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
         SCOPED_TRACE(std::string(contract.first ? "anelastic" : "compressible") +
                      " stage=" + std::to_string(contract.second));
-        const Real stage_scale = contract.first && contract.second > 0 ? Real(2.0) : Real(1.0);
-        EXPECT_TRUE(run_case(Real(0.6)*stage_scale, Real(0.0), contract.first, contract.second).empty());
-        const auto invalid = run_case(Real(1.2)*stage_scale, Real(0.0), contract.first, contract.second);
-        EXPECT_NE(invalid.find("combined low-order advection+diffusion"), std::string::npos) << invalid;
+        EXPECT_TRUE(run_case(Real(0.6), Real(0.0), contract.first, contract.second).empty());
+        const auto invalid = run_case(Real(1.2), Real(0.0), contract.first, contract.second);
+        EXPECT_NE(invalid.find("SBM actual stage low-order demand exceeds admissibility"),
+                  std::string::npos) << invalid;
+        EXPECT_NE(invalid.find("recommended_max_host_dt="), std::string::npos) << invalid;
     }
 
     // Advection and diffusion are each admissible, but their combined demand
     // is not.  The second case deliberately exceeds the final low state while
     // remaining below the pre-stage baseline and must therefore pass.
     for (const auto& contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
-        const Real stage_scale = contract.first && contract.second > 0 ? Real(2.0) : Real(1.0);
-        const Real combined_fail_advection = contract.first && contract.second > 0 ? Real(1.9) : Real(0.8);
-        const Real combined_pass_advection = Real(0.4) * stage_scale;
+        const Real combined_fail_advection = Real(0.8);
+        const Real combined_pass_advection = Real(0.4);
         const auto invalid = run_case(combined_fail_advection, Real(0.15), contract.first, contract.second);
-        EXPECT_NE(invalid.find("combined low-order advection+diffusion"), std::string::npos) << invalid;
+        EXPECT_NE(invalid.find("SBM actual stage low-order demand exceeds admissibility"),
+                  std::string::npos) << invalid;
         EXPECT_TRUE(run_case(combined_pass_advection, Real(0.15), contract.first, contract.second).empty());
     }
 
@@ -1058,7 +1321,8 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
         const auto valid = run_case(Real(0.6), Real(0.0), false, 0, mode, true, 1);
         EXPECT_TRUE(valid.empty()) << valid;
         const auto invalid = run_case(Real(1.2), Real(0.0), false, 0, mode, true, 1);
-        EXPECT_NE(invalid.find("combined low-order advection+diffusion"), std::string::npos)
+        EXPECT_NE(invalid.find("SBM actual stage low-order demand exceeds admissibility"),
+                  std::string::npos)
             << invalid;
     }
 }
@@ -2435,7 +2699,14 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
             EXPECT_GT(weno_order, Real(0.5));
             EXPECT_GT(donor_order, Real(0.5));
             EXPECT_LT(donor_order, Real(1.5));
-            EXPECT_LE(weno_errors[i], donor_errors[i]);
+            // The two operators are mathematically tied for the coarsest
+            // smooth mode.  Keep the ordering requirement, but allow the
+            // bounded reduction/reconstruction roundoff seen across CPU
+            // standard libraries and precision modes.
+            const Real ordering_tolerance = Real(128.0) *
+                std::numeric_limits<Real>::epsilon() *
+                std::max(Real(1.0), std::abs(donor_errors[i]));
+            EXPECT_LE(weno_errors[i], donor_errors[i] + ordering_tolerance);
         }
         EXPECT_NEAR(weno_limiters[i], Real(1.0), Real(1.e-12));
     }

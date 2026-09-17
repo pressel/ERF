@@ -1,0 +1,48 @@
+# Real no-acoustic RK/Heun carrier qualification using ERF's Taylor-Green
+# dynamics.  No SBM manufactured carrier override is enabled here.
+erf.prob_name = "Advecting Isentropic Vortex"
+erf.init_type = Uniform
+erf.moisture_model = SBM
+erf.sbm_nbins = 4
+erf.sbm_moment_mode = 2
+erf.sbm_cloud_rain_split = 2
+erf.sbm_manufactured_initialization = true
+erf.sbm_manufactured_velocity = 0.0
+erf.sbm_manufactured_variable_density = false
+erf.sbm_manufactured_host_cfl_counterexample = false
+erf.sbm_transport_method = GroupedFCT_WENOZ3
+erf.sbm_diffusion_coeff = 0.0
+erf.sbm_chunk_size = 1
+erf.anelastic = 0
+erf.use_gravity = false
+erf.substepping_type = None
+erf.mri_fixed_dt_ratio = 1
+erf.fixed_dt = 1.0e-3
+erf.molec_diff_type = None
+erf.les_type = None
+erf.coupling_type = TwoWay
+max_step = 1
+
+amr.max_level = 0
+amr.max_grid_size = 8
+amr.n_error_buf = 0
+amr.n_cell = 8 8 8
+
+geometry.prob_lo = -4.0 -4.0 -1.0
+geometry.prob_hi = 4.0 4.0 1.0
+geometry.is_periodic = 1 1 1
+
+erf.plot_int_1 = -1
+erf.check_int = -1
+erf.sum_interval = -1
+erf.v = 2
+amr.v = 0
+prob.rho_0 = 1.0
+prob.T_0 = 300.0
+prob.p_inf = 1.0e5
+prob.T_inf = 300.0
+prob.M_inf = 0.8
+prob.alpha = 0.0
+prob.beta = 0.1
+prob.R = 1.0
+prob.sigma = 1.0

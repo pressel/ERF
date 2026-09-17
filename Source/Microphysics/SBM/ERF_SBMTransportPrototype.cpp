@@ -1848,6 +1848,7 @@ ActualStageDemand measure_actual_stage_low_order_demand(
     result.diffusive_rate = rates[1];
     result.maximum_rate = rates[2];
     result.maximum_tau_rate = rates[3];
+    result.recommended_max_host_dt = 0.0;
     result.level = level;
     result.stage_index = context.stage_index;
 
@@ -2106,6 +2107,10 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     const int nbins = population.grid.nbins();
     const bool two_moment = population.moment_mode == MomentMode::TwoMoment;
     const int ncomp = layout.ncomp();
+    const int number_offset = population.number_offset;
+    const bool direct_stage_update =
+        context.method == ::erf_auxiliary::IntegrationMethod::CompressibleRK3 ||
+        context.stage_index == 0;
     const auto& old = manager.old(level);
     const auto& predictor = manager.evaluation(level);
     const bool heun_corrector =
@@ -2192,24 +2197,39 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
         measure_actual_stage_low_order_demand(
             context, transport_density, carrier_x, carrier_y, carrier_z,
             geometry, diffusion_coefficient, level, boundary_policy);
-    if (actual_stage_demand != nullptr) {
-        const Real actual_tolerance = Real(128.0) * std::numeric_limits<Real>::epsilon() *
-            amrex::max(Real(1.0), amrex::Math::abs(
-                static_cast<Real>(measured_stage_demand.maximum_tau_rate)));
-        if (!std::isfinite(measured_stage_demand.maximum_tau_rate) ||
-            static_cast<Real>(measured_stage_demand.maximum_tau_rate) > Real(1.0) + actual_tolerance) {
-            std::ostringstream message;
-            message << "SBM actual stage low-order demand exceeds admissibility: level="
-                    << measured_stage_demand.level << " stage=" << measured_stage_demand.stage_index
-                    << " tau=" << measured_stage_demand.stage_duration
-                    << " maximum_rate=" << measured_stage_demand.maximum_rate
-                    << " tau_rate=" << measured_stage_demand.maximum_tau_rate
-                    << " worst_cell=(" << measured_stage_demand.worst_i << ","
-                    << measured_stage_demand.worst_j << "," << measured_stage_demand.worst_k << ")";
-            throw std::invalid_argument(message.str());
-        }
+    ActualStageDemand checked_stage_demand = measured_stage_demand;
+    const double tau_rate = measured_stage_demand.maximum_tau_rate;
+    const double actual_tolerance = 128.0 * std::numeric_limits<Real>::epsilon() *
+        std::max(1.0, std::abs(tau_rate));
+    const bool stage_is_invalid = !std::isfinite(tau_rate) ||
+        tau_rate > 1.0 + actual_tolerance;
+    if (stage_is_invalid) {
+        const double recommended_max_host_dt =
+            std::isfinite(tau_rate) && tau_rate > 0.0 &&
+            std::isfinite(context.full_step) && context.full_step > 0.0 ?
+            context.full_step / tau_rate : 0.0;
+        checked_stage_demand.recommended_max_host_dt = recommended_max_host_dt;
+        const char* integration_method =
+            context.method == ::erf_auxiliary::IntegrationMethod::CompressibleRK3 ?
+            "compressible_rk3" : "anelastic_heun";
+        std::ostringstream message;
+        message << "SBM actual stage low-order demand exceeds admissibility:"
+                << " level=" << measured_stage_demand.level
+                << " integration_method=" << integration_method
+                << " stage_index=" << measured_stage_demand.stage_index
+                << " full_step=" << context.full_step
+                << " stage_interval=" << context.stage_interval
+                << " tau=" << measured_stage_demand.stage_duration
+                << " advective_rate=" << measured_stage_demand.advective_rate
+                << " diffusive_rate=" << measured_stage_demand.diffusive_rate
+                << " total_rate=" << measured_stage_demand.maximum_rate
+                << " tau_rate=" << measured_stage_demand.maximum_tau_rate
+                << " worst_cell=(" << measured_stage_demand.worst_i << ","
+                << measured_stage_demand.worst_j << "," << measured_stage_demand.worst_k << ")"
+                << " recommended_max_host_dt=" << recommended_max_host_dt;
+        throw std::invalid_argument(message.str());
     }
-    if (actual_stage_demand != nullptr) *actual_stage_demand = measured_stage_demand;
+    if (actual_stage_demand != nullptr) *actual_stage_demand = checked_stage_demand;
 
     if (method == TransportMethod::GroupedFCT_WENOZ3) {
         advance_stage_grouped_chunked(manager, layout, context, rho_anchor_prepared,
@@ -2266,7 +2286,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
             const int high_kind = boundary_kinds[2*dir+1];
             for (int b = 0; b < nbins; ++b) {
                 const int mass = first + b;
-                const int number = two_moment ? population.number_offset + b : -1;
+                const int number = two_moment ? number_offset + b : -1;
                 const Real lower = two_moment ? population.grid.edges()[static_cast<std::size_t>(b)] : Real(0.0);
                 const Real upper = two_moment ? population.grid.edges()[static_cast<std::size_t>(b+1)] : Real(0.0);
                 ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
@@ -2326,8 +2346,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
             // and density-weighted intensive transport as the carrier state.
             for (int c = 0; c < ncomp; ++c) {
                 const bool is_mass = c >= first && c < first + nbins;
-                const bool is_number = two_moment && c >= population.number_offset &&
-                                       c < population.number_offset + nbins;
+                const bool is_number = two_moment && c >= number_offset &&
+                                       c < number_offset + nbins;
                 if (is_mass || is_number) continue;
                 ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                     const Real face_mass_flux = carrier_arr(i,j,k);
@@ -2485,18 +2505,18 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                 const amrex::Real rhs = -((fx(i+1,j,k,n)-fx(i,j,k,n))*dxi +
                                            (fy(i,j+1,k,n)-fy(i,j,k,n))*dyi +
                                            (fz(i,j,k+1,n)-fz(i,j,k,n))*dzi);
-                if (context.method == ::erf_auxiliary::IntegrationMethod::CompressibleRK3 || context.stage_index == 0) {
+                if (direct_stage_update) {
                     out(i,j,k,n) = old_arr(i,j,k,n) + dt*rhs;
                 } else {
                     out(i,j,k,n) = old_arr(i,j,k,n) + amrex::Real(0.5) *
                         ((pred(i,j,k,n)-old_arr(i,j,k,n)) + dt*rhs);
                 }
                 if (two_moment) {
-                    const int number = population.number_offset + b;
+                    const int number = number_offset + b;
                     const amrex::Real rhs_number = -((fx(i+1,j,k,number)-fx(i,j,k,number))*dxi +
                                                       (fy(i,j+1,k,number)-fy(i,j,k,number))*dyi +
                                                       (fz(i,j,k+1,number)-fz(i,j,k,number))*dzi);
-                    if (context.method == ::erf_auxiliary::IntegrationMethod::CompressibleRK3 || context.stage_index == 0) {
+                    if (direct_stage_update) {
                         out(i,j,k,number) = old_arr(i,j,k,number) + dt*rhs_number;
                     } else {
                         out(i,j,k,number) = old_arr(i,j,k,number) + amrex::Real(0.5) *

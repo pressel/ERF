@@ -81,6 +81,7 @@ struct ActualStageDemand {
     double diffusive_rate{0.0};
     double maximum_rate{0.0};
     double maximum_tau_rate{0.0};
+    double recommended_max_host_dt{0.0};
     int level{0};
     int stage_index{0};
     int worst_i{-1};

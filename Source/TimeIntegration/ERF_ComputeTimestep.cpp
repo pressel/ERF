@@ -7,8 +7,79 @@
 #include <ERF.H>
 #include "Diffusion/ERF_CloudChamberWallFlux.H"
 #include "TimeIntegration/ERF_CloudChamberWallDtGuard.H"
+#include "Microphysics/SBM/ERF_SBMErfBoundary.H"
+#include "Microphysics/SBM/ERF_SBMHostCFL.H"
 
 using namespace amrex;
+
+namespace {
+
+struct SBMHostRates {
+    Real advective{0.0};
+    Real diffusive{0.0};
+    Real total{0.0};
+    int valid{1};
+};
+
+SBMHostRates measure_sbm_host_rates(
+    const MultiFab& state, const MultiFab& xvel, const MultiFab& yvel,
+    const MultiFab& zvel, const Geometry& geometry,
+    const Real diffusion_coefficient,
+    const erf_sbm::TransportBoundaryPolicy& boundary_policy)
+{
+    const auto domain = geometry.Domain();
+    const int periodic_x = geometry.isPeriodic(0) ? 1 : 0;
+    const int periodic_y = geometry.isPeriodic(1) ? 1 : 0;
+    const int periodic_z = geometry.isPeriodic(2) ? 1 : 0;
+    const int xlow_kind = static_cast<int>(boundary_policy.face_kind[0]);
+    const int xhigh_kind = static_cast<int>(boundary_policy.face_kind[1]);
+    const int ylow_kind = static_cast<int>(boundary_policy.face_kind[2]);
+    const int yhigh_kind = static_cast<int>(boundary_policy.face_kind[3]);
+    const int zlow_kind = static_cast<int>(boundary_policy.face_kind[4]);
+    const int zhigh_kind = static_cast<int>(boundary_policy.face_kind[5]);
+    const Real dxi = geometry.InvCellSize(0);
+    const Real dyi = geometry.InvCellSize(1);
+    const Real dzi = geometry.InvCellSize(2);
+
+    ReduceOps<ReduceOpMax, ReduceOpMax, ReduceOpMax, ReduceOpMin> reduce_op;
+    ReduceData<Real, Real, Real, int> reduce_data(reduce_op);
+    for (MFIter mfi(state, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box& box = mfi.tilebox();
+        const auto state_arr = state.const_array(mfi);
+        const auto xvel_arr = xvel.const_array(mfi);
+        const auto yvel_arr = yvel.const_array(mfi);
+        const auto zvel_arr = zvel.const_array(mfi);
+        reduce_op.eval(box, reduce_data,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k)
+                -> GpuTuple<Real, Real, Real, int> {
+                const auto cell = erf_sbm::host_cell_demand(
+                    state_arr, xvel_arr, yvel_arr, zvel_arr, i, j, k,
+                    domain.smallEnd(0), domain.bigEnd(0),
+                    domain.smallEnd(1), domain.bigEnd(1),
+                    domain.smallEnd(2), domain.bigEnd(2),
+                    periodic_x, periodic_y, periodic_z,
+                    xlow_kind, xhigh_kind, ylow_kind, yhigh_kind,
+                    zlow_kind, zhigh_kind, diffusion_coefficient,
+                    dxi, dyi, dzi);
+                return {cell.advective, cell.diffusive, cell.total, cell.valid};
+            });
+    }
+    const auto local = reduce_data.value(reduce_op);
+    SBMHostRates result;
+    result.advective = get<0>(local);
+    result.diffusive = get<1>(local);
+    result.total = get<2>(local);
+    result.valid = get<3>(local);
+    Real rates[3] = {result.advective, result.diffusive, result.total};
+    ParallelDescriptor::ReduceRealMax(rates, 3);
+    ParallelDescriptor::ReduceIntMin(result.valid);
+    result.advective = rates[0];
+    result.diffusive = rates[1];
+    result.total = rates[2];
+    return result;
+}
+
+} // namespace
 
 /**
  * Function that calls estTimeStep for each level
@@ -81,91 +152,37 @@ double ERF::sbm_admissible_timestep(const int level) const
         if (state.nGrowVect()[dir] < 1) return 0.0;
     }
 
-    // One fixed reduction over the host state returns the actual variable-
-    // density low-order demand components.  In static Cartesian geometry
-    // ERF's VelocityToMomentum construction is
-    //   mdot_x(i)=u(i)*0.5*(rho(i)+rho(i-1)),
-    // and analogously in y/z.  The donor demand for a cell is the outward
-    // positive part of those face mass fluxes divided by rho_anchor*V, plus
-    // rho_face*K*A/(V*d) for every face.  No spectral-bin loop is involved.
-    ReduceOps<ReduceOpMax, ReduceOpMax, ReduceOpMax> reduce_op;
-    ReduceData<Real, Real, Real> reduce_data(reduce_op);
-    for (MFIter mfi(state, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const Box& bx = mfi.tilebox();
-        const auto s = state.const_array(mfi);
-        const auto u = xvel.const_array(mfi);
-        const auto v = yvel.const_array(mfi);
-        const auto w = zvel.const_array(mfi);
-        const Real dxi = geom[level].InvCellSize(0);
-        const Real dyi = geom[level].InvCellSize(1);
-        const Real dzi = geom[level].InvCellSize(2);
-        const Real K = solverChoice.sbm_diffusion_coeff;
-        reduce_op.eval(bx, reduce_data,
-            [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-                -> GpuTuple<Real,Real,Real> {
-                const Real rho_i = s(i,j,k,Rho_comp);
-                const Real rho_xlo = Real(0.5) *
-                    (rho_i + s(i-1,j,k,Rho_comp));
-                const Real rho_xhi = Real(0.5) *
-                    (rho_i + s(i+1,j,k,Rho_comp));
-                const Real rho_ylo = Real(0.5) *
-                    (rho_i + s(i,j-1,k,Rho_comp));
-                const Real rho_yhi = Real(0.5) *
-                    (rho_i + s(i,j+1,k,Rho_comp));
-                const Real rho_zlo = Real(0.5) *
-                    (rho_i + s(i,j,k-1,Rho_comp));
-                const Real rho_zhi = Real(0.5) *
-                    (rho_i + s(i,j,k+1,Rho_comp));
-                const bool invalid_density =
-                    rho_i <= Real(0.0) || rho_xlo <= Real(0.0) ||
-                    rho_xhi <= Real(0.0) || rho_ylo <= Real(0.0) ||
-                    rho_yhi <= Real(0.0) || rho_zlo <= Real(0.0) ||
-                    rho_zhi <= Real(0.0) ||
-                    amrex::isnan(rho_i) || amrex::isinf(rho_i) ||
-                    amrex::isnan(rho_xlo) || amrex::isinf(rho_xlo) ||
-                    amrex::isnan(rho_xhi) || amrex::isinf(rho_xhi) ||
-                    amrex::isnan(rho_ylo) || amrex::isinf(rho_ylo) ||
-                    amrex::isnan(rho_yhi) || amrex::isinf(rho_yhi) ||
-                    amrex::isnan(rho_zlo) || amrex::isinf(rho_zlo) ||
-                    amrex::isnan(rho_zhi) || amrex::isinf(rho_zhi) ||
-                    amrex::isnan(K) || amrex::isinf(K) || K < Real(0.0);
-                const bool invalid_velocity =
-                    amrex::isnan(u(i,j,k)) || amrex::isinf(u(i,j,k)) ||
-                    amrex::isnan(u(i+1,j,k)) || amrex::isinf(u(i+1,j,k)) ||
-                    amrex::isnan(v(i,j,k)) || amrex::isinf(v(i,j,k)) ||
-                    amrex::isnan(v(i,j+1,k)) || amrex::isinf(v(i,j+1,k)) ||
-                    amrex::isnan(w(i,j,k)) || amrex::isinf(w(i,j,k)) ||
-                    amrex::isnan(w(i,j,k+1)) || amrex::isinf(w(i,j,k+1));
-                if (invalid_density || invalid_velocity) {
-                    const Real fail_closed = std::numeric_limits<Real>::max();
-                    return {fail_closed, fail_closed, fail_closed};
-                }
-                const Real mxlo = u(i,j,k) * rho_xlo;
-                const Real mxhi = u(i+1,j,k) * rho_xhi;
-                const Real mylo = v(i,j,k) * rho_ylo;
-                const Real myhi = v(i,j+1,k) * rho_yhi;
-                const Real mzlo = w(i,j,k) * rho_zlo;
-                const Real mzhi = w(i,j,k+1) * rho_zhi;
-                const Real advective_rate =
-                    (amrex::max(-mxlo, Real(0.0)) + amrex::max(mxhi, Real(0.0))) * dxi / rho_i +
-                    (amrex::max(-mylo, Real(0.0)) + amrex::max(myhi, Real(0.0))) * dyi / rho_i +
-                    (amrex::max(-mzlo, Real(0.0)) + amrex::max(mzhi, Real(0.0))) * dzi / rho_i;
-                const Real diffusive_rate = K * (
-                    (rho_xlo + rho_xhi) * dxi * dxi +
-                    (rho_ylo + rho_yhi) * dyi * dyi +
-                    (rho_zlo + rho_zhi) * dzi * dzi) / rho_i;
-                return {advective_rate, diffusive_rate,
-                        advective_rate + diffusive_rate};
-            });
+    const auto boundary_policy =
+        ::erf_sbm::make_erf_transport_boundary_policy(geom[level], phys_bc_type);
+    const int prescribed = static_cast<int>(
+        ::erf_sbm::BoundaryKind::PrescribedSpectralInflow);
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        if (!geom[level].isPeriodic(dir) &&
+            (static_cast<int>(boundary_policy.face_kind[2*dir]) == prescribed ||
+             static_cast<int>(boundary_policy.face_kind[2*dir+1]) == prescribed)) {
+            // The ERF hook has no resolved spectral inflow service in P2.  A
+            // host timestep must not advertise a usable bound for it.
+            return 0.0;
+        }
     }
 
-    const GpuTuple<Real,Real,Real> local = reduce_data.value(reduce_op);
-    Real rates[3] = {amrex::get<0>(local), amrex::get<1>(local),
-                     amrex::get<2>(local)};
-    ParallelDescriptor::ReduceRealMax(rates, 3);
-    const double advective_rate = rates[0];
-    const double diffusive_rate = rates[1];
-    const double max_rate = rates[2];
+    const Real diffusion_coefficient = solverChoice.sbm_diffusion_coeff;
+    if (amrex::isnan(diffusion_coefficient) || amrex::isinf(diffusion_coefficient) ||
+        diffusion_coefficient < Real(0.0)) {
+        return 0.0;
+    }
+
+    // One fixed reduction over the host state returns the variable-density
+    // low-order demand.  The free helper keeps the GPU reduction independent
+    // of ERF's private member state and applies the same physical-face policy
+    // as the production SBM hook.  There is no spectral-bin loop.
+    const auto host_rates = measure_sbm_host_rates(
+        state, xvel, yvel, zvel, geom[level],
+        diffusion_coefficient, boundary_policy);
+    if (host_rates.valid == 0) return 0.0;
+    const double advective_rate = host_rates.advective;
+    const double diffusive_rate = host_rates.diffusive;
+    const double max_rate = host_rates.total;
     const double mathematical_bound = max_rate > 0.0 &&
         std::isfinite(max_rate) ? 1.0 / max_rate :
         (max_rate == 0.0 ? std::numeric_limits<double>::max() : 0.0);
@@ -175,7 +192,7 @@ double ERF::sbm_admissible_timestep(const int level) const
         Print() << "SBM host stability bound at level " << level << " = " << bound
                 << " (advective_rate=" << advective_rate
                 << ", diffusive_rate=" << diffusive_rate
-                << ", diffusion=" << solverChoice.sbm_diffusion_coeff << ")"
+                << ", diffusion=" << diffusion_coefficient << ")"
                 << " host_carrier=reconstructed_u_rho\n";
         Print() << "SBM host low-order demand maximum at level " << level
                 << " = " << max_rate

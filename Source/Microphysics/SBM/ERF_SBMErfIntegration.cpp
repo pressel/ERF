@@ -4,6 +4,7 @@
 #include "ERF_SBMContracts.H"
 #include "ERF_SBMTransferClosure.H"
 #include "ERF_SBMTransportPrototype.H"
+#include "ERF_SBMErfBoundary.H"
 
 #include <AMReX_MFParallelFor.H>
 
@@ -227,18 +228,8 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     std::vector<Real> accepted_face_transfer_sum(static_cast<std::size_t>(ncomp), Real(0.0));
     std::vector<Real> accepted_bulk_transfer_sum(2, Real(0.0));
     std::vector<Real> boundary_outward(static_cast<std::size_t>(ncomp), Real(0.0));
-    const auto boundary_kind = [](const ERF_BC bc) {
-        if (bc == ERF_BC::symmetry || bc == ERF_BC::no_slip_wall ||
-            bc == ERF_BC::slip_wall) {
-            return ::erf_sbm::BoundaryKind::ImpermeableWall;
-        }
-        if (bc == ERF_BC::outflow || bc == ERF_BC::ho_outflow ||
-            bc == ERF_BC::open) {
-            return ::erf_sbm::BoundaryKind::AdvectiveOutflow;
-        }
-        if (bc == ERF_BC::periodic) return ::erf_sbm::BoundaryKind::Periodic;
-        return ::erf_sbm::BoundaryKind::PrescribedSpectralInflow;
-    };
+    const auto boundary_policy =
+        ::erf_sbm::make_erf_transport_boundary_policy(geom[0], phys_bc_type);
     const auto boundary_kind_name = [](const ::erf_sbm::BoundaryKind kind) {
         switch (kind) {
         case ::erf_sbm::BoundaryKind::Periodic: return "Periodic";
@@ -255,9 +246,9 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
             boundary_policy_names[2*dir+1] = "Periodic";
         } else {
             boundary_policy_names[2*dir] = boundary_kind_name(
-                boundary_kind(phys_bc_type[Orientation(dir, Orientation::low)]));
+                boundary_policy.face_kind[2*dir]);
             boundary_policy_names[2*dir+1] = boundary_kind_name(
-                boundary_kind(phys_bc_type[Orientation(dir, Orientation::high)]));
+                boundary_policy.face_kind[2*dir+1]);
         }
     }
     for (int lev = 0; lev <= finest_level; ++lev) {
@@ -293,10 +284,8 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                 // Cartesian single-level boundary policy, this inventory is
                 // the exact outward amount used by the conservation oracle.
                 if (lev == 0 && !geom[lev].isPeriodic(dir)) {
-                    const auto low_kind = boundary_kind(
-                        phys_bc_type[Orientation(dir, Orientation::low)]);
-                    const auto high_kind = boundary_kind(
-                        phys_bc_type[Orientation(dir, Orientation::high)]);
+                    const auto low_kind = boundary_policy.face_kind[2*dir];
+                    const auto high_kind = boundary_policy.face_kind[2*dir+1];
                     const Real face_area = [&]() {
                         Real area = Real(1.0);
                         for (int transverse = 0; transverse < AMREX_SPACEDIM; ++transverse) {
@@ -904,11 +893,12 @@ void ERF::initialize_sbm_auxiliary(const int lev)
         const Real xlo = geom[lev].ProbLo(0);
         const Real xlen = geom[lev].ProbHi(0) - xlo;
         const Real dx = geom[lev].CellSize(0);
+        const int number_offset = population.number_offset;
         for (int b = 0; b < nbins; ++b) {
-                const Real lower = population.number_offset >= 0 ?
+                const Real lower = number_offset >= 0 ?
                     population.grid.edges()[static_cast<std::size_t>(b)] : Real(0.0);
-                const Real pivot = population.number_offset >= 0 ? population.grid.pivot(b) : Real(0.0);
-                const Real upper = population.number_offset >= 0 ?
+                const Real pivot = number_offset >= 0 ? population.grid.pivot(b) : Real(0.0);
+                const Real upper = number_offset >= 0 ?
                     population.grid.edges()[static_cast<std::size_t>(b + 1)] : Real(0.0);
             ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 const Real rho = core_arr(i,j,k,Rho_comp);
@@ -930,10 +920,10 @@ void ERF::initialize_sbm_auxiliary(const int lev)
                 // not a physical droplet or aerosol distribution.
                 aux_arr(i,j,k,offset+b) = manufactured ?
                     rho * Real(1.0e-6) * Real(b+1) * variation : Real(0.0);
-                if (population.number_offset >= 0) {
+                if (number_offset >= 0) {
                     const Real number_pivot = active_cell ?
                         lower + Real(0.75) * (upper - lower) : pivot;
-                    aux_arr(i,j,k,population.number_offset+b) =
+                    aux_arr(i,j,k,number_offset+b) =
                         number_pivot > Real(0.0) ? aux_arr(i,j,k,offset+b) / number_pivot : Real(0.0);
                 }
             });
@@ -1109,30 +1099,8 @@ void ERF::advance_sbm_stage(const int lev,
         avg_zmom[lev].setVal(Real(0.0));
     }
     Real stage_minimum_limiter = Real(1.0);
-    ::erf_sbm::TransportBoundaryPolicy boundary_policy;
-    boundary_policy.configured = true;
-    auto classify_boundary = [](const ERF_BC bc) {
-        if (bc == ERF_BC::symmetry || bc == ERF_BC::no_slip_wall ||
-            bc == ERF_BC::slip_wall) {
-            return ::erf_sbm::BoundaryKind::ImpermeableWall;
-        }
-        if (bc == ERF_BC::outflow || bc == ERF_BC::ho_outflow || bc == ERF_BC::open) {
-            return ::erf_sbm::BoundaryKind::AdvectiveOutflow;
-        }
-        if (bc == ERF_BC::periodic) return ::erf_sbm::BoundaryKind::Periodic;
-        return ::erf_sbm::BoundaryKind::PrescribedSpectralInflow;
-    };
-    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
-        if (geom[lev].isPeriodic(dir)) {
-            boundary_policy.face_kind[2*dir] = ::erf_sbm::BoundaryKind::Periodic;
-            boundary_policy.face_kind[2*dir+1] = ::erf_sbm::BoundaryKind::Periodic;
-        } else {
-            boundary_policy.face_kind[2*dir] = classify_boundary(
-                phys_bc_type[Orientation(dir, Orientation::low)]);
-            boundary_policy.face_kind[2*dir+1] = classify_boundary(
-                phys_bc_type[Orientation(dir, Orientation::high)]);
-        }
-    }
+    const auto boundary_policy =
+        ::erf_sbm::make_erf_transport_boundary_policy(geom[lev], phys_bc_type);
     MultiFab rho_anchor(state_old[IntVars::cons], make_alias, Rho_comp, 1);
     MultiFab rho_input(state_eval[IntVars::cons], make_alias, Rho_comp, 1);
     MultiFab rho_target(state_new[IntVars::cons], make_alias, Rho_comp, 1);

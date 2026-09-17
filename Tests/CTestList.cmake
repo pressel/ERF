@@ -1196,6 +1196,34 @@ function(add_test_sbm_p2_variable_host_cfl TEST_NAME NRANKS)
         ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/diffusion.log;${_test_dir}/zero_diffusion.log")
 endfunction(add_test_sbm_p2_variable_host_cfl)
 
+function(add_test_sbm_p2_dynamic_rk TEST_NAME)
+    set(_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_dynamic_rk")
+    set(_anelastic_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_anelastic_heun")
+    set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
+    file(MAKE_DIRECTORY "${_test_dir}")
+    file(COPY "${_source_input}" "${_anelastic_source_input}" DESTINATION "${_test_dir}")
+    resolve_test_exe("" "erf_exec" TEST_EXE)
+    add_test(${TEST_NAME} ${CMAKE_COMMAND}
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}
+        -DTEST_EXE=${TEST_EXE}
+        -DINPUT=${_test_dir}/inputs_sbm_p2_dynamic_rk
+        -DANELASTIC_INPUT=${_test_dir}/inputs_sbm_p2_anelastic_heun
+        -DWORKING_DIRECTORY=${_test_dir}
+        -DLOG=${_test_dir}/${TEST_NAME}.log
+        -P ${PROJECT_SOURCE_DIR}/Tests/RunSBMP2DynamicRK.cmake)
+    set_tests_properties(${TEST_NAME}
+        PROPERTIES
+        TIMEOUT 1200
+        PROCESSORS 2
+        WORKING_DIRECTORY "${_test_dir}/"
+        LABELS "regression;sbm;sbm-p2;cfl;mpi"
+        ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/compressible_1r;${_test_dir}/compressible_2r;${_test_dir}/anelastic_1r;${_test_dir}/anelastic_2r")
+endfunction(add_test_sbm_p2_dynamic_rk)
+
 function(add_test_sbm_p2_acoustic_rejection TEST_NAME NRANKS METHOD MOMENT)
     set(_source_input
         "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_variable_host_cfl")
@@ -1249,6 +1277,7 @@ if(ERF_ENABLE_TESTS AND ERF_ENABLE_MPI)
     add_test_sbm_p2_timestep(SBM_P2_HOST_TIMESTEP_2M 2)
     add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_1 1)
     add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_2 2)
+    add_test_sbm_p2_dynamic_rk(SBM_P2_DYNAMIC_REAL_CARRIERS)
     add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_DONOR_1M 1 DonorCell 1)
     add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_DONOR_2M 1 DonorCell 2)
     add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_GROUPED_1M 1 GroupedFCT_WENOZ3 1)
