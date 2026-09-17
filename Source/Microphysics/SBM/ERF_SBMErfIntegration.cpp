@@ -213,7 +213,7 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     }
     const int ncomp = sbm_layout->ncomp();
     if (!sbm_composite_snapshot_valid ||
-        sbm_composite_initial_totals.size() != static_cast<std::size_t>(ncomp)) {
+        sbm_composite_initial_totals.size() != static_cast<Long>(ncomp)) {
         amrex::Error("SBM composite diagnostic has no coarse-step initial snapshot");
     }
     std::vector<Real> initial(sbm_composite_initial_totals.begin(),
@@ -268,7 +268,7 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                 *mapfac[lev][MapFacType::m_x], *mapfac[lev][MapFacType::m_y],
                 mask_coarse, false);
         }
-        if (static_cast<std::size_t>(lev) < sbm_accepted_bulk_face_transfer.size() &&
+        if (static_cast<Long>(lev) < sbm_accepted_bulk_face_transfer.size() &&
             sbm_accepted_bulk_face_transfer[static_cast<std::size_t>(lev)] != nullptr) {
             for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
                 const auto& accepted_face = sbm_auxiliary->face_transfer_ledger(lev).accepted().direction(dir);
@@ -435,7 +435,7 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     bool interface_passed = finest_level == 0;
     if (finest_level > 0) {
         interface_passed = sbm_interface_oracle_available &&
-                           sbm_interface_oracle_error.size() == static_cast<std::size_t>(ncomp);
+                           sbm_interface_oracle_error.size() == static_cast<Long>(ncomp);
         if (interface_passed) {
             for (int comp = 0; comp < ncomp; ++comp) {
                 const auto index = static_cast<std::size_t>(comp);
@@ -595,7 +595,7 @@ void ERF::finish_sbm_reflux_oracle(const int lev)
     }
 
     const int ncomp = sbm_layout->ncomp();
-    if (sbm_interface_coarse_transfer.size() != static_cast<std::size_t>(ncomp)) {
+    if (sbm_interface_coarse_transfer.size() != static_cast<Long>(ncomp)) {
         sbm_interface_coarse_transfer.assign(static_cast<std::size_t>(ncomp), Real(0.0));
         sbm_interface_fine_transfer.assign(static_cast<std::size_t>(ncomp), Real(0.0));
         sbm_interface_reflux_correction.assign(static_cast<std::size_t>(ncomp), Real(0.0));
@@ -899,6 +899,8 @@ void ERF::initialize_sbm_auxiliary(const int lev)
         const auto aux_arr = aux.array(mfi);
         const auto core_arr = core.array(mfi);
         const bool manufactured = solverChoice.sbm_manufactured_initialization;
+        const bool active_limiter = solverChoice.sbm_test_active_limiter;
+        const bool variable_density = solverChoice.sbm_manufactured_variable_density;
         const Real xlo = geom[lev].ProbLo(0);
         const Real xlen = geom[lev].ProbHi(0) - xlo;
         const Real dx = geom[lev].CellSize(0);
@@ -915,11 +917,11 @@ void ERF::initialize_sbm_auxiliary(const int lev)
                 // transport face.  The test-only carrier pattern closes its
                 // left face, so the high-order outflow correction is genuinely
                 // constrained instead of being hidden by a large inflow.
-                const bool active_cell = solverChoice.sbm_test_active_limiter &&
+                const bool active_cell = active_limiter &&
                     (i % 16 == 7);
-                const Real variation = (solverChoice.sbm_manufactured_variable_density ||
+                const Real variation = (variable_density ||
                     host_cfl_counterexample) ? Real(1.0) :
-                    solverChoice.sbm_test_active_limiter ?
+                    active_limiter ?
                     (active_cell ? Real(0.001) : Real(1.999)) :
                     Real(1.0) + Real(0.25) *
                     std::sin(Real(6.2831853071795864769) * (x - xlo) / xlen);
@@ -962,7 +964,7 @@ void ERF::begin_sbm_step(const int lev, const amrex::MultiFab& core_old, const d
     if (solverChoice.moisture_type == MoistureType::SBM) {
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(sbm_auxiliary != nullptr && sbm_auxiliary->has_level(lev),
                                          "SBM auxiliary state must be initialized before stepping");
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(static_cast<std::size_t>(lev) < sbm_initial_bulk_state.size() &&
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(static_cast<Long>(lev) < sbm_initial_bulk_state.size() &&
                                          sbm_initial_bulk_state[static_cast<std::size_t>(lev)] != nullptr,
                                          "SBM compact baseline must be initialized before stepping");
         if (lev == 0) {

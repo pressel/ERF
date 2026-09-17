@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <filesystem>
 #include <limits>
 #include <fstream>
 #include <iomanip>
@@ -393,7 +394,8 @@ TEST(SBMP2, ProductionGroupedTransportIsChunkEquivalentAcrossRuntimeLayouts)
     std::size_t all_group_bytes[2][3]{{0, 0, 0}, {0, 0, 0}};
     std::ofstream evidence;
     if (amrex::ParallelDescriptor::IOProcessor()) {
-        evidence.open("/private/tmp/erf_sbm_p2_chunk_equivalence_memory.csv");
+        evidence.open(std::filesystem::temp_directory_path() /
+                      "erf_sbm_p2_chunk_equivalence_memory.csv");
         ASSERT_TRUE(evidence.good());
         evidence << "nbins,moment_mode,chunk_size,temporary_p2_working_bytes\n";
     }
@@ -2127,7 +2129,8 @@ TEST(SBMP2, DonorSupportEnvelopeHandlesOneTwoMomentAndZeroCarrierCases)
 
 TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
 {
-    std::ofstream evidence("/private/tmp/erf_sbm_p2_weno_convergence.csv");
+    std::ofstream evidence(std::filesystem::temp_directory_path() /
+                            "erf_sbm_p2_weno_convergence.csv");
     ASSERT_TRUE(evidence.good());
     evidence << "N,weno_positive_max_error,weno_negative_max_error,donor_positive_max_error,"
                  "weno_positive_order,weno_negative_order,donor_positive_order\n";
@@ -2333,7 +2336,8 @@ TEST(SBMP2, RuntimeCapabilityRejectsUnsupportedAMREnvelope)
 
 TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
 {
-    std::ofstream evidence("/private/tmp/erf_sbm_p2_full_transport_convergence.csv");
+    std::ofstream evidence(std::filesystem::temp_directory_path() /
+                            "erf_sbm_p2_full_transport_convergence.csv");
     ASSERT_TRUE(evidence.good());
     evidence << "N,weno_operator_error,weno_order,weno_min_lambda,"
                  "donor_operator_error,donor_order\n";
@@ -2439,7 +2443,8 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
 
 TEST(SBMP2, VariableDensityWENOReconstructionHasBoundedConvergence)
 {
-    std::ofstream evidence("/private/tmp/erf_sbm_p2_variable_density_convergence.csv");
+    std::ofstream evidence(std::filesystem::temp_directory_path() /
+                            "erf_sbm_p2_variable_density_convergence.csv");
     ASSERT_TRUE(evidence.good());
     evidence << "N,error,order\n";
     const Real pi = Real(3.1415926535897932384626433832795);

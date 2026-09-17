@@ -1151,10 +1151,10 @@ ERF::ClearLevel (int lev)
 {
     if (solverChoice.moisture_type == MoistureType::SBM && sbm_auxiliary != nullptr) {
         sbm_auxiliary->destroy_level(lev);
-        if (lev >= 0 && static_cast<std::size_t>(lev) < sbm_accepted_bulk_face_transfer.size()) {
+        if (lev >= 0 && static_cast<amrex::Long>(lev) < sbm_accepted_bulk_face_transfer.size()) {
             sbm_accepted_bulk_face_transfer[static_cast<std::size_t>(lev)].reset();
         }
-        if (lev >= 0 && static_cast<std::size_t>(lev) < sbm_initial_bulk_state.size()) {
+        if (lev >= 0 && static_cast<amrex::Long>(lev) < sbm_initial_bulk_state.size()) {
             sbm_initial_bulk_state[static_cast<std::size_t>(lev)].reset();
         }
     }
