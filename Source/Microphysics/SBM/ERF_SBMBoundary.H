@@ -3,6 +3,7 @@
 
 #include "ERF_SBMConstraintGroups.H"
 
+#include <AMReX_GpuQualifiers.H>
 #include <AMReX_REAL.H>
 
 #include <array>
@@ -12,6 +13,21 @@
 namespace erf_sbm {
 
 enum class BoundaryKind { Periodic, PrescribedSpectralInflow, AdvectiveOutflow, ImpermeableWall };
+
+/** Shared production/oracle rule for an impermeable normal face. */
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool suppress_normal_sbm_transfer(const int boundary_kind) noexcept
+{
+    return boundary_kind == static_cast<int>(BoundaryKind::ImpermeableWall);
+}
+
+/** Production omits normal diffusion at walls and advective outflows. */
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool suppress_normal_sbm_diffusion(const int boundary_kind) noexcept
+{
+    return suppress_normal_sbm_transfer(boundary_kind) ||
+           boundary_kind == static_cast<int>(BoundaryKind::AdvectiveOutflow);
+}
 
 /** Physical face policy used by the production auxiliary transport hook. */
 struct TransportBoundaryPolicy {

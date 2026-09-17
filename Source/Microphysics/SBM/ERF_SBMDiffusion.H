@@ -13,14 +13,14 @@ namespace erf_sbm {
 struct DiffusionFace {
     int left_cell{0};
     int right_cell{0};
-    amrex::Real area{1.0};
-    amrex::Real distance{1.0};
-    amrex::Real left_volume{1.0};
-    amrex::Real right_volume{1.0};
-    amrex::Real rho_left{1.0};
-    amrex::Real rho_right{1.0};
-    amrex::Real rho_face{1.0};
-    amrex::Real coefficient{0.0};
+    amrex::Real area{amrex::Real(1.0)};
+    amrex::Real distance{amrex::Real(1.0)};
+    amrex::Real left_volume{amrex::Real(1.0)};
+    amrex::Real right_volume{amrex::Real(1.0)};
+    amrex::Real rho_left{amrex::Real(1.0)};
+    amrex::Real rho_right{amrex::Real(1.0)};
+    amrex::Real rho_face{amrex::Real(1.0)};
+    amrex::Real coefficient{amrex::Real(0.0)};
 };
 
 struct DiffusionResult {

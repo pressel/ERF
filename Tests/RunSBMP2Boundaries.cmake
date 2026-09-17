@@ -20,7 +20,7 @@ function(run_boundary_case case_name input expected_low expected_high require_ou
         set(_run_log "${_run_dir}/simulation.log")
         set(_diagnostic "${_run_dir}/run.composite")
         set(_command ${_mpi_command} ${_nranks} ${TEST_EXE} ${input}
-            erf.sbm_composite_diagnostic_file=${_diagnostic})
+            erf.sbm_composite_diagnostic_file=${_diagnostic} erf.v=2)
         execute_process(
             COMMAND ${_command}
             WORKING_DIRECTORY "${_run_dir}"
@@ -32,6 +32,13 @@ function(run_boundary_case case_name input expected_low expected_high require_ou
         endif()
         if(NOT EXISTS "${_diagnostic}")
             message(FATAL_ERROR "SBM ${case_name} diagnostic is missing: ${_diagnostic}")
+        endif()
+        if(case_name STREQUAL "wall")
+            file(READ "${_run_log}" _run_log_text)
+            string(FIND "${_run_log_text}" "SBM actual stage low-order demand" _actual_stage_offset)
+            if(_actual_stage_offset EQUAL -1)
+                message(FATAL_ERROR "SBM wall ${_nranks}-rank run did not emit the actual-stage demand diagnostic")
+            endif()
         endif()
         file(READ "${_diagnostic}" _diagnostic_text)
         foreach(_required IN ITEMS

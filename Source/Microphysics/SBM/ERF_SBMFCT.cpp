@@ -220,10 +220,11 @@ StageWeightContract stage_weight_contract(const ::erf_auxiliary::IntegrationMeth
                                           const bool completes_step) noexcept
 {
     if (method == ::erf_auxiliary::IntegrationMethod::CompressibleRK3) {
-        return {1.0, 1.0, 1.0, completes_step ? 1.0 : 0.0};
+        return {amrex::Real(1.0), amrex::Real(1.0), amrex::Real(1.0),
+                completes_step ? amrex::Real(1.0) : amrex::Real(0.0)};
     }
-    if (stage == 0) return {1.0, 1.0, 1.0, 0.5};
-    return {0.5, 0.5, 0.5, 0.5};
+    if (stage == 0) return {amrex::Real(1.0), amrex::Real(1.0), amrex::Real(1.0), amrex::Real(0.5)};
+    return {amrex::Real(0.5), amrex::Real(0.5), amrex::Real(0.5), amrex::Real(0.5)};
 }
 
 } // namespace erf_sbm

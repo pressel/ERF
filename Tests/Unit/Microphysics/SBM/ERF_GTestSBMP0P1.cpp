@@ -131,9 +131,9 @@ TEST (SBMP0, TwoMomentEndpointAlgebraAndDistinctSemantics)
 {
     constexpr Real lower = Real(2.0);
     constexpr Real upper = Real(6.0);
-    for (const auto pair : {std::pair<Real, Real>{Real(3.0), Real(12.0)},
-                            std::pair<Real, Real>{Real(2.0), Real(4.0)},
-                            std::pair<Real, Real>{Real(2.0), Real(12.0)}}) {
+    for (const auto& pair : {std::pair<Real, Real>{Real(3.0), Real(12.0)},
+                              std::pair<Real, Real>{Real(2.0), Real(4.0)},
+                              std::pair<Real, Real>{Real(2.0), Real(12.0)}}) {
         const auto endpoints = erf_sbm::SpectralGrid::two_moment_to_endpoints(
             pair.first, pair.second, lower, upper);
         const auto inverse = erf_sbm::SpectralGrid::endpoints_to_two_moment(

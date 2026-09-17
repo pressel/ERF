@@ -35,26 +35,6 @@ amrex::Real donor_ratio (const amrex::Array4<const amrex::Real>& spectral,
 }
 
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-void restrict_constraint (const amrex::Real delta_form,
-                          const amrex::Real left_margin,
-                          const amrex::Real right_margin,
-                          const amrex::Real scale,
-                          amrex::Real& lambda) noexcept
-{
-    // A positive face correction form decreases the left-cell constraint and
-    // increases the right-cell constraint.  The signs here must match the
-    // conservative divergence update below.
-    const amrex::Real left_demand = scale * delta_form;
-    const amrex::Real right_demand = -scale * delta_form;
-    if (left_demand > amrex::Real(0.0)) {
-        lambda = amrex::min(lambda, amrex::max(amrex::Real(0.0), left_margin / left_demand));
-    }
-    if (right_demand > amrex::Real(0.0)) {
-        lambda = amrex::min(lambda, amrex::max(amrex::Real(0.0), right_margin / right_demand));
-    }
-}
-
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 amrex::Real descriptor_form(const ConstraintDescriptor& descriptor,
                             const amrex::Array4<const amrex::Real>& state,
                             const int i, const int j, const int k) noexcept
@@ -244,9 +224,6 @@ ActualCellDemand actual_cell_demand(
     const bool yhigh = !periodic_y && j == domain_hi_y;
     const bool zlow = !periodic_z && k == domain_lo_z;
     const bool zhigh = !periodic_z && k == domain_hi_z;
-    const int wall = static_cast<int>(BoundaryKind::ImpermeableWall);
-    const int outflow = static_cast<int>(BoundaryKind::AdvectiveOutflow);
-
     const amrex::Real xlo_carrier = carrier_x(i,j,k);
     const amrex::Real xhi_carrier = carrier_x(i+1,j,k);
     const amrex::Real ylo_carrier = carrier_y(i,j,k);
@@ -263,28 +240,28 @@ ActualCellDemand actual_cell_demand(
     }
 
     amrex::Real advective = amrex::Real(0.0);
-    if (!(xlow && xlow_kind == wall)) {
+    if (!(xlow && suppress_normal_sbm_transfer(xlow_kind))) {
         advective += amrex::max(-xlo_carrier, amrex::Real(0.0)) * dxi / rho_i;
     }
-    if (!(xhigh && xhigh_kind == wall)) {
+    if (!(xhigh && suppress_normal_sbm_transfer(xhigh_kind))) {
         advective += amrex::max(xhi_carrier, amrex::Real(0.0)) * dxi / rho_i;
     }
-    if (!(ylow && ylow_kind == wall)) {
+    if (!(ylow && suppress_normal_sbm_transfer(ylow_kind))) {
         advective += amrex::max(-ylo_carrier, amrex::Real(0.0)) * dyi / rho_i;
     }
-    if (!(yhigh && yhigh_kind == wall)) {
+    if (!(yhigh && suppress_normal_sbm_transfer(yhigh_kind))) {
         advective += amrex::max(yhi_carrier, amrex::Real(0.0)) * dyi / rho_i;
     }
-    if (!(zlow && zlow_kind == wall)) {
+    if (!(zlow && suppress_normal_sbm_transfer(zlow_kind))) {
         advective += amrex::max(-zlo_carrier, amrex::Real(0.0)) * dzi / rho_i;
     }
-    if (!(zhigh && zhigh_kind == wall)) {
+    if (!(zhigh && suppress_normal_sbm_transfer(zhigh_kind))) {
         advective += amrex::max(zhi_carrier, amrex::Real(0.0)) * dzi / rho_i;
     }
 
     amrex::Real diffusive = amrex::Real(0.0);
     if (diffusion_coefficient > amrex::Real(0.0)) {
-        if (!(xlow && xlow_kind == outflow)) {
+        if (!(xlow && suppress_normal_sbm_diffusion(xlow_kind))) {
             const amrex::Real rho_face = amrex::Real(0.5) *
                 (rho_i + density(i-1,j,k));
             if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
@@ -292,7 +269,7 @@ ActualCellDemand actual_cell_demand(
             }
             diffusive += diffusion_coefficient * rho_face * dxi * dxi / rho_i;
         }
-        if (!(xhigh && xhigh_kind == outflow)) {
+        if (!(xhigh && suppress_normal_sbm_diffusion(xhigh_kind))) {
             const amrex::Real rho_face = amrex::Real(0.5) *
                 (rho_i + density(i+1,j,k));
             if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
@@ -300,7 +277,7 @@ ActualCellDemand actual_cell_demand(
             }
             diffusive += diffusion_coefficient * rho_face * dxi * dxi / rho_i;
         }
-        if (!(ylow && ylow_kind == outflow)) {
+        if (!(ylow && suppress_normal_sbm_diffusion(ylow_kind))) {
             const amrex::Real rho_face = amrex::Real(0.5) *
                 (rho_i + density(i,j-1,k));
             if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
@@ -308,7 +285,7 @@ ActualCellDemand actual_cell_demand(
             }
             diffusive += diffusion_coefficient * rho_face * dyi * dyi / rho_i;
         }
-        if (!(yhigh && yhigh_kind == outflow)) {
+        if (!(yhigh && suppress_normal_sbm_diffusion(yhigh_kind))) {
             const amrex::Real rho_face = amrex::Real(0.5) *
                 (rho_i + density(i,j+1,k));
             if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
@@ -316,7 +293,7 @@ ActualCellDemand actual_cell_demand(
             }
             diffusive += diffusion_coefficient * rho_face * dyi * dyi / rho_i;
         }
-        if (!(zlow && zlow_kind == outflow)) {
+        if (!(zlow && suppress_normal_sbm_diffusion(zlow_kind))) {
             const amrex::Real rho_face = amrex::Real(0.5) *
                 (rho_i + density(i,j,k-1));
             if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
@@ -324,7 +301,7 @@ ActualCellDemand actual_cell_demand(
             }
             diffusive += diffusion_coefficient * rho_face * dzi * dzi / rho_i;
         }
-        if (!(zhigh && zhigh_kind == outflow)) {
+        if (!(zhigh && suppress_normal_sbm_diffusion(zhigh_kind))) {
             const amrex::Real rho_face = amrex::Real(0.5) *
                 (rho_i + density(i,j,k+1));
             if (rho_face <= amrex::Real(0.0) || amrex::isnan(rho_face) || amrex::isinf(rho_face)) {
@@ -595,7 +572,7 @@ void advance_stage_grouped_chunked(
                         const int physical_kind = physical_low ? low_kind :
                             (physical_high ? high_kind :
                              static_cast<int>(BoundaryKind::Periodic));
-                        if (physical_kind == static_cast<int>(BoundaryKind::ImpermeableWall)) {
+                        if (suppress_normal_sbm_transfer(physical_kind)) {
                             adv_arr(i,j,k,lc) = Real(0.0);
                             diff_arr(i,j,k,lc) = Real(0.0);
                             return;
@@ -615,8 +592,8 @@ void advance_stage_grouped_chunked(
                         } else {
                             adv_arr(i,j,k,lc) = face_mass_flux * ratio_arr(donor_i,donor_j,donor_k,lc);
                         }
-                        if (diffusion_coefficient > Real(0.0) && physical_kind !=
-                            static_cast<int>(BoundaryKind::AdvectiveOutflow)) {
+                        if (diffusion_coefficient > Real(0.0) &&
+                            !suppress_normal_sbm_diffusion(physical_kind)) {
                             const int left_i = dir == 0 ? i-1 : i;
                             const int left_j = dir == 1 ? j-1 : j;
                             const int left_k = dir == 2 ? k-1 : k;
@@ -1176,7 +1153,6 @@ void advance_stage_grouped_chunked(
         constraint_budget.setVal(Real(0.0));
         for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
             const auto& low_face = low_adv.direction(dir);
-            const auto& diff_face = low_diff.direction(dir);
             auto& high_face = high.direction(dir);
             const Real scale = dt * anelastic_weight * geometry.InvCellSize(dir);
             for (amrex::MFIter mfi(high_face); mfi.isValid(); ++mfi) {
@@ -1862,10 +1838,8 @@ ActualStageDemand measure_actual_stage_low_order_demand(
     }
 
     const auto local = rate_data.value(rate_reduce);
-    double rates[4] = {static_cast<double>(amrex::get<0>(local)),
-                        static_cast<double>(amrex::get<1>(local)),
-                        static_cast<double>(amrex::get<2>(local)),
-                        static_cast<double>(amrex::get<3>(local))};
+    amrex::Real rates[4] = {amrex::get<0>(local), amrex::get<1>(local),
+                            amrex::get<2>(local), amrex::get<3>(local)};
     amrex::ParallelDescriptor::ReduceRealMax(rates, 4);
 
     ActualStageDemand result;
@@ -2304,7 +2278,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                         high_kind != static_cast<int>(BoundaryKind::Periodic);
                     const int physical_kind = physical_low ? low_kind :
                         (physical_high ? high_kind : static_cast<int>(BoundaryKind::Periodic));
-                    if (physical_kind == static_cast<int>(BoundaryKind::ImpermeableWall)) {
+                    if (suppress_normal_sbm_transfer(physical_kind)) {
                         out(i,j,k,mass) = Real(0.0);
                         if (two_moment) out(i,j,k,number) = Real(0.0);
                         return;
@@ -2321,8 +2295,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                         out(i,j,k,mass) = face_mass_flux *
                             donor_ratio(eval, rho, donor_i, donor_j, donor_k, mass);
                     }
-                    if (diffusion_coefficient > Real(0.0) && physical_kind !=
-                        static_cast<int>(BoundaryKind::AdvectiveOutflow)) {
+                    if (diffusion_coefficient > Real(0.0) &&
+                        !suppress_normal_sbm_diffusion(physical_kind)) {
                         const int left_i = dir == 0 ? i-1 : i;
                         const int left_j = dir == 1 ? j-1 : j;
                         const int left_k = dir == 2 ? k-1 : k;
@@ -2364,7 +2338,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                         high_kind != static_cast<int>(BoundaryKind::Periodic);
                     const int physical_kind = physical_low ? low_kind :
                         (physical_high ? high_kind : static_cast<int>(BoundaryKind::Periodic));
-                    if (physical_kind == static_cast<int>(BoundaryKind::ImpermeableWall)) {
+                    if (suppress_normal_sbm_transfer(physical_kind)) {
                         out(i,j,k,c) = Real(0.0);
                         return;
                     }
@@ -2377,8 +2351,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                     const Real rho_right = rho(i,j,k);
                     const Real advection = face_mass_flux * donor_ratio(physical, rho, donor_i, donor_j, donor_k, c);
                     out(i,j,k,c) = advection;
-                    if (diffusion_coefficient > Real(0.0) && physical_kind !=
-                        static_cast<int>(BoundaryKind::AdvectiveOutflow) &&
+                    if (diffusion_coefficient > Real(0.0) &&
+                        !suppress_normal_sbm_diffusion(physical_kind) &&
                         rho_left > Real(0.0) && rho_right > Real(0.0)) {
                         const Real rho_face = Real(0.5) * (rho_left + rho_right);
                         const int left_i = dir == 0 ? i-1 : i;

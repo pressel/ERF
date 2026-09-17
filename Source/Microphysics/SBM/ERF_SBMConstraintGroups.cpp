@@ -95,15 +95,15 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                 const amrex::Real lower = population.grid.edges()[static_cast<std::size_t>(bin)];
                 const amrex::Real upper = population.grid.edges()[static_cast<std::size_t>(bin + 1)];
                 const amrex::Real denominator = upper - lower;
-                add_constraint(group, "number_nonnegative", {{number, 1.0}});
+                add_constraint(group, "number_nonnegative", {{number, amrex::Real(1.0)}});
                 add_constraint(group, "endpoint_low",
                                {{number, upper / denominator},
-                                {mass, -1.0 / denominator}});
+                                {mass, -amrex::Real(1.0) / denominator}});
                 add_constraint(group, "endpoint_high",
-                               {{mass, 1.0 / denominator},
+                               {{mass, amrex::Real(1.0) / denominator},
                                 {number, -lower / denominator}});
             } else {
-                add_constraint(group, "mass_nonnegative", {{mass, 1.0}});
+                add_constraint(group, "mass_nonnegative", {{mass, amrex::Real(1.0)}});
             }
 
             for (std::size_t property_index = 0;
@@ -114,7 +114,7 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                 group.members.push_back(property_component);
                 group.transport_members.push_back(property_component);
                 group.attached_property_indices.push_back(static_cast<int>(property_index));
-                add_constraint(group, property.semantic_id + ".nonnegative", {{property_component, 1.0}});
+                add_constraint(group, property.semantic_id + ".nonnegative", {{property_component, amrex::Real(1.0)}});
 
                 const bool has_lower = finite(property.support_min) && property.support_min > amrex::Real(0.0);
                 const bool has_upper = finite(property.support_max) &&
@@ -125,7 +125,7 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                         // bounds are bounds on the carrier number C.
                         add_constraint(group, property.semantic_id + ".support_upper",
                                        {{number, property.support_max},
-                                        {property_component, -1.0}});
+                                        {property_component, -amrex::Real(1.0)}});
                     } else {
                         const amrex::Real pivot = population.grid.pivot(bin);
                         add_constraint(group, property.semantic_id + ".support_upper",
@@ -137,12 +137,12 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                     if (number >= 0) {
                         add_constraint(group, property.semantic_id + ".support_lower",
                                        {{number, -property.support_min},
-                                        {property_component, 1.0}});
+                                        {property_component, amrex::Real(1.0)}});
                     } else {
                         const amrex::Real pivot = population.grid.pivot(bin);
                         add_constraint(group, property.semantic_id + ".support_lower",
                                        {{mass, -property.support_min / pivot},
-                                        {property_component, 1.0}});
+                                        {property_component, amrex::Real(1.0)}});
                     }
                 }
 
@@ -151,10 +151,10 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                         // The carrier mass is already the authoritative M
                         // component in two-moment storage.
                         add_constraint(group, property.semantic_id + ".carrier_mass_minus_subset",
-                                       {{mass, 1.0}, {property_component, -1.0}});
+                                       {{mass, amrex::Real(1.0)}, {property_component, -amrex::Real(1.0)}});
                     } else {
                         add_constraint(group, property.semantic_id + ".carrier_mass_minus_subset",
-                                       {{mass, 1.0}, {property_component, -1.0}});
+                                       {{mass, amrex::Real(1.0)}, {property_component, -amrex::Real(1.0)}});
                     }
                 }
             }

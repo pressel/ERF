@@ -17,8 +17,8 @@ enum class TransportMethod { DonorCell, GroupedFCT_WENOZ3 };
 struct FCTFaceTransfer {
     int left_cell{0};
     int right_cell{0};
-    amrex::Real left_volume{1.0};
-    amrex::Real right_volume{1.0};
+    amrex::Real left_volume{amrex::Real(1.0)};
+    amrex::Real right_volume{amrex::Real(1.0)};
     std::vector<amrex::Real> low;
     std::vector<amrex::Real> high;
 };
@@ -27,7 +27,7 @@ struct FCTResult {
     std::vector<FCTFaceTransfer> accepted_faces;
     std::vector<amrex::Real> limiter;
     std::vector<amrex::Real> updated_state;
-    amrex::Real minimum_margin{0.0};
+    amrex::Real minimum_margin{amrex::Real(0.0)};
 };
 
 /**
@@ -50,10 +50,10 @@ accepted_stage_correction(const std::vector<amrex::Real>& low_transfer,
                           amrex::Real stage_interval);
 
 struct StageWeightContract {
-    amrex::Real baseline_weight{1.0};
-    amrex::Real low_order_weight{1.0};
-    amrex::Real correction_weight{1.0};
-    amrex::Real completed_ledger_weight{0.0};
+    amrex::Real baseline_weight{amrex::Real(1.0)};
+    amrex::Real low_order_weight{amrex::Real(1.0)};
+    amrex::Real correction_weight{amrex::Real(1.0)};
+    amrex::Real completed_ledger_weight{amrex::Real(0.0)};
 };
 
 /** Exact weights used by the two supported ERF scalar recurrences. */

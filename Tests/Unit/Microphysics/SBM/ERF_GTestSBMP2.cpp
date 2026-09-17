@@ -374,7 +374,9 @@ TEST(SBMP2, ProductionChunkWorkingMemoryScalesWithAtomicChunkPolicy)
             EXPECT_GT(one_group, std::size_t(0));
             EXPECT_GE(all_groups, one_group);
             EXPECT_EQ(one_group, erf_sbm::grouped_fct_peak_working_bytes(layout, boxes, dm, 1));
-            if (nbins > 1) EXPECT_GT(all_groups, one_group);
+            if (nbins > 1) {
+                EXPECT_GT(all_groups, one_group);
+            }
         }
     }
     EXPECT_THROW((void)erf_sbm::grouped_fct_peak_working_bytes(
@@ -664,6 +666,68 @@ TEST(SBMP2, ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux)
     EXPECT_EQ(demand.worst_i, 1);
     EXPECT_EQ(demand.worst_j, 0);
     EXPECT_EQ(demand.worst_k, 0);
+}
+
+TEST(SBMP2, ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues)
+{
+    const Box domain(IntVect(0, 0, 0), IntVect(0, 1, 1));
+    const BoxArray cell_boxes(domain);
+    const DistributionMapping dm(cell_boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(1.0, 2.0, 2.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(0, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+
+    MultiFab density(cell_boxes, dm, 1, 1);
+    density.setVal(Real(1.0));
+    density.FillBoundary(geometry.periodicity());
+    const Real nan = std::numeric_limits<Real>::quiet_NaN();
+    for (amrex::MFIter mfi(density); mfi.isValid(); ++mfi) {
+        const auto rho = density.array(mfi);
+        const Box fab_box = mfi.fabbox();
+        amrex::ParallelFor(fab_box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (i < domain.smallEnd(0) || i > domain.bigEnd(0)) rho(i,j,k) = nan;
+        });
+    }
+
+    MultiFab carrier_x(amrex::convert(cell_boxes, IntVect(1, 0, 0)), dm, 1, 1);
+    MultiFab carrier_y(amrex::convert(cell_boxes, IntVect(0, 1, 0)), dm, 1, 1);
+    MultiFab carrier_z(amrex::convert(cell_boxes, IntVect(0, 0, 1)), dm, 1, 1);
+    carrier_x.setVal(Real(0.0));
+    carrier_y.setVal(Real(0.0));
+    carrier_z.setVal(Real(0.0));
+    carrier_y.FillBoundary(geometry.periodicity());
+    carrier_z.FillBoundary(geometry.periodicity());
+
+    erf_sbm::TransportBoundaryPolicy boundary_policy;
+    boundary_policy.configured = true;
+    boundary_policy.face_kind[0] = erf_sbm::BoundaryKind::ImpermeableWall;
+    boundary_policy.face_kind[1] = erf_sbm::BoundaryKind::ImpermeableWall;
+    boundary_policy.face_kind[2] = erf_sbm::BoundaryKind::Periodic;
+    boundary_policy.face_kind[3] = erf_sbm::BoundaryKind::Periodic;
+    boundary_policy.face_kind[4] = erf_sbm::BoundaryKind::Periodic;
+    boundary_policy.face_kind[5] = erf_sbm::BoundaryKind::Periodic;
+    EXPECT_TRUE(erf_sbm::suppress_normal_sbm_transfer(
+        static_cast<int>(erf_sbm::BoundaryKind::ImpermeableWall)));
+    EXPECT_TRUE(erf_sbm::suppress_normal_sbm_diffusion(
+        static_cast<int>(erf_sbm::BoundaryKind::ImpermeableWall)));
+    EXPECT_TRUE(erf_sbm::suppress_normal_sbm_diffusion(
+        static_cast<int>(erf_sbm::BoundaryKind::AdvectiveOutflow)));
+
+    const auto context = erf_auxiliary::make_compressible_stage(
+        0, 0.0, 0.0, 1.0/3.0, 1.0, nullptr, nullptr);
+    const auto demand = erf_sbm::measure_actual_stage_low_order_demand(
+        context, density, carrier_x, carrier_y, carrier_z, geometry,
+        Real(1.0), 0, boundary_policy);
+
+    // The x-wall density ghosts are NaN deliberately.  A valid oracle must
+    // not read them, and only the two periodic transverse directions remain:
+    // K * (2/dy^2 + 2/dz^2) = 4.
+    EXPECT_NEAR(demand.advective_rate, Real(0.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(demand.diffusive_rate, Real(4.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(demand.maximum_rate, Real(4.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(demand.maximum_tau_rate, Real(4.0/3.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
 }
 
 TEST(SBMP2, SyntheticSubsetPopulationSurvivesGroupedLimitAndAMRViews)
@@ -967,7 +1031,7 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
     };
 
     // B=1, D^out=.6 is valid even though the post-low-order state is .4.
-    for (const auto contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
+    for (const auto& contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
         SCOPED_TRACE(std::string(contract.first ? "anelastic" : "compressible") +
                      " stage=" + std::to_string(contract.second));
         const Real stage_scale = contract.first && contract.second > 0 ? Real(2.0) : Real(1.0);
@@ -979,7 +1043,7 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
     // Advection and diffusion are each admissible, but their combined demand
     // is not.  The second case deliberately exceeds the final low state while
     // remaining below the pre-stage baseline and must therefore pass.
-    for (const auto contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
+    for (const auto& contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
         const Real stage_scale = contract.first && contract.second > 0 ? Real(2.0) : Real(1.0);
         const Real combined_fail_advection = contract.first && contract.second > 0 ? Real(1.9) : Real(0.8);
         const Real combined_pass_advection = Real(0.4) * stage_scale;
@@ -2103,7 +2167,6 @@ TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
                     const Real qm2 = input(i-2,j,k);
                     const Real qm1 = input(i-1,j,k);
                     const Real q = input(i,j,k);
-                    const Real qp1 = input(i+1,j,k);
                     const Real q0 = Real(0.5) * (-qm2 + Real(3.0)*qm1);
                     const Real q1 = Real(0.5) * (qm1 + q);
                     const Real b0 = (qm1-qm2)*(qm1-qm2);

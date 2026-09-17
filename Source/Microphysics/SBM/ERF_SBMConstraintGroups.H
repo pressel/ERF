@@ -62,8 +62,8 @@ struct ConstraintDescriptor {
     int term_count{0};
     int component0{-1};
     int component1{-1};
-    amrex::Real coefficient0{0.0};
-    amrex::Real coefficient1{0.0};
+    amrex::Real coefficient0{amrex::Real(0.0)};
+    amrex::Real coefficient1{amrex::Real(0.0)};
 };
 
 /** Device-ready metadata for a donor-derived attached-property envelope. */
@@ -75,9 +75,9 @@ struct AttachedPropertySupportDescriptor {
     int number_component{-1};
     int carrier_component{-1};
     int two_moment{0};
-    amrex::Real pivot{1.0};
-    amrex::Real hard_min{0.0};
-    amrex::Real hard_max{0.0};
+    amrex::Real pivot{amrex::Real(1.0)};
+    amrex::Real hard_min{amrex::Real(0.0)};
+    amrex::Real hard_max{amrex::Real(0.0)};
     int has_hard_min{0};
     int has_hard_max{0};
 };

@@ -160,9 +160,8 @@ double ERF::sbm_admissible_timestep(const int level) const
     }
 
     const GpuTuple<Real,Real,Real> local = reduce_data.value(reduce_op);
-    double rates[3] = {static_cast<double>(amrex::get<0>(local)),
-                       static_cast<double>(amrex::get<1>(local)),
-                       static_cast<double>(amrex::get<2>(local))};
+    Real rates[3] = {amrex::get<0>(local), amrex::get<1>(local),
+                     amrex::get<2>(local)};
     ParallelDescriptor::ReduceRealMax(rates, 3);
     const double advective_rate = rates[0];
     const double diffusive_rate = rates[1];
