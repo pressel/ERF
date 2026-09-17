@@ -168,61 +168,21 @@ amrex::Real sbm_weno_z3_face(
     const int i, const int j, const int k, const int component,
     const amrex::Real carrier, const int dir) noexcept
 {
-    const bool positive = carrier >= amrex::Real(0.0);
-    amrex::Real q0 = amrex::Real(0.0);
-    amrex::Real q1 = amrex::Real(0.0);
-    amrex::Real beta0 = amrex::Real(0.0);
-    amrex::Real beta1 = amrex::Real(0.0);
+    amrex::Real qm2 = amrex::Real(0.0);
+    amrex::Real qm1 = amrex::Real(0.0);
+    amrex::Real q = amrex::Real(0.0);
+    amrex::Real qp1 = amrex::Real(0.0);
     if (dir == 0) {
-        const amrex::Real qm2 = values(i-2,j,k,component);
-        const amrex::Real qm1 = values(i-1,j,k,component);
-        const amrex::Real q = values(i,j,k,component);
-        const amrex::Real qp1 = values(i+1,j,k,component);
-        q0 = positive ? (amrex::Real(0.5) * (-qm2 + amrex::Real(3.0)*qm1)) :
-                        (amrex::Real(0.5) * (amrex::Real(3.0)*q - qp1));
-        q1 = amrex::Real(0.5) * (qm1 + q);
-        beta0 = positive ? (qm1-qm2)*(qm1-qm2) : (qp1-q)*(qp1-q);
-        beta1 = (q-qm1)*(q-qm1);
+        qm2 = values(i-2,j,k,component); qm1 = values(i-1,j,k,component);
+        q = values(i,j,k,component); qp1 = values(i+1,j,k,component);
     } else if (dir == 1) {
-        const amrex::Real qm2 = values(i,j-2,k,component);
-        const amrex::Real qm1 = values(i,j-1,k,component);
-        const amrex::Real q = values(i,j,k,component);
-        const amrex::Real qp1 = values(i,j+1,k,component);
-        q0 = positive ? (amrex::Real(0.5) * (-qm2 + amrex::Real(3.0)*qm1)) :
-                        (amrex::Real(0.5) * (amrex::Real(3.0)*q - qp1));
-        q1 = amrex::Real(0.5) * (qm1 + q);
-        beta0 = positive ? (qm1-qm2)*(qm1-qm2) : (qp1-q)*(qp1-q);
-        beta1 = (q-qm1)*(q-qm1);
+        qm2 = values(i,j-2,k,component); qm1 = values(i,j-1,k,component);
+        q = values(i,j,k,component); qp1 = values(i,j+1,k,component);
     } else {
-        const amrex::Real qm2 = values(i,j,k-2,component);
-        const amrex::Real qm1 = values(i,j,k-1,component);
-        const amrex::Real q = values(i,j,k,component);
-        const amrex::Real qp1 = values(i,j,k+1,component);
-        q0 = positive ? (amrex::Real(0.5) * (-qm2 + amrex::Real(3.0)*qm1)) :
-                        (amrex::Real(0.5) * (amrex::Real(3.0)*q - qp1));
-        q1 = amrex::Real(0.5) * (qm1 + q);
-        beta0 = positive ? (qm1-qm2)*(qm1-qm2) : (qp1-q)*(qp1-q);
-        beta1 = (q-qm1)*(q-qm1);
+        qm2 = values(i,j,k-2,component); qm1 = values(i,j,k-1,component);
+        q = values(i,j,k,component); qp1 = values(i,j,k+1,component);
     }
-    // A scale-aware regularizer keeps the Z3 weights at their optimal values
-    // at smooth extrema (including q=2+sin(2*pi*x)) while still allowing a
-    // steep donor jump to activate the nonlinear weights.
-    const amrex::Real epsilon = amrex::Real(1.0e-40) +
-        amrex::Real(1.0e-2) * amrex::max(amrex::Math::abs(q0), amrex::Math::abs(q1));
-    const amrex::Real amplitude = amrex::max(amrex::Math::abs(q0), amrex::Math::abs(q1));
-    if (amrex::max(beta0, beta1) <= amrex::Real(0.25) * amplitude * amplitude) {
-        // In the smooth branch the optimal FV Z3 combination is third-order
-        // and avoids an order reduction when the smoothness indicators are
-        // sampled at a critical point.  The nonlinear branch below remains
-        // active for steep donor jumps.
-        return (q0 + amrex::Real(2.0) * q1) / amrex::Real(3.0);
-    }
-    const amrex::Real tau = amrex::Math::abs(beta1 - beta0);
-    const amrex::Real w0 = (amrex::Real(1.0)/amrex::Real(3.0)) *
-        (amrex::Real(1.0) + (tau*tau) / ((epsilon + beta0)*(epsilon + beta0)));
-    const amrex::Real w1 = (amrex::Real(2.0)/amrex::Real(3.0)) *
-        (amrex::Real(1.0) + (tau*tau) / ((epsilon + beta1)*(epsilon + beta1)));
-    return (w0*q0 + w1*q1) / (w0 + w1);
+    return weno_z3_face_from_stencil(qm2, qm1, q, qp1, carrier);
 }
 
 void validate_finite_face_transfer(const ::erf_auxiliary::AuxiliaryFaceTransfer& transfer,
@@ -260,6 +220,7 @@ void advance_stage_grouped_chunked(
     const ::erf_auxiliary::StageContext& context,
     const amrex::MultiFab& rho_anchor,
     const amrex::MultiFab& rho_input,
+    const amrex::MultiFab& rho_target,
     amrex::MultiFab& core_state,
     const amrex::MultiFab& carrier_x,
     const amrex::MultiFab& carrier_y,
@@ -290,6 +251,8 @@ void advance_stage_grouped_chunked(
         context.method == ::erf_auxiliary::IntegrationMethod::AnelasticHeun && context.stage_index > 0;
     const auto& low_source = heun_corrector ? predictor : old;
     const auto& high_source = context.stage_index == 0 ? old : predictor;
+    const auto& low_density = heun_corrector ? rho_input : rho_anchor;
+    const auto& high_density = context.stage_index == 0 ? rho_anchor : rho_input;
 
     std::array<int, AMREX_SPACEDIM*2> boundary_kinds{};
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
@@ -313,6 +276,7 @@ void advance_stage_grouped_chunked(
     validate_admissible_state(manager, layout, level);
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
         if (rho_anchor.nGrowVect()[dir] < 2 || rho_input.nGrowVect()[dir] < 2 ||
+            rho_target.nGrowVect()[dir] < 2 ||
             low_source.nGrowVect()[dir] < 2 || high_source.nGrowVect()[dir] < 2) {
             throw std::invalid_argument(
                 "SBM grouped transport requires two prepared density/source ghost cells for WENO and donor stencils");
@@ -323,8 +287,10 @@ void advance_stage_grouped_chunked(
     // valid cells are therefore required to carry a positive density.
     validate_positive_density(rho_anchor, "SBM anchor density", amrex::IntVect(0));
     validate_positive_density(rho_input, "SBM input density", amrex::IntVect(0));
+    validate_positive_density(rho_target, "SBM target density", amrex::IntVect(0));
     validate_finite_multifab(rho_anchor, 1, "SBM anchor density", rho_anchor.nGrowVect());
     validate_finite_multifab(rho_input, 1, "SBM input density", rho_input.nGrowVect());
+    validate_finite_multifab(rho_target, 1, "SBM target density", rho_target.nGrowVect());
     validate_finite_multifab(carrier_x, 1, "SBM x carrier transfer");
     validate_finite_multifab(carrier_y, 1, "SBM y carrier transfer");
     validate_finite_multifab(carrier_z, 1, "SBM z carrier transfer");
@@ -437,6 +403,7 @@ void advance_stage_grouped_chunked(
 
     auto build_low = [&](const ConstraintClosureChunk& chunk,
                          const amrex::MultiFab& ratio,
+                         const amrex::MultiFab& density_state,
                          ::erf_auxiliary::AuxiliaryFaceTransfer& low_adv,
                          ::erf_auxiliary::AuxiliaryFaceTransfer& low_diff) {
         low_adv.setVal(Real(0.0));
@@ -450,7 +417,7 @@ void advance_stage_grouped_chunked(
                 const amrex::Box box = mfi.validbox();
                 const auto carrier_arr = carrier->const_array(mfi);
                 const auto ratio_arr = ratio.const_array(mfi);
-                const auto rho = rho_anchor.const_array(mfi);
+                const auto rho = density_state.const_array(mfi);
                 const auto adv_arr = adv.array(mfi);
                 const auto diff_arr = diff.array(mfi);
                 const int domain_low = geometry.Domain().smallEnd(dir);
@@ -560,10 +527,10 @@ void advance_stage_grouped_chunked(
         for (int local = 0; local < nlocal; ++local) {
             global_to_local[static_cast<std::size_t>(chunk.components[static_cast<std::size_t>(local)])] = local;
         }
-        build_ratio(chunk, low_source, rho_anchor, ratio, global_to_local);
+        build_ratio(chunk, low_source, low_density, ratio, global_to_local);
         validate_finite_multifab(ratio, nlocal,
                                  "SBM grouped-FCT endpoint ratio", ratio.nGrowVect());
-        build_low(chunk, ratio, low_adv, low_diff);
+        build_low(chunk, ratio, low_density, low_adv, low_diff);
         for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
             auto& destination = stage_flux.direction(dir);
             const auto& adv = low_adv.direction(dir);
@@ -663,8 +630,8 @@ void advance_stage_grouped_chunked(
         ::erf_auxiliary::AuxiliaryFaceTransfer low_adv, low_diff;
         low_adv.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
         low_diff.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
-        build_ratio(chunk, low_source, rho_anchor, ratio, global_to_local);
-        build_low(chunk, ratio, low_adv, low_diff);
+        build_ratio(chunk, low_source, low_density, ratio, global_to_local);
+        build_low(chunk, ratio, low_density, low_adv, low_diff);
 
         std::vector<ConstraintDescriptor> local_descriptor_values;
         std::vector<ConstraintDescriptor> global_descriptor_values;
@@ -766,9 +733,9 @@ void advance_stage_grouped_chunked(
         low_diff.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
         high.define(output.boxArray(), output.DistributionMap(), nlocal, 0);
         amrex::MultiFab high_ratio(output.boxArray(), output.DistributionMap(), nlocal, 2);
-        build_ratio(chunk, low_source, rho_anchor, ratio, global_to_local);
-        build_ratio(chunk, high_source, rho_input, high_ratio, global_to_local);
-        build_low(chunk, ratio, low_adv, low_diff);
+        build_ratio(chunk, low_source, low_density, ratio, global_to_local);
+        build_ratio(chunk, high_source, high_density, high_ratio, global_to_local);
+        build_low(chunk, ratio, low_density, low_adv, low_diff);
 
         // Derive a chunk-local attached-property support envelope from the
         // exact low-order donor set.  The envelope is intersected with finite
@@ -1356,6 +1323,9 @@ void advance_stage_grouped_chunked(
 
     const SBMBulkProjection bulk_projection(layout);
     for (amrex::MFIter mfi(output); mfi.isValid(); ++mfi) {
+        // The compact target is not required to carry ghosts by this API.
+        // Project only the common valid region here; lifecycle hooks project
+        // the explicitly available compact ghosts after their fill/prolong.
         bulk_projection.apply_to_core(mfi.validbox(), output.const_array(mfi), core_state.array(mfi));
     }
     validate_nonnegative_state(output, ncomp, "SBM grouped-FCT output state");
@@ -1832,6 +1802,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    const ::erf_auxiliary::StageContext& context,
                    const amrex::MultiFab& rho_anchor,
                    const amrex::MultiFab& rho_input,
+                   const amrex::MultiFab& rho_target,
                    amrex::MultiFab& core_state,
                    const amrex::MultiFab& carrier_x,
                    const amrex::MultiFab& carrier_y,
@@ -1880,21 +1851,27 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     // ghosts (zero) that are never used by an outward donor.
     amrex::MultiFab rho_anchor_prepared(output.boxArray(), output.DistributionMap(), 1, 2);
     amrex::MultiFab rho_input_prepared(output.boxArray(), output.DistributionMap(), 1, 2);
+    amrex::MultiFab rho_target_prepared(output.boxArray(), output.DistributionMap(), 1, 2);
     rho_anchor_prepared.setVal(Real(0.0));
     rho_input_prepared.setVal(Real(0.0));
+    rho_target_prepared.setVal(Real(0.0));
     // ERF's state views have already gone through its level FillPatch path.
     // Preserve as many of those prepared ghosts as are available instead of
     // replacing coarse/fine stencil data with an uninitialized scratch layer.
     amrex::IntVect anchor_copy_nghost = rho_anchor.nGrowVect();
     amrex::IntVect input_copy_nghost = rho_input.nGrowVect();
+    amrex::IntVect target_copy_nghost = rho_target.nGrowVect();
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
         anchor_copy_nghost[dir] = std::min(anchor_copy_nghost[dir], 2);
         input_copy_nghost[dir] = std::min(input_copy_nghost[dir], 2);
+        target_copy_nghost[dir] = std::min(target_copy_nghost[dir], 2);
     }
     amrex::MultiFab::Copy(rho_anchor_prepared, rho_anchor, 0, 0, 1, anchor_copy_nghost);
     amrex::MultiFab::Copy(rho_input_prepared, rho_input, 0, 0, 1, input_copy_nghost);
+    amrex::MultiFab::Copy(rho_target_prepared, rho_target, 0, 0, 1, target_copy_nghost);
     rho_anchor_prepared.FillBoundary(geometry.periodicity());
     rho_input_prepared.FillBoundary(geometry.periodicity());
+    rho_target_prepared.FillBoundary(geometry.periodicity());
     // The auxiliary manager owns the source views, but the ERF callback may
     // have written only their valid cells.  Publish periodic source ghosts
     // before either donor or WENO reads a stencil; physical ghosts remain the
@@ -1919,6 +1896,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     validate_outflow_carrier(carrier_x, geometry, 0, boundary_kinds[0], boundary_kinds[1]);
     validate_outflow_carrier(carrier_y, geometry, 1, boundary_kinds[2], boundary_kinds[3]);
     validate_outflow_carrier(carrier_z, geometry, 2, boundary_kinds[4], boundary_kinds[5]);
+    const auto& transport_density = heun_corrector ? rho_input_prepared : rho_anchor_prepared;
     const amrex::Real dt = static_cast<amrex::Real>(context.stage_interval);
     const amrex::Real dxi = static_cast<amrex::Real>(geometry.InvCellSize(0));
     const amrex::Real dyi = static_cast<amrex::Real>(geometry.InvCellSize(1));
@@ -1939,7 +1917,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
 
     if (method == TransportMethod::GroupedFCT_WENOZ3) {
         advance_stage_grouped_chunked(manager, layout, context, rho_anchor_prepared,
-                                      rho_input_prepared, core_state,
+                                      rho_input_prepared, rho_target_prepared, core_state,
                                       carrier_x, carrier_y, carrier_z, geometry, stage_flux,
                                       level, diffusion_coefficient, chunk_size,
                                       minimum_accepted_limiter, boundary_policy);
@@ -1948,6 +1926,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
 
     validate_positive_density(rho_anchor_prepared, "SBM anchor density", amrex::IntVect(0));
     validate_positive_density(rho_input_prepared, "SBM input density", amrex::IntVect(0));
+    validate_positive_density(rho_target_prepared, "SBM target density", amrex::IntVect(0));
 
     if (minimum_accepted_limiter != nullptr) *minimum_accepted_limiter = amrex::Real(1.0);
 
@@ -1962,7 +1941,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
         for (amrex::MFIter mfi(transport_scratch); mfi.isValid(); ++mfi) {
             const amrex::Box box = mfi.validbox();
             const auto source = evaluation.const_array(mfi);
-            const auto rho = rho_anchor_prepared.const_array(mfi);
+            const auto rho = transport_density.const_array(mfi);
             const auto scratch = transport_scratch.array(mfi);
             ParallelFor(box, layout.ncomp(), [=] AMREX_GPU_DEVICE (int i, int j, int k, int c) noexcept {
                 const Real density = rho(i,j,k);
@@ -2004,7 +1983,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
             const auto carrier_arr = carrier->const_array(mfi);
             const auto eval = two_moment ? transport_scratch.const_array(mfi) : evaluation.const_array(mfi);
             const auto physical = evaluation.const_array(mfi);
-            const auto rho = rho_anchor_prepared.const_array(mfi);
+            const auto rho = transport_density.const_array(mfi);
             const auto out = flux.array(mfi);
             const Real inverse_distance = geometry.InvCellSize(dir);
             const int domain_low = geometry.Domain().smallEnd(dir);
@@ -2619,6 +2598,33 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
 void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    const SBMLayout& layout,
                    const ::erf_auxiliary::StageContext& context,
+                   const amrex::MultiFab& rho_anchor,
+                   const amrex::MultiFab& rho_input,
+                   amrex::MultiFab& core_state,
+                   const amrex::MultiFab& carrier_x,
+                   const amrex::MultiFab& carrier_y,
+                   const amrex::MultiFab& carrier_z,
+                   const amrex::Geometry& geometry,
+                   ::erf_auxiliary::AuxiliaryFaceTransfer& stage_flux,
+                   const TransportMethod method,
+                   const int level,
+                   const amrex::Real diffusion_coefficient,
+                   const int chunk_size,
+                   amrex::Real* minimum_accepted_limiter,
+                   const TransportBoundaryPolicy& boundary_policy)
+{
+    // The legacy entry point did not distinguish the density used by the
+    // ERF boundary state.  Preserve its behavior while making the target
+    // density explicit in the production overload.
+    advance_stage(manager, layout, context, rho_anchor, rho_input, rho_input,
+                  core_state, carrier_x, carrier_y, carrier_z, geometry,
+                  stage_flux, method, level, diffusion_coefficient, chunk_size,
+                  minimum_accepted_limiter, boundary_policy);
+}
+
+void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
+                   const SBMLayout& layout,
+                   const ::erf_auxiliary::StageContext& context,
                    const amrex::MultiFab& rho_evaluation,
                    amrex::MultiFab& core_state,
                    const amrex::MultiFab& carrier_x,
@@ -2633,7 +2639,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    amrex::Real* minimum_accepted_limiter,
                    const TransportBoundaryPolicy& boundary_policy)
 {
-    advance_stage(manager, layout, context, rho_evaluation, rho_evaluation,
+    advance_stage(manager, layout, context, rho_evaluation, rho_evaluation, rho_evaluation,
                   core_state, carrier_x, carrier_y, carrier_z, geometry,
                   stage_flux, method, level, diffusion_coefficient, chunk_size,
                   minimum_accepted_limiter, boundary_policy);

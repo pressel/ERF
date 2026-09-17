@@ -74,6 +74,43 @@ amrex::Real sbm_max_change(const amrex::MultiFab& current,
     return maximum;
 }
 
+amrex::Real sbm_max_manufactured_ratio_error(const erf_sbm::SBMLayout& layout,
+                                              const amrex::MultiFab& spectral,
+                                              const amrex::MultiFab& density)
+{
+    const auto& population = layout.populations().front();
+    const int nbins = population.grid.nbins();
+    amrex::Real maximum = amrex::Real(0.0);
+    for (int comp = 0; comp < layout.ncomp(); ++comp) {
+        amrex::Real expected_ratio = amrex::Real(0.0);
+        if (comp >= population.mass_offset && comp < population.mass_offset + nbins) {
+            expected_ratio = amrex::Real(1.0e-6) *
+                amrex::Real(comp - population.mass_offset + 1);
+        } else if (population.number_offset >= 0 &&
+                   comp >= population.number_offset && comp < population.number_offset + nbins) {
+            const int bin = comp - population.number_offset;
+            expected_ratio = amrex::Real(1.0e-6) * amrex::Real(bin + 1) /
+                population.grid.pivot(bin);
+        } else {
+            continue;
+        }
+        amrex::MultiFab error(spectral.boxArray(), spectral.DistributionMap(), 1, 0);
+        for (amrex::MFIter mfi(error); mfi.isValid(); ++mfi) {
+            const auto result = error.array(mfi);
+            const auto state = spectral.const_array(mfi);
+            const auto rho = density.const_array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const amrex::Real cell_density = rho(i,j,k,0);
+                result(i,j,k) = cell_density > amrex::Real(0.0) ?
+                    amrex::Math::abs(state(i,j,k,comp) / cell_density - expected_ratio) :
+                    amrex::Real(0.0);
+            });
+        }
+        maximum = amrex::max(maximum, error.max(0));
+    }
+    return maximum;
+}
+
 std::size_t sbm_cell_bytes(const amrex::MultiFab& state)
 {
     return ::erf_auxiliary::allocated_payload_bytes(state);
@@ -350,6 +387,19 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     compact_projection_error = amrex::max(
         amrex::Math::abs(compact_final - spectral_cloud_final - spectral_rain_final),
         amrex::Math::abs(compact_initial - spectral_cloud_initial - spectral_rain_initial));
+    Real variable_density_ratio_error = Real(0.0);
+    if (solverChoice.sbm_manufactured_variable_density) {
+        for (int lev = 0; lev <= finest_level; ++lev) {
+            variable_density_ratio_error = amrex::max(
+                variable_density_ratio_error,
+                sbm_max_manufactured_ratio_error(
+                    *sbm_layout, sbm_auxiliary->output(lev),
+                    vars_new[lev][Vars::cons]));
+        }
+    }
+    const Real variable_density_ratio_tolerance =
+        solverChoice.sbm_manufactured_variable_density ?
+        Real(4096.0) * std::numeric_limits<Real>::epsilon() * Real(1.0e-6) : Real(0.0);
 
     std::vector<Real> component_scale(static_cast<std::size_t>(ncomp), Real(0.0));
     std::vector<Real> component_tolerance(static_cast<std::size_t>(ncomp), Real(0.0));
@@ -390,9 +440,10 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
             for (int comp = 0; comp < ncomp; ++comp) {
                 const auto index = static_cast<std::size_t>(comp);
                 const Real interface_scale = amrex::max(
-                    amrex::Math::abs(sbm_interface_coarse_transfer[index]),
-                    amrex::max(amrex::Math::abs(sbm_interface_fine_transfer[index]),
-                               amrex::Math::abs(sbm_interface_reflux_correction[index])));
+                    accepted_face_transfer_max,
+                    amrex::max(sbm_interface_coarse_scale[index],
+                               amrex::max(sbm_interface_fine_scale[index],
+                                          sbm_interface_reflux_scale[index])));
                 interface_passed = interface_passed &&
                     sbm_interface_oracle_error[index] <= interface_tolerance * interface_scale;
             }
@@ -408,10 +459,10 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     const bool passed = component_residuals_passed &&
                         compact_projection_error <= compact_tolerance &&
                         face_projection_error <= face_tolerance &&
-                        interface_passed;
+                        interface_passed &&
+                        variable_density_ratio_error <= variable_density_ratio_tolerance;
     const std::size_t temporary_bytes = ::erf_sbm::grouped_fct_peak_working_bytes(
         *sbm_layout, grids[0], dmap[0], solverChoice.sbm_chunk_size);
-
     if (ParallelDescriptor::IOProcessor()) {
         std::ofstream output(solverChoice.sbm_composite_diagnostic_file);
         if (!output) amrex::Error("unable to write SBM composite diagnostic: " +
@@ -441,6 +492,8 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                << "accepted_face_projection_tolerance=" << face_tolerance << '\n'
                << "compact_projection_error=" << compact_projection_error << '\n'
                << "accepted_face_projection_error=" << face_projection_error << '\n'
+               << "variable_density_ratio_error=" << variable_density_ratio_error << '\n'
+               << "variable_density_ratio_tolerance=" << variable_density_ratio_tolerance << '\n'
                << "accepted_face_transfer_l1=" << accepted_face_transfer_l1 << '\n'
                << "accepted_face_transfer_max=" << accepted_face_transfer_max << '\n'
                << "accepted_bulk_transfer_l1=" << accepted_bulk_transfer_l1 << '\n'
@@ -449,6 +502,8 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                << "interface_oracle_passed=" << (interface_passed ? 1 : 0) << '\n'
                << "interface_oracle_tolerance=" << interface_tolerance << '\n'
                << "minimum_accepted_limiter=" << sbm_minimum_accepted_limiter << '\n'
+               << "post_reflux_validation_count=" << sbm_post_reflux_validation_count << '\n'
+               << "post_reflux_material_rejection_count=" << sbm_post_reflux_material_rejection_count << '\n'
                << "active_limiter=" << ((sbm_minimum_accepted_limiter > Real(0.0) &&
                                           sbm_minimum_accepted_limiter < Real(1.0)) ? 1 : 0) << '\n'
                << "persistent_cell_state_bytes=" << sbm_auxiliary->state_resident_bytes() << '\n'
@@ -491,7 +546,12 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                        << "interface_reflux_correction_comp_" << comp << '=' <<
                            sbm_interface_reflux_correction[index] << '\n'
                        << "interface_oracle_error_comp_" << comp << '=' <<
-                           sbm_interface_oracle_error[index] << '\n';
+                           sbm_interface_oracle_error[index] << '\n'
+                       << "interface_scale_comp_" << comp << '=' <<
+                           amrex::max(accepted_face_transfer_max,
+                                      amrex::max(sbm_interface_coarse_scale[index],
+                                                 amrex::max(sbm_interface_fine_scale[index],
+                                                            sbm_interface_reflux_scale[index]))) << '\n';
             }
         }
         output << "accepted_bulk_transfer_sum_qc=" << accepted_bulk_transfer_sum[0] << '\n'
@@ -507,6 +567,7 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                 << ", compact_tolerance=" << compact_tolerance
                 << ", compact_projection_error=" << compact_projection_error
                 << ", accepted_face_projection_error=" << face_projection_error
+                << ", variable_density_ratio_error=" << variable_density_ratio_error
                 << ", interface_oracle_passed=" << (interface_passed ? 1 : 0);
         amrex::Error(message.str());
     }
@@ -538,6 +599,9 @@ void ERF::finish_sbm_reflux_oracle(const int lev)
         sbm_interface_coarse_transfer.assign(static_cast<std::size_t>(ncomp), Real(0.0));
         sbm_interface_fine_transfer.assign(static_cast<std::size_t>(ncomp), Real(0.0));
         sbm_interface_reflux_correction.assign(static_cast<std::size_t>(ncomp), Real(0.0));
+        sbm_interface_coarse_scale.assign(static_cast<std::size_t>(ncomp), Real(0.0));
+        sbm_interface_fine_scale.assign(static_cast<std::size_t>(ncomp), Real(0.0));
+        sbm_interface_reflux_scale.assign(static_cast<std::size_t>(ncomp), Real(0.0));
         sbm_interface_oracle_error.assign(static_cast<std::size_t>(ncomp), Real(0.0));
     }
 
@@ -641,12 +705,32 @@ void ERF::finish_sbm_reflux_oracle(const int lev)
         sbm_interface_coarse_transfer[static_cast<std::size_t>(comp)] += coarse_value;
         sbm_interface_fine_transfer[static_cast<std::size_t>(comp)] += fine_value;
         sbm_interface_reflux_correction[static_cast<std::size_t>(comp)] += actual_value;
+        sbm_interface_coarse_scale[static_cast<std::size_t>(comp)] = amrex::max(
+            sbm_interface_coarse_scale[static_cast<std::size_t>(comp)],
+            coarse_transfer.norm0(comp));
+        sbm_interface_fine_scale[static_cast<std::size_t>(comp)] = amrex::max(
+            sbm_interface_fine_scale[static_cast<std::size_t>(comp)],
+            fine_transfer.norm0(comp));
+        sbm_interface_reflux_scale[static_cast<std::size_t>(comp)] = amrex::max(
+            sbm_interface_reflux_scale[static_cast<std::size_t>(comp)],
+            actual_correction.norm0(comp));
         sbm_interface_oracle_error[static_cast<std::size_t>(comp)] = amrex::max(
             sbm_interface_oracle_error[static_cast<std::size_t>(comp)], error);
     }
     sbm_interface_oracle_available = true;
     sbm_reflux_pre_state.reset();
     sbm_reflux_level = -1;
+}
+
+void ERF::validate_sbm_post_reflux(const int lev)
+{
+    ++sbm_post_reflux_validation_count;
+    try {
+        ::erf_sbm::validate_admissible_state(*sbm_auxiliary, *sbm_layout, lev);
+    } catch (...) {
+        ++sbm_post_reflux_material_rejection_count;
+        throw;
+    }
 }
 
 void ERF::synchronize_sbm_level_companions(const int lev,
@@ -701,8 +785,13 @@ void ERF::initialize_sbm_auxiliary(const int lev)
         sbm_interface_coarse_transfer.clear();
         sbm_interface_fine_transfer.clear();
         sbm_interface_reflux_correction.clear();
+        sbm_interface_coarse_scale.clear();
+        sbm_interface_fine_scale.clear();
+        sbm_interface_reflux_scale.clear();
         sbm_interface_oracle_error.clear();
         sbm_interface_oracle_available = false;
+        sbm_post_reflux_validation_count = 0;
+        sbm_post_reflux_material_rejection_count = 0;
     }
     if (!sbm_auxiliary) {
         sbm_auxiliary = std::make_unique<::erf_auxiliary::AuxiliaryStateManager>(sbm_layout->auxiliary_layout());
@@ -730,6 +819,34 @@ void ERF::initialize_sbm_auxiliary(const int lev)
     const auto& population = projection.populations().front();
     const int nbins = population.grid.nbins();
     const int offset = population.mass_offset;
+
+    // The variable-density qualification fixture uses the host's actual dry
+    // density state as the carrier throughout regrid and transport.  Its
+    // divergence-free manufactured carrier keeps that field stationary in
+    // both host temporal contracts.  This is a manufactured P2 test field,
+    // not a new thermodynamic or P3 process.
+    if (lev == 0 && solverChoice.sbm_manufactured_variable_density) {
+        auto& core_old = vars_old[lev][Vars::cons];
+        const Real xlo = geom[lev].ProbLo(0);
+        const Real xlen = geom[lev].ProbHi(0) - xlo;
+        const Real dx = geom[lev].CellSize(0);
+        for (MFIter mfi(core); mfi.isValid(); ++mfi) {
+            const Box box = mfi.validbox();
+            const auto state = core.array(mfi);
+            const auto old_state = core_old.array(mfi);
+            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const Real x = xlo + (Real(i) + Real(0.5)) * dx;
+                const Real rho = Real(1.0) + Real(0.15) *
+                    std::sin(Real(6.2831853071795864769) * (x - xlo) / xlen);
+                state(i,j,k,Rho_comp) = rho;
+                old_state(i,j,k,Rho_comp) = rho;
+                state(i,j,k,RhoTheta_comp) = rho * Real(300.0);
+                old_state(i,j,k,RhoTheta_comp) = rho * Real(300.0);
+            });
+        }
+        core.FillBoundary(geom[lev].periodicity());
+        core_old.FillBoundary(geom[lev].periodicity());
+    }
 
     // The manufactured regression supplies a nonzero ERF carrier field while
     // production inputs retain the ordinary initialized velocity/momentum.
@@ -784,7 +901,8 @@ void ERF::initialize_sbm_auxiliary(const int lev)
                 // constrained instead of being hidden by a large inflow.
                 const bool active_cell = solverChoice.sbm_test_active_limiter &&
                     (i % 16 == 7);
-                const Real variation = solverChoice.sbm_test_active_limiter ?
+                const Real variation = solverChoice.sbm_manufactured_variable_density ? Real(1.0) :
+                    solverChoice.sbm_test_active_limiter ?
                     (active_cell ? Real(0.001) : Real(1.999)) :
                     Real(1.0) + Real(0.25) *
                     std::sin(Real(6.2831853071795864769) * (x - xlo) / xlen);
@@ -890,11 +1008,52 @@ void ERF::advance_sbm_stage(const int lev,
     // A fine-level WENO stencil must see the coarse spectrum at the actual
     // stage time.  The manager owns the coarse old/output bracket produced by
     // the completed coarse step and performs the temporal FillPatch before
-    // this level constructs any face flux.
-    if (lev > 0 && solverChoice.sbm_transport_method == "GroupedFCT_WENOZ3") {
+    // this level constructs any face flux.  Old and Evaluation are distinct
+    // source views: prepare each one at the time consumed by this stage,
+    // rather than using the manager's last evaluation timestamp for both.
+    if (lev > 0) {
+        const ::erf_sbm::SBMBulkProjection bulk_projection(*sbm_layout);
+        auto project_prepared_view = [&](const amrex::MultiFab& auxiliary,
+                                         amrex::MultiFab& core) {
+            const IntVect auxiliary_ng = auxiliary.nGrowVect();
+            const IntVect core_ng = core.nGrowVect();
+            for (MFIter mfi(auxiliary); mfi.isValid(); ++mfi) {
+                Box projection_box = mfi.validbox();
+                for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                    projection_box.grow(dir, std::min(auxiliary_ng[dir], core_ng[dir]));
+                }
+                bulk_projection.apply_to_core(projection_box,
+                                               auxiliary.const_array(mfi), core.array(mfi));
+            }
+            Gpu::streamSynchronize();
+        };
+        MultiFab coarse_rho_old(vars_old[lev-1][Vars::cons], make_alias, Rho_comp, 2);
+        MultiFab coarse_rho_output(vars_new[lev-1][Vars::cons], make_alias, Rho_comp, 2);
+        MultiFab fine_rho_old(state_old[IntVars::cons], make_alias, Rho_comp, 2);
         sbm_auxiliary->fill_stage_from_coarse(lev-1, lev,
-                                              sbm_auxiliary->evaluation_time(lev),
-                                              geom[lev-1], geom[lev], refRatio(lev-1));
+                                              old_step_time,
+                                              geom[lev-1], geom[lev], refRatio(lev-1),
+                                              ::erf_auxiliary::AuxiliaryTimeView::Old,
+                                              &coarse_rho_old, &coarse_rho_output,
+                                              &fine_rho_old);
+        // The compact host view is a cache of the provider state.  Publish
+        // the projection over the same valid+ghost region immediately after
+        // its spectral Old FillPatch transaction, before any host consumer can
+        // read a stale compact ghost.
+        project_prepared_view(sbm_auxiliary->old(lev), state_old[IntVars::cons]);
+        // Compressible stage 1/2 and anelastic stage 1 read the evaluation
+        // view.  Stage 0 reads only Old, so there is no synthetic evaluation
+        // fill that could obscure a stale-view bug.
+        if (stage > 0) {
+            MultiFab fine_rho_evaluation(state_eval[IntVars::cons], make_alias, Rho_comp, 2);
+            sbm_auxiliary->fill_stage_from_coarse(lev-1, lev,
+                                                  old_stage_time,
+                                                  geom[lev-1], geom[lev], refRatio(lev-1),
+                                                  ::erf_auxiliary::AuxiliaryTimeView::Evaluation,
+                                                  &coarse_rho_old, &coarse_rho_output,
+                                                  &fine_rho_evaluation);
+            project_prepared_view(sbm_auxiliary->evaluation(lev), state_eval[IntVars::cons]);
+        }
     }
 
     // avg_*mom are ERF's actual dry-air carrier mass flux fields.  The
@@ -918,6 +1077,16 @@ void ERF::advance_sbm_stage(const int lev,
                     velocity : Real(0.0);
             });
         }
+    }
+    if (solverChoice.sbm_manufactured_variable_density) {
+        // Keep the variable-density qualification carrier synchronized with
+        // the manufactured host state at the final production hand-off.  A
+        // uniform mass flux is divergence-free on the periodic fixture, so
+        // the host target density remains the same variable field while the
+        // provider exercises its density-weighted transfer.
+        avg_xmom[lev].setVal(solverChoice.sbm_manufactured_velocity);
+        avg_ymom[lev].setVal(Real(0.0));
+        avg_zmom[lev].setVal(Real(0.0));
     }
     Real stage_minimum_limiter = Real(1.0);
     ::erf_sbm::TransportBoundaryPolicy boundary_policy;
@@ -946,8 +1115,9 @@ void ERF::advance_sbm_stage(const int lev,
     }
     MultiFab rho_anchor(state_old[IntVars::cons], make_alias, Rho_comp, 1);
     MultiFab rho_input(state_eval[IntVars::cons], make_alias, Rho_comp, 1);
+    MultiFab rho_target(state_new[IntVars::cons], make_alias, Rho_comp, 1);
     ::erf_sbm::advance_stage(*sbm_auxiliary, *sbm_layout, context,
-                            rho_anchor, rho_input, state_new[IntVars::cons],
+                            rho_anchor, rho_input, rho_target, state_new[IntVars::cons],
                             avg_xmom[lev], avg_ymom[lev], avg_zmom[lev], geom[lev],
                             sbm_auxiliary->face_transfer_ledger(lev).stage(),
                             solverChoice.sbm_transport_method == "GroupedFCT_WENOZ3" ?

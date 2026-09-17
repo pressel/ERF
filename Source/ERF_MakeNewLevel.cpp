@@ -510,25 +510,26 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
     // spectrum and are not used as a reconstruction source.
     if (solverChoice.moisture_type == MoistureType::SBM && sbm_auxiliary != nullptr &&
         sbm_auxiliary->has_level(lev-1) && sbm_auxiliary->has_level(lev)) {
-        sbm_auxiliary->prolong_from_coarse(lev-1, lev, geom[lev-1], geom[lev], refRatio(lev-1), time);
+        MultiFab coarse_rho_old(vars_old[lev-1][Vars::cons], make_alias, Rho_comp, 2);
+        MultiFab coarse_rho_output(vars_new[lev-1][Vars::cons], make_alias, Rho_comp, 2);
+        MultiFab fine_rho_target(vars_new[lev][Vars::cons], make_alias, Rho_comp, 2);
+        sbm_auxiliary->prolong_from_coarse(
+            lev-1, lev, geom[lev-1], geom[lev], refRatio(lev-1), time,
+            &coarse_rho_old, &coarse_rho_output, &fine_rho_target);
         const auto& aux = sbm_auxiliary->output(lev);
+        const ::erf_sbm::SBMBulkProjection projection(*sbm_layout);
+        const IntVect aux_ng = aux.nGrowVect();
+        const IntVect core_ng = vars_new[lev][Vars::cons].nGrowVect();
         for (MFIter mfi(aux); mfi.isValid(); ++mfi) {
-            const Box box = mfi.validbox();
+            Box box = mfi.validbox();
+            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                box.grow(dir, std::min(aux_ng[dir], core_ng[dir]));
+            }
             const auto aux_arr = aux.const_array(mfi);
-            auto core_arr = vars_new[lev][Vars::cons].array(mfi);
-            const auto& projection = sbm_layout->liquid_projection();
-            const auto& population = sbm_layout->populations().front();
-            const int split = projection.cloud_rain_split;
-            const int first = population.mass_offset;
-            const int nbins = population.grid.nbins();
-            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                Real qc = Real(0.0), qr = Real(0.0);
-                for (int b = 0; b < split; ++b) qc += aux_arr(i,j,k,first+b);
-                for (int b = split; b < nbins; ++b) qr += aux_arr(i,j,k,first+b);
-                core_arr(i,j,k,RhoQ2_comp) = qc;
-                core_arr(i,j,k,RhoQ3_comp) = qr;
-            });
+            projection.apply_to_core(box, aux_arr,
+                                     vars_new[lev][Vars::cons].array(mfi));
         }
+        Gpu::streamSynchronize();
         vars_new[lev][Vars::cons].FillBoundary(geom[lev].periodicity());
     }
 
@@ -1102,17 +1103,27 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
         const int sbm_scratch_components = solverChoice.sbm_transport_method == "GroupedFCT_WENOZ3" ?
             0 : sbm_layout->ncomp();
         if (lev > 0 && sbm_auxiliary->has_level(lev-1)) {
+            MultiFab coarse_rho_old(vars_old[lev-1][Vars::cons], make_alias, Rho_comp, 2);
+            MultiFab coarse_rho_output(vars_new[lev-1][Vars::cons], make_alias, Rho_comp, 2);
+            MultiFab fine_rho_target(vars_new[lev][Vars::cons], make_alias, Rho_comp, 2);
             sbm_auxiliary->remake_level_from_coarse(
                 lev, grids[lev], dmap[lev], 2, geom[lev].periodicity(), lev-1,
-                geom[lev-1], geom[lev], refRatio(lev-1), time, sbm_scratch_components);
+                geom[lev-1], geom[lev], refRatio(lev-1), time, sbm_scratch_components,
+                &coarse_rho_old, &coarse_rho_output, &fine_rho_target);
         } else {
             sbm_auxiliary->remake_level(lev, grids[lev], dmap[lev], 2,
                                         geom[lev].periodicity(), sbm_scratch_components);
         }
         ::erf_sbm::validate_admissible_state(*sbm_auxiliary, *sbm_layout, lev);
         const ::erf_sbm::SBMBulkProjection projection(*sbm_layout);
+        const IntVect aux_ng = sbm_auxiliary->output(lev).nGrowVect();
+        const IntVect core_ng = vars_new[lev][Vars::cons].nGrowVect();
         for (MFIter mfi(sbm_auxiliary->output(lev)); mfi.isValid(); ++mfi) {
-            projection.apply_to_core(mfi.validbox(), sbm_auxiliary->output(lev).const_array(mfi),
+            Box projection_box = mfi.validbox();
+            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                projection_box.grow(dir, std::min(aux_ng[dir], core_ng[dir]));
+            }
+            projection.apply_to_core(projection_box, sbm_auxiliary->output(lev).const_array(mfi),
                                      vars_new[lev][Vars::cons].array(mfi));
         }
         vars_new[lev][Vars::cons].FillBoundary(geom[lev].periodicity());

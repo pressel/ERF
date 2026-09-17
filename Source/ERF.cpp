@@ -448,10 +448,16 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
                 sbm_flux_reg[lev+1]->Reflux(sbm_auxiliary->output(lev), 0);
                 Gpu::streamSynchronize();
                 finish_sbm_reflux_oracle(lev);
-                ::erf_sbm::validate_admissible_state(*sbm_auxiliary, *sbm_layout, lev);
+                validate_sbm_post_reflux(lev);
                 const ::erf_sbm::SBMBulkProjection projection(*sbm_layout);
+                const IntVect aux_ng = sbm_auxiliary->output(lev).nGrowVect();
+                const IntVect core_ng = vars_new[lev][Vars::cons].nGrowVect();
                 for (MFIter mfi(sbm_auxiliary->output(lev)); mfi.isValid(); ++mfi) {
-                    projection.apply_to_core(mfi.validbox(),
+                    Box projection_box = mfi.validbox();
+                    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                        projection_box.grow(dir, std::min(aux_ng[dir], core_ng[dir]));
+                    }
+                    projection.apply_to_core(projection_box,
                                              sbm_auxiliary->output(lev).const_array(mfi),
                                              vars_new[lev][Vars::cons].array(mfi));
                 }
@@ -473,10 +479,16 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
                 sbm_auxiliary != nullptr && sbm_auxiliary->has_level(lev) &&
                 sbm_auxiliary->has_level(lev+1)) {
                 sbm_auxiliary->average_down_to(lev, lev+1, refRatio(lev));
-                ::erf_sbm::validate_admissible_state(*sbm_auxiliary, *sbm_layout, lev);
+                validate_sbm_post_reflux(lev);
                 const ::erf_sbm::SBMBulkProjection projection(*sbm_layout);
+                const IntVect aux_ng = sbm_auxiliary->output(lev).nGrowVect();
+                const IntVect core_ng = vars_new[lev][Vars::cons].nGrowVect();
                 for (MFIter mfi(sbm_auxiliary->output(lev)); mfi.isValid(); ++mfi) {
-                    projection.apply_to_core(mfi.validbox(),
+                    Box projection_box = mfi.validbox();
+                    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                        projection_box.grow(dir, std::min(aux_ng[dir], core_ng[dir]));
+                    }
+                    projection.apply_to_core(projection_box,
                                              sbm_auxiliary->output(lev).const_array(mfi),
                                              vars_new[lev][Vars::cons].array(mfi));
                 }
@@ -684,7 +696,7 @@ ERF::InitData_pre ()
         init_bcs();
     }
 
-    solverChoice.check_params(max_level,geom,phys_bc_type);
+    solverChoice.check_params(max_level, geom, phys_bc_type, ref_ratio, nsubsteps);
 }
 
 void

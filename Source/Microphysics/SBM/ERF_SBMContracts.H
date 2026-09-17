@@ -3,6 +3,8 @@
 
 #include "ERF_SBMLayout.H"
 
+#include <AMReX_IntVect.H>
+
 #include <string>
 #include <vector>
 
@@ -10,6 +12,11 @@ namespace erf_sbm {
 
 struct CapabilityInput {
     int max_level{0};
+    amrex::IntVect spatial_ref_ratio{amrex::IntVect(1)};
+    int time_refinement_factor{1};
+    // AMR/coupling fields default to unresolved/unsupported.  Production
+    // ERF fills them from the configured hierarchy before evaluating P2.
+    bool two_way_coupling{false};
     bool diffusion{false};
     bool implicit_moisture_diffusion{false};
     bool shoc_or_macrophysics{false};
@@ -32,8 +39,8 @@ struct CapabilityInput {
     bool impermeable_wall{false};
     bool advective_outflow{false};
     bool prescribed_sbm_inflow{false};
-    bool periodic_amr{true};
-    bool native_subcycling{true};
+    bool periodic_amr{false};
+    bool native_subcycling{false};
     bool amr_nonperiodic{false};
     bool tensor_diffusion{false};
     bool double_precision{true};
@@ -44,6 +51,10 @@ struct CapabilityInput {
 
 struct CapabilityReport {
     bool supported{false};
+    int max_level{0};
+    amrex::IntVect spatial_ref_ratio{amrex::IntVect(1)};
+    int time_refinement_factor{1};
+    bool two_way_coupling{false};
     // `flags` is retained as the implementation inventory for source and
     // restart compatibility.  Qualification is intentionally reported
     // separately: an implemented path must not be presented as qualified
@@ -59,6 +70,15 @@ struct CapabilityReport {
 
 CapabilityReport evaluate_p1_capabilities(const CapabilityInput& input);
 CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input);
+
+/**
+ * Conservative host timestep bound for the explicit SBM donor/diffusion
+ * contract.  The two nonnegative rates are combined before applying the
+ * common 1/2 safety factor; zero transport returns infinity and therefore
+ * does not manufacture a timestep restriction.
+ */
+[[nodiscard]] double admissible_host_timestep(double advective_rate,
+                                              double diffusive_rate);
 
 /** Validate a runtime bin count before it can reach a vector resize. */
 [[nodiscard]] std::string validate_runtime_bin_count(int nbins);

@@ -3,6 +3,8 @@
 #include <AMReX_FillPatchUtil.H>
 #include <AMReX_Interpolater.H>
 #include <AMReX_MultiFabUtil.H>
+#include <AMReX_ParReduce.H>
+#include <AMReX_ParallelDescriptor.H>
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +12,138 @@
 #include <stdexcept>
 
 namespace erf_auxiliary {
+
+namespace {
+
+void validate_carrier_density(const amrex::MultiFab& density,
+                              const amrex::IntVect& nghost,
+                              const char* context)
+{
+    if (density.nComp() < 1) {
+        throw std::invalid_argument(std::string(context) + " has no carrier component");
+    }
+    const auto& arrays = density.const_arrays();
+    const auto local = amrex::ParReduce(
+        amrex::TypeList<amrex::ReduceOpLogicalOr>{},
+        amrex::TypeList<int>{}, density, nghost, 1,
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int) {
+            const amrex::Real value = arrays[box_no](i,j,k,0);
+            return (amrex::isnan(value) || amrex::isinf(value) ||
+                    value <= amrex::Real(0.0)) ? 1 : 0;
+        });
+    int invalid = local;
+    amrex::ParallelDescriptor::ReduceIntMax(invalid);
+    if (invalid != 0) {
+        throw std::domain_error(std::string(context) +
+                                " must be finite and strictly positive wherever transferred");
+    }
+}
+
+std::unique_ptr<amrex::MultiFab> temporal_view(
+    const amrex::MultiFab& old_state, const amrex::MultiFab& output_state,
+    const double old_time, const double output_time, const double time,
+    const amrex::Geometry& geometry, const int ncomp)
+{
+    auto result = std::make_unique<amrex::MultiFab>(
+        old_state.boxArray(), old_state.DistributionMap(), ncomp,
+        old_state.nGrowVect());
+    const double scale = 1.0 + std::max(std::abs(old_time), std::abs(output_time));
+    const double tolerance = 128.0 * std::numeric_limits<double>::epsilon() * scale;
+    const double denominator = output_time - old_time;
+    if (std::abs(denominator) <= tolerance) {
+        amrex::MultiFab::Copy(*result, output_state, 0, 0, ncomp, output_state.nGrowVect());
+    } else {
+        const amrex::Real theta = static_cast<amrex::Real>((time - old_time) / denominator);
+        amrex::MultiFab::LinComb(*result, amrex::Real(1.0) - theta, old_state, 0,
+                                 theta, output_state, 0, 0, ncomp, old_state.nGrowVect());
+    }
+    result->FillBoundary(geometry.periodicity());
+    return result;
+}
+
+void carrier_weighted_fill(
+    amrex::MultiFab& target, const amrex::MultiFab& coarse_ratio,
+    const amrex::Geometry& coarse_geometry, const amrex::Geometry& fine_geometry,
+    const amrex::IntVect& ref_ratio, const amrex::MultiFab& fine_density,
+    const amrex::Periodicity& fine_periodicity, const int ncomp,
+    const bool fill_valid_cells)
+{
+    bool insufficient_ghosts = false;
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        insufficient_ghosts = insufficient_ghosts ||
+            fine_density.nGrowVect()[dir] < target.nGrowVect()[dir];
+    }
+    if (fine_density.boxArray() != target.boxArray() ||
+        fine_density.DistributionMap() != target.DistributionMap() || insufficient_ghosts) {
+        throw std::invalid_argument(
+            "carrier-weighted auxiliary transfer requires a target-aligned density with sufficient ghosts");
+    }
+    validate_carrier_density(fine_density, target.nGrowVect(), "fine carrier density");
+    amrex::MultiFab fine_ratio(target.boxArray(), target.DistributionMap(), ncomp,
+                               target.nGrowVect());
+    fine_ratio.setVal(amrex::Real(0.0));
+    amrex::Vector<amrex::BCRec> bcs(static_cast<std::size_t>(ncomp));
+    amrex::InterpFromCoarseLevel(fine_ratio, fine_ratio.nGrowVect(), amrex::IntVect(0),
+                                 coarse_ratio, 0, 0, ncomp, coarse_geometry,
+                                 fine_geometry, ref_ratio, &amrex::pc_interp, bcs, 0);
+    fine_ratio.FillBoundary(fine_periodicity);
+    for (amrex::MFIter mfi(target); mfi.isValid(); ++mfi) {
+        const amrex::Box valid_box = mfi.validbox();
+        const amrex::Box box = fill_valid_cells
+            ? mfi.fabbox()
+            : amrex::grow(valid_box, target.nGrowVect());
+        const auto ratio = fine_ratio.const_array(mfi);
+        const auto rho = fine_density.const_array(mfi);
+        const auto out = target.array(mfi);
+        amrex::ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k, int comp) noexcept {
+                if (!fill_valid_cells && valid_box.contains(i, j, k)) return;
+                out(i,j,k,comp) = ratio(i,j,k,comp) * rho(i,j,k);
+            });
+    }
+    // A stage FillPatch updates only the target ghost region.  A subsequent
+    // same-level FillBoundary would copy the still-authoritative fine valid
+    // cells back over those newly prepared coarse/fine interface values.
+    if (fill_valid_cells) target.FillBoundary(fine_periodicity);
+}
+
+std::unique_ptr<amrex::MultiFab> make_carrier_ratio(
+    const amrex::MultiFab& extensive, const amrex::MultiFab& density,
+    const amrex::Periodicity& periodicity, const int ncomp)
+{
+    bool insufficient_ghosts = false;
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        insufficient_ghosts = insufficient_ghosts ||
+            density.nGrowVect()[dir] < extensive.nGrowVect()[dir];
+    }
+    if (density.boxArray() != extensive.boxArray() ||
+        density.DistributionMap() != extensive.DistributionMap() || insufficient_ghosts) {
+        throw std::invalid_argument(
+            "carrier-weighted auxiliary transfer requires an extensive-state-aligned density");
+    }
+    validate_carrier_density(density, extensive.nGrowVect(), "coarse carrier density");
+    auto ratio = std::make_unique<amrex::MultiFab>(
+        extensive.boxArray(), extensive.DistributionMap(), ncomp,
+        extensive.nGrowVect());
+    ratio->setVal(amrex::Real(0.0));
+    for (amrex::MFIter mfi(*ratio); mfi.isValid(); ++mfi) {
+        const amrex::Box box = mfi.fabbox();
+        const auto source = extensive.const_array(mfi);
+        const auto rho = density.const_array(mfi);
+        const auto out = ratio->array(mfi);
+        amrex::ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k, int comp) noexcept {
+                const amrex::Real carrier = rho(i,j,k);
+                out(i,j,k,comp) = carrier > amrex::Real(0.0) ?
+                    source(i,j,k,comp) / carrier :
+                    std::numeric_limits<amrex::Real>::quiet_NaN();
+            });
+    }
+    ratio->FillBoundary(periodicity);
+    return ratio;
+}
+
+} // namespace
 
 void AuxiliaryStateManager::define_level(const int level,
                                          const amrex::BoxArray& ba,
@@ -116,7 +250,10 @@ void AuxiliaryStateManager::remake_level_from_coarse(
     const int level, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm,
     const int ngrow, const amrex::Periodicity& periodicity, const int coarse_level,
     const amrex::Geometry& coarse_geometry, const amrex::Geometry& fine_geometry,
-    const amrex::IntVect& ref_ratio, const double time, const int scratch_ncomp)
+    const amrex::IntVect& ref_ratio, const double time, const int scratch_ncomp,
+    const amrex::MultiFab* coarse_rho_old,
+    const amrex::MultiFab* coarse_rho_output,
+    const amrex::MultiFab* fine_rho_target)
 {
     if (!has_level(coarse_level) || level <= coarse_level || ref_ratio.min() <= 0 ||
         !coarse_geometry.isAllPeriodic() || !fine_geometry.isAllPeriodic()) {
@@ -170,10 +307,21 @@ void AuxiliaryStateManager::remake_level_from_coarse(
         return interpolated;
     };
     auto fill_from_coarse = [&](amrex::MultiFab& fine, const amrex::MultiFab& coarse) {
-        amrex::InterpFromCoarseLevel(fine, fine.nGrowVect(), amrex::IntVect(0), coarse,
-                                     0, 0, m_layout.ncomp(), coarse_geometry, fine_geometry,
-                                     ref_ratio, &amrex::pc_interp, bcs, 0);
-        fine.FillBoundary(periodicity);
+        if (coarse_rho_old == nullptr || coarse_rho_output == nullptr || fine_rho_target == nullptr) {
+            amrex::InterpFromCoarseLevel(fine, fine.nGrowVect(), amrex::IntVect(0), coarse,
+                                         0, 0, m_layout.ncomp(), coarse_geometry, fine_geometry,
+                                         ref_ratio, &amrex::pc_interp, bcs, 0);
+            fine.FillBoundary(periodicity);
+            return;
+        }
+        const auto coarse_rho = temporal_view(*coarse_rho_old, *coarse_rho_output,
+                                              coarse_old_time, coarse_new_time, time,
+                                              coarse_geometry, 1);
+        const auto coarse_ratio = make_carrier_ratio(coarse, *coarse_rho,
+                                                     coarse_geometry.periodicity(),
+                                                     m_layout.ncomp());
+        carrier_weighted_fill(fine, *coarse_ratio, coarse_geometry, fine_geometry,
+                              ref_ratio, *fine_rho_target, periodicity, m_layout.ncomp(), true);
     };
 
     // New coverage is created at one regrid time, so every newly introduced
@@ -250,7 +398,10 @@ void AuxiliaryStateManager::prolong_from_coarse(const int coarse_level, const in
                                                 const amrex::Geometry& coarse_geometry,
                                                 const amrex::Geometry& fine_geometry,
                                                 const amrex::IntVect& ref_ratio,
-                                                const double requested_time)
+                                                const double requested_time,
+                                                const amrex::MultiFab* coarse_rho_old,
+                                                const amrex::MultiFab* coarse_rho_output,
+                                                const amrex::MultiFab* fine_rho_target)
 {
     if (!has_level(coarse_level) || !has_level(fine_level) || coarse_level >= fine_level ||
         ref_ratio.min() <= 0) {
@@ -282,12 +433,29 @@ void AuxiliaryStateManager::prolong_from_coarse(const int coarse_level, const in
     }
     coarse_state->FillBoundary(coarse_geometry.periodicity());
     amrex::Vector<amrex::BCRec> bcs(static_cast<std::size_t>(m_layout.ncomp()));
+    std::unique_ptr<amrex::MultiFab> coarse_ratio;
+    if (coarse_rho_old != nullptr || coarse_rho_output != nullptr || fine_rho_target != nullptr) {
+        if (coarse_rho_old == nullptr || coarse_rho_output == nullptr || fine_rho_target == nullptr) {
+            throw std::invalid_argument("carrier-weighted auxiliary prolongation requires all density views");
+        }
+        const auto coarse_rho = temporal_view(*coarse_rho_old, *coarse_rho_output,
+                                              coarse_old_time, coarse_new_time, time,
+                                              coarse_geometry, 1);
+        coarse_ratio = make_carrier_ratio(*coarse_state, *coarse_rho,
+                                          coarse_geometry.periodicity(), m_layout.ncomp());
+    }
     auto prolong = [this, &coarse_geometry, &fine_geometry, &ref_ratio, &bcs,
-                    &coarse_state](amrex::MultiFab& fine) {
-        amrex::InterpFromCoarseLevel(fine, fine.nGrowVect(), amrex::IntVect(0), *coarse_state,
-                                     0, 0, m_layout.ncomp(), coarse_geometry, fine_geometry,
-                                     ref_ratio, &amrex::pc_interp, bcs, 0);
-        fine.FillBoundary(fine_geometry.periodicity());
+                    &coarse_state, &coarse_ratio, fine_rho_target](amrex::MultiFab& fine) {
+        if (coarse_ratio) {
+            carrier_weighted_fill(fine, *coarse_ratio, coarse_geometry, fine_geometry,
+                                  ref_ratio, *fine_rho_target,
+                                  fine_geometry.periodicity(), m_layout.ncomp(), true);
+        } else {
+            amrex::InterpFromCoarseLevel(fine, fine.nGrowVect(), amrex::IntVect(0), *coarse_state,
+                                         0, 0, m_layout.ncomp(), coarse_geometry, fine_geometry,
+                                         ref_ratio, &amrex::pc_interp, bcs, 0);
+            fine.FillBoundary(fine_geometry.periodicity());
+        }
     };
     prolong(output(fine_level));
     prolong(old(fine_level));
@@ -310,7 +478,10 @@ void AuxiliaryStateManager::fill_stage_from_coarse(
 void AuxiliaryStateManager::fill_stage_from_coarse(
     const int coarse_level, const int fine_level, const double time,
     const amrex::Geometry& coarse_geometry, const amrex::Geometry& fine_geometry,
-    const amrex::IntVect& ref_ratio, const AuxiliaryTimeView target_view)
+    const amrex::IntVect& ref_ratio, const AuxiliaryTimeView target_view,
+    const amrex::MultiFab* coarse_rho_old,
+    const amrex::MultiFab* coarse_rho_output,
+    const amrex::MultiFab* fine_rho_target)
 {
     if (!has_level(coarse_level) || !has_level(fine_level) || coarse_level >= fine_level ||
         ref_ratio.min() <= 0 || !coarse_geometry.isAllPeriodic() || !fine_geometry.isAllPeriodic()) {
@@ -327,6 +498,25 @@ void AuxiliaryStateManager::fill_stage_from_coarse(
     output(coarse_level).FillBoundary(coarse_geometry.periodicity());
     auto& target = target_view == AuxiliaryTimeView::Old ? old(fine_level) : evaluation(fine_level);
     target.FillBoundary(fine_geometry.periodicity());
+    const bool carrier_weighted = coarse_rho_old != nullptr || coarse_rho_output != nullptr ||
+        fine_rho_target != nullptr;
+    if (carrier_weighted) {
+        if (coarse_rho_old == nullptr || coarse_rho_output == nullptr || fine_rho_target == nullptr) {
+            throw std::invalid_argument("carrier-weighted auxiliary stage fill requires all density views");
+        }
+        const auto coarse_state = temporal_view(old(coarse_level), output(coarse_level),
+                                                coarse_old_time, coarse_new_time, time,
+                                                coarse_geometry, m_layout.ncomp());
+        const auto coarse_rho = temporal_view(*coarse_rho_old, *coarse_rho_output,
+                                              coarse_old_time, coarse_new_time, time,
+                                              coarse_geometry, 1);
+        const auto coarse_ratio = make_carrier_ratio(*coarse_state, *coarse_rho,
+                                                     coarse_geometry.periodicity(), m_layout.ncomp());
+        carrier_weighted_fill(target, *coarse_ratio, coarse_geometry, fine_geometry,
+                              ref_ratio, *fine_rho_target,
+                              fine_geometry.periodicity(), m_layout.ncomp(), false);
+        return;
+    }
     amrex::Vector<amrex::MultiFab*> coarse_states{&old(coarse_level), &output(coarse_level)};
     amrex::Vector<amrex::Real> coarse_times{static_cast<amrex::Real>(coarse_old_time),
                                             static_cast<amrex::Real>(coarse_new_time)};

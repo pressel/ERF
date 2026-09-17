@@ -434,6 +434,7 @@ public:
                             double full_step);
     void begin_sbm_reflux_oracle (int lev);
     void finish_sbm_reflux_oracle (int lev);
+    void validate_sbm_post_reflux (int lev);
     void write_sbm_composite_diagnostic (int nstep, double time, double dt_lev0);
 
     // Restart
@@ -1045,6 +1046,11 @@ private:
     // a wrapper for estTimeStep()
     void ComputeDt (int step = -1, double cur_time_d = 0.0);
 
+    // Host-selected stability bound for the explicit SBM transport contract.
+    // The bound is derived from the active ERF state and does not inspect SBM
+    // bins, so it remains O(cells/faces) for runtime-sized spectra.
+    [[nodiscard]] double sbm_admissible_timestep (int level) const;
+
     // get plotfile name
     [[nodiscard]] std::string PlotFileName (int lev) const;
 
@@ -1192,8 +1198,13 @@ private:
     amrex::Vector<amrex::Real> sbm_interface_coarse_transfer;
     amrex::Vector<amrex::Real> sbm_interface_fine_transfer;
     amrex::Vector<amrex::Real> sbm_interface_reflux_correction;
+    amrex::Vector<amrex::Real> sbm_interface_coarse_scale;
+    amrex::Vector<amrex::Real> sbm_interface_fine_scale;
+    amrex::Vector<amrex::Real> sbm_interface_reflux_scale;
     amrex::Vector<amrex::Real> sbm_interface_oracle_error;
     bool sbm_interface_oracle_available{false};
+    int sbm_post_reflux_validation_count{0};
+    int sbm_post_reflux_material_rejection_count{0};
 
     // Used for anelastic or when we impose an initial projection
     amrex::Vector<amrex::MultiFab> pp_inc;

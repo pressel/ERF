@@ -730,6 +730,7 @@ struct SolverChoice {
             }
             pp.queryAdd("sbm_manufactured_initialization", sbm_manufactured_initialization);
             pp.queryAdd("sbm_manufactured_velocity", sbm_manufactured_velocity);
+            pp.queryAdd("sbm_manufactured_variable_density", sbm_manufactured_variable_density);
             pp.queryAdd("sbm_diagnostic_file", sbm_diagnostic_file);
             pp.queryAdd("sbm_composite_diagnostic_file", sbm_composite_diagnostic_file);
             pp.queryAdd("sbm_test_dynamic_regrid", sbm_test_dynamic_regrid);
@@ -1672,13 +1673,23 @@ struct SolverChoice {
      * @param geom_vect Geometry for each AMR level.
      * @param phys_bc_type Physical boundary-condition types.
      */
-    void check_params (int max_level, const amrex::Vector<amrex::Geometry>& geom_vect, amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> phys_bc_type)
+    void check_params (int max_level, const amrex::Vector<amrex::Geometry>& geom_vect,
+                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> phys_bc_type,
+                       const amrex::Vector<amrex::IntVect>& ref_ratio,
+                       const amrex::Vector<int>& native_substeps)
     {
         if (moisture_type == MoistureType::SBM) {
             bool any_kturb = false;
             for (int lev = 0; lev <= max_level; ++lev) any_kturb = any_kturb || turbChoice[lev].use_kturb;
             ::erf_sbm::CapabilityInput capability;
             capability.max_level = max_level;
+            if (max_level > 0 && static_cast<int>(ref_ratio.size()) >= max_level) {
+                capability.spatial_ref_ratio = ref_ratio[0];
+            }
+            if (max_level > 0 && static_cast<int>(native_substeps.size()) > 1) {
+                capability.time_refinement_factor = native_substeps[1];
+            }
+            capability.two_way_coupling = coupling_type == CouplingType::TwoWay;
             capability.diffusion = diffChoice.molec_diff_type != MolecDiffType::None || any_kturb;
             capability.implicit_moisture_diffusion = implicit_moisture_diffusion;
             capability.shoc_or_macrophysics = uses_shoc_family();
@@ -1705,6 +1716,13 @@ struct SolverChoice {
                 capability.periodic_cartesian = capability.periodic_cartesian && geom_vect[lev].isAllPeriodic();
             }
             capability.periodic_amr = capability.periodic_cartesian;
+            // Resolve this from the actual ERF per-level substep schedule;
+            // an unpopulated/default capability object must not grant AMR.
+            capability.native_subcycling = true;
+            for (int lev = 1; lev <= max_level; ++lev) {
+                capability.native_subcycling = capability.native_subcycling &&
+                    native_substeps[static_cast<std::size_t>(lev)] == 2;
+            }
             capability.amr_nonperiodic = max_level > 0 && !capability.periodic_cartesian;
             for (int face = 0; face < AMREX_SPACEDIM*2; ++face) {
                 const auto bc = phys_bc_type[face];
@@ -2406,6 +2424,7 @@ struct SolverChoice {
     int sbm_chunk_size{256};
     bool sbm_manufactured_initialization{false};
     amrex::Real sbm_manufactured_velocity{0.0};
+    bool sbm_manufactured_variable_density{false};
     std::string sbm_diagnostic_file;
     std::string sbm_composite_diagnostic_file;
     bool sbm_test_dynamic_regrid{false};

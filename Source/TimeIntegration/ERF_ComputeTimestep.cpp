@@ -21,6 +21,9 @@ ERF::ComputeDt (int step, double cur_time_d)
     for (int lev = 0; lev <= finest_level; ++lev)
     {
         dt_tmp[lev] = estTimeStep(lev, dt_mri_ratio[lev]);
+        if (solverChoice.moisture_type == MoistureType::SBM) {
+            dt_tmp[lev] = std::min(dt_tmp[lev], sbm_admissible_timestep(lev));
+        }
     }
 
     ParallelDescriptor::ReduceRealMin(&dt_tmp[0], dt_tmp.size());
@@ -54,6 +57,50 @@ ERF::ComputeDt (int step, double cur_time_d)
     for (int lev = 1; lev <= finest_level; ++lev) {
         dt[lev] = dt[lev-1] / nsubsteps[lev];
     }
+}
+
+double ERF::sbm_admissible_timestep(const int level) const
+{
+    if (solverChoice.moisture_type != MoistureType::SBM || level < 0 ||
+        level > finest_level) {
+        return std::numeric_limits<double>::max();
+    }
+
+    // The explicit spectral update uses the same dry-air carrier as ERF's
+    // face transport.  A face-speed reduction supplies the advective bound;
+    // no spectral-bin loop is involved.
+    double advective_rate = 0.0;
+    const MultiFab* velocities[] = {
+        &vars_new[level][Vars::xvel], &vars_new[level][Vars::yvel],
+        &vars_new[level][Vars::zvel]};
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        double max_speed = static_cast<double>(velocities[dir]->norm0(0));
+        ParallelDescriptor::ReduceRealMax(max_speed);
+        advective_rate += max_speed * static_cast<double>(geom[level].InvCellSize(dir));
+    }
+    // Combine advection and diffusion before applying the safety factor.  Two
+    // individually safe limits are not a safe limit for their sum.
+    const double diffusion = static_cast<double>(solverChoice.sbm_diffusion_coeff);
+    double diffusive_rate = 0.0;
+    if (diffusion > 0.0 && std::isfinite(diffusion)) {
+        double sum_inv_dx2 = 0.0;
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            const double inv_dx = static_cast<double>(geom[level].InvCellSize(dir));
+            sum_inv_dx2 += inv_dx * inv_dx;
+        }
+        if (sum_inv_dx2 > 0.0 && std::isfinite(sum_inv_dx2)) {
+            diffusive_rate = diffusion * sum_inv_dx2;
+        }
+    }
+    const double bound = ::erf_sbm::admissible_host_timestep(advective_rate,
+                                                              diffusive_rate);
+    if (verbose > 1 && ParallelDescriptor::IOProcessor()) {
+        Print() << "SBM host stability bound at level " << level << " = " << bound
+                << " (advective_rate=" << advective_rate
+                << ", diffusive_rate=" << diffusive_rate
+                << ", diffusion=" << diffusion << ")\n";
+    }
+    return bound;
 }
 
 /**

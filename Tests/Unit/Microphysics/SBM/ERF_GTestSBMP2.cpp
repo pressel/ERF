@@ -3,6 +3,7 @@
 #include "ERF_SBMAMR.H"
 #include "ERF_AuxiliaryStateManager.H"
 #include "ERF_SBMBoundary.H"
+#include "ERF_SBMBulkProjection.H"
 #include "ERF_SBMConstraintGroups.H"
 #include "ERF_SBMContracts.H"
 #include "ERF_SBMDiffusion.H"
@@ -510,8 +511,12 @@ TEST(SBMP2, CapabilityGateKeepsP2NegativeControlsFailClosed)
     EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
     input.prescribed_sbm_inflow = false;
     input.max_level = 1;
+    input.spatial_ref_ratio = IntVect(2, 2, 2);
+    input.time_refinement_factor = 2;
+    input.two_way_coupling = true;
     input.periodic_cartesian = true;
     input.periodic_amr = true;
+    input.native_subcycling = true;
     EXPECT_TRUE(erf_sbm::evaluate_p2_capabilities(input).supported);
     input.amr_nonperiodic = true;
     EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
@@ -597,6 +602,18 @@ TEST(SBMP2, FCTStageWeightsAndAcceptedCorrectionAreExact)
     const auto correction = erf_sbm::accepted_stage_correction({1.0, -2.0}, {3.0, 2.0}, 0.25);
     EXPECT_DOUBLE_EQ(correction[0], 0.5);
     EXPECT_DOUBLE_EQ(correction[1], 1.0);
+}
+
+TEST(SBMP2, HostTimestepCombinesAdvectionAndDiffusionAndFailsClosed)
+{
+    EXPECT_DOUBLE_EQ(erf_sbm::admissible_host_timestep(0.0, 0.0),
+                     std::numeric_limits<double>::max());
+    EXPECT_DOUBLE_EQ(erf_sbm::admissible_host_timestep(2.0, 0.0), 0.25);
+    EXPECT_DOUBLE_EQ(erf_sbm::admissible_host_timestep(0.0, 8.0), 0.0625);
+    EXPECT_DOUBLE_EQ(erf_sbm::admissible_host_timestep(2.0, 8.0), 0.05);
+    EXPECT_DOUBLE_EQ(erf_sbm::admissible_host_timestep(-1.0, 0.0), 0.0);
+    EXPECT_DOUBLE_EQ(erf_sbm::admissible_host_timestep(
+                         std::numeric_limits<double>::infinity(), 0.0), 0.0);
 }
 
 TEST(SBMP2, DensityWeightedDiffusionUsesIntensiveRatioAndPhysicalGeometry)
@@ -780,6 +797,144 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
     }
 }
 
+TEST(SBMP2, ProductionTargetDensityPreservesConstantRatioForBothTemporalContracts)
+{
+    const Real pi = Real(3.1415926535897932384626433832795);
+    const Real k = Real(0.37);
+    const int ncell = 16;
+    const Box domain(IntVect(0, 0, 0), IntVect(ncell-1, 1, 1));
+    const BoxArray boxes(domain);
+    const DistributionMapping dm(boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(1.0, 1.0, 1.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    const auto layout = make_layout(2, MomentMode::OneMoment);
+    const Real h = Real(1.0) / Real(ncell);
+    const Real velocity = Real(0.05);
+    const Real inverse_cell_size = geometry.InvCellSize(0);
+
+    const auto run = [&](const bool anelastic, const int stage) {
+        erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+        manager.define_level(0, boxes, dm, 2);
+        amrex::MultiFab rho_anchor(boxes, dm, 1, 2);
+        amrex::MultiFab rho_input(boxes, dm, 1, 2);
+        amrex::MultiFab rho_target(boxes, dm, 1, 2);
+        amrex::MultiFab carrier_x(amrex::convert(boxes, IntVect(1, 0, 0)), dm, 1, 0);
+        amrex::MultiFab carrier_y(amrex::convert(boxes, IntVect(0, 1, 0)), dm, 1, 0);
+        amrex::MultiFab carrier_z(amrex::convert(boxes, IntVect(0, 0, 1)), dm, 1, 0);
+        rho_anchor.setVal(Real(0.0));
+        rho_input.setVal(Real(0.0));
+        rho_target.setVal(Real(0.0));
+        for (amrex::MFIter mfi(rho_anchor); mfi.isValid(); ++mfi) {
+            const auto anchor = rho_anchor.array(mfi);
+            const auto input = rho_input.array(mfi);
+            const auto target = rho_target.array(mfi);
+            const auto state = manager.output(0).array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int kidx) noexcept {
+                const Real x = (Real(i) + Real(0.5)) * h;
+                const Real anchor_rho = Real(1.0) + Real(0.10) *
+                    std::sin(Real(2.0) * pi * x);
+                const Real input_rho = anchor_rho + Real(0.02) *
+                    std::cos(Real(2.0) * pi * x);
+                anchor(i,j,kidx) = anchor_rho;
+                input(i,j,kidx) = input_rho;
+                state(i,j,kidx,0) = k * anchor_rho;
+                state(i,j,kidx,1) = Real(0.0);
+            });
+        }
+        for (amrex::MFIter mfi(carrier_x); mfi.isValid(); ++mfi) {
+            const auto flux = carrier_x.array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int kidx) noexcept {
+                const Real x = Real(i) * h;
+                flux(i,j,kidx) = velocity * (Real(1.0) + Real(0.15) *
+                    std::sin(Real(2.0) * pi * x));
+            });
+        }
+        carrier_y.setVal(Real(0.0));
+        carrier_z.setVal(Real(0.0));
+        rho_anchor.FillBoundary(geometry.periodicity());
+        rho_input.FillBoundary(geometry.periodicity());
+        carrier_x.FillBoundary(geometry.periodicity());
+        carrier_y.FillBoundary(geometry.periodicity());
+        carrier_z.FillBoundary(geometry.periodicity());
+        manager.output(0).FillBoundary(geometry.periodicity());
+        manager.begin_step(0, 0.0);
+
+        const Real full_step = anelastic ? Real(0.01) : Real(0.012);
+        const Real dt = anelastic ? full_step :
+            (stage == 0 ? full_step / Real(3.0) :
+             (stage == 1 ? full_step / Real(2.0) : full_step));
+        if (stage > 0) {
+            for (amrex::MFIter mfi(manager.evaluation(0)); mfi.isValid(); ++mfi) {
+                const auto evaluation = manager.evaluation(0).array(mfi);
+                const auto input = rho_input.const_array(mfi);
+                amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int kidx) noexcept {
+                    evaluation(i,j,kidx,0) = k * input(i,j,kidx);
+                    evaluation(i,j,kidx,1) = Real(0.0);
+                });
+            }
+            manager.evaluation(0).FillBoundary(geometry.periodicity());
+        }
+        for (amrex::MFIter mfi(rho_target); mfi.isValid(); ++mfi) {
+            const auto target = rho_target.array(mfi);
+            const auto anchor = rho_anchor.const_array(mfi);
+            const auto input = rho_input.const_array(mfi);
+                const auto flux = carrier_x.const_array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int kidx) noexcept {
+                const Real divergence = (flux(i+1,j,kidx) - flux(i,j,kidx)) *
+                    inverse_cell_size;
+                const Real transport_target = anchor(i,j,kidx) - dt * divergence;
+                target(i,j,kidx) = (anelastic && stage > 0) ?
+                    Real(0.5) * (anchor(i,j,kidx) + input(i,j,kidx) - dt * divergence) :
+                    transport_target;
+            });
+        }
+        rho_target.FillBoundary(geometry.periodicity());
+
+        amrex::MultiFab core(boxes, dm, RhoQ3_comp + 1, 0);
+        erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
+        stage_flux.define(boxes, dm, layout.ncomp(), 0);
+        const auto context = anelastic ?
+            erf_auxiliary::make_anelastic_stage(stage, 0.0, stage > 0 ? full_step : 0.0,
+                                                full_step, full_step, nullptr, nullptr) :
+            erf_auxiliary::make_compressible_stage(stage, 0.0, stage == 0 ? 0.0 : dt,
+                                                   dt, full_step, nullptr, nullptr);
+        erf_sbm::advance_stage(manager, layout, context, rho_anchor, rho_input, rho_target,
+                               core, carrier_x, carrier_y, carrier_z, geometry, stage_flux,
+                               erf_sbm::TransportMethod::GroupedFCT_WENOZ3, 0, Real(0.0), 1);
+
+        amrex::MultiFab error(boxes, dm, 1, 0);
+        for (amrex::MFIter mfi(error); mfi.isValid(); ++mfi) {
+            const auto result = error.array(mfi);
+            const auto output = manager.output(0).const_array(mfi);
+            const auto target = rho_target.const_array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int kidx) noexcept {
+                result(i,j,kidx) = amrex::Math::abs(output(i,j,kidx,0) - k * target(i,j,kidx));
+            });
+        }
+        amrex::Gpu::synchronize();
+        const Real target_error = error.norm0(0);
+        return target_error;
+    };
+
+    Real maximum_error = Real(0.0);
+    for (const int stage : {0, 1, 2}) {
+        const Real error = run(false, stage);
+        maximum_error = amrex::max(maximum_error, error);
+        EXPECT_LE(error, Real(4096.0) * std::numeric_limits<Real>::epsilon() * k)
+            << "compressible stage=" << stage << " error=" << error;
+    }
+    for (const int stage : {0, 1}) {
+        const Real error = run(true, stage);
+        maximum_error = amrex::max(maximum_error, error);
+        EXPECT_LE(error, Real(4096.0) * std::numeric_limits<Real>::epsilon() * k)
+            << "anelastic stage=" << stage << " error=" << error;
+    }
+    EXPECT_GT(maximum_error, Real(0.0));
+}
+
 TEST(SBMP2, BoundaryBudgetsHaveNoWallSinkAndValidateInflow)
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
@@ -943,6 +1098,10 @@ TEST(SBMP2, RestartSchemaAndProjectionComparisonAreStrict)
     old_transport_schema.transport_identity = "WENO_Z3+FCT-v1";
     EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, old_transport_schema).find("transport_identity"),
               std::string::npos);
+    auto old_amr_schema = schema;
+    old_amr_schema.amr_transfer_policy = "direct-extensive-AMR-v1";
+    EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, old_amr_schema).find("amr_transfer_policy"),
+              std::string::npos);
     auto altered = schema;
     altered.moment_modes += "changed";
     EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, altered).find("moment_modes"), std::string::npos);
@@ -1037,6 +1196,160 @@ TEST(SBMP2, AuxiliaryStageFillPatchAndRemakeUseAuthoritativeCoarseSpectrum)
     EXPECT_DOUBLE_EQ(manager.output(1).max(0), 7.0);
 }
 
+TEST(SBMP2, CarrierWeightedAMRTransferUsesTargetDensityAndPreservesRatios)
+{
+    const auto layout = make_layout(2, MomentMode::TwoMoment, true);
+    erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+    const Box coarse_domain(IntVect(0, 0, 0), IntVect(1, 1, 1));
+    const BoxArray coarse_boxes(coarse_domain);
+    const DistributionMapping coarse_dm(coarse_boxes);
+    const IntVect ref_ratio(2, 2, 2);
+    const Box fine_domain = amrex::refine(coarse_domain, ref_ratio);
+    // Start with only the low-x half covered.  The later remake adds the
+    // high-x half, making newly covered carrier-weighted cells observable.
+    const BoxArray fine_boxes(Box(IntVect(0, 0, 0), IntVect(1, 3, 3)));
+    const DistributionMapping fine_dm(fine_boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(4.0, 4.0, 4.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry coarse_geometry(coarse_domain, &real_box, amrex::CoordSys::cartesian,
+                                   periodicity.data());
+    const Geometry fine_geometry(fine_domain, &real_box, amrex::CoordSys::cartesian,
+                                 periodicity.data());
+    manager.define_level(0, coarse_boxes, coarse_dm, 2);
+    manager.define_level(1, fine_boxes, fine_dm, 2);
+    manager.output(0).setVal(2.0);
+    manager.begin_step(0, 0.0);
+    manager.output(0).setVal(6.0);
+    manager.accept_stage(0, 1.0);
+
+    amrex::MultiFab rho_old(coarse_boxes, coarse_dm, 1, 2);
+    amrex::MultiFab rho_output(coarse_boxes, coarse_dm, 1, 2);
+    amrex::MultiFab rho_target(fine_boxes, fine_dm, 1, 2);
+    rho_old.setVal(1.0);
+    rho_output.setVal(3.0);
+    for (amrex::MFIter mfi(rho_target); mfi.isValid(); ++mfi) {
+        const auto target = rho_target.array(mfi);
+        amrex::ParallelFor(mfi.fabbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const Real parity = (i % 2 == 0 ? Real(-1.0) : Real(1.0)) +
+                Real(0.5) * (j % 2 == 0 ? Real(-1.0) : Real(1.0)) +
+                Real(0.25) * (k % 2 == 0 ? Real(-1.0) : Real(1.0));
+            target(i,j,k,0) = Real(4.0) + Real(0.1) * parity;
+        });
+    }
+    rho_old.FillBoundary(coarse_geometry.periodicity());
+    rho_output.FillBoundary(coarse_geometry.periodicity());
+    rho_target.FillBoundary(fine_geometry.periodicity());
+    manager.fill_stage_from_coarse(
+        0, 1, 0.5, coarse_geometry, fine_geometry, ref_ratio,
+        erf_auxiliary::AuxiliaryTimeView::Evaluation,
+        &rho_old, &rho_output, &rho_target);
+
+    const auto check_ratio = [&](const amrex::MultiFab& state,
+                                 const amrex::MultiFab& density,
+                                 const bool ghosts_only) {
+        amrex::MultiFab expected(state.boxArray(), state.DistributionMap(),
+                                  state.nComp(), state.nGrowVect());
+        for (amrex::MFIter mfi(expected); mfi.isValid(); ++mfi) {
+            const auto out = expected.array(mfi);
+            const auto rho = density.const_array(mfi);
+            amrex::ParallelFor(mfi.fabbox(), state.nComp(),
+                [=] AMREX_GPU_DEVICE (int i, int j, int k, int comp) noexcept {
+                    out(i,j,k,comp) = Real(2.0) * rho(i,j,k);
+                });
+        }
+        amrex::Gpu::synchronize();
+        amrex::MultiFab difference(state.boxArray(), state.DistributionMap(),
+                                   state.nComp(), state.nGrowVect());
+        amrex::MultiFab::Copy(difference, state, 0, 0, state.nComp(), state.nGrowVect());
+        amrex::MultiFab::Subtract(difference, expected, 0, 0, state.nComp(), state.nGrowVect());
+        if (ghosts_only) {
+            for (amrex::MFIter mfi(difference); mfi.isValid(); ++mfi) {
+                const auto values = difference.array(mfi);
+                const auto valid = mfi.validbox();
+                amrex::ParallelFor(mfi.fabbox(), state.nComp(),
+                    [=] AMREX_GPU_DEVICE (int i, int j, int k, int comp) noexcept {
+                        if (valid.contains(i, j, k)) values(i,j,k,comp) = Real(0.0);
+                    });
+            }
+            amrex::Gpu::synchronize();
+        }
+        Real error = difference.norm0(0, state.nComp(), state.nGrowVect(), true);
+        amrex::ParallelDescriptor::ReduceRealMax(error);
+        return error;
+    };
+    const Real ratio_tolerance = Real(512.0) * std::numeric_limits<Real>::epsilon() * Real(5.0);
+    EXPECT_LE(check_ratio(manager.evaluation(1), rho_target, true), ratio_tolerance);
+
+    manager.old(1).setVal(-9.0);
+    manager.fill_stage_from_coarse(
+        0, 1, 0.25, coarse_geometry, fine_geometry, ref_ratio,
+        erf_auxiliary::AuxiliaryTimeView::Old,
+        &rho_old, &rho_output, &rho_target);
+    EXPECT_LE(check_ratio(manager.old(1), rho_target, true), ratio_tolerance);
+
+    manager.prolong_from_coarse(0, 1, coarse_geometry, fine_geometry, ref_ratio,
+                                0.5, &rho_old, &rho_output, &rho_target);
+    EXPECT_LE(check_ratio(manager.output(1), rho_target, false), ratio_tolerance);
+
+    const BoxArray remade_boxes(fine_domain);
+    const DistributionMapping remade_dm(remade_boxes);
+    amrex::MultiFab remade_rho_target(remade_boxes, remade_dm, 1, 2);
+    for (amrex::MFIter mfi(remade_rho_target); mfi.isValid(); ++mfi) {
+        const auto target = remade_rho_target.array(mfi);
+        amrex::ParallelFor(mfi.fabbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            const Real parity = (i % 2 == 0 ? Real(-1.0) : Real(1.0)) +
+                Real(0.5) * (j % 2 == 0 ? Real(-1.0) : Real(1.0)) +
+                Real(0.25) * (k % 2 == 0 ? Real(-1.0) : Real(1.0));
+            target(i,j,k,0) = Real(4.0) + Real(0.1) * parity;
+        });
+    }
+    remade_rho_target.FillBoundary(fine_geometry.periodicity());
+    manager.remake_level_from_coarse(
+        1, remade_boxes, remade_dm, 2, fine_geometry.periodicity(), 0,
+        coarse_geometry, fine_geometry, ref_ratio, 0.5, -1,
+        &rho_old, &rho_output, &remade_rho_target);
+    EXPECT_LE(check_ratio(manager.output(1), remade_rho_target, false), ratio_tolerance);
+}
+
+TEST(SBMP2, CompactGhostsAreProjectedFromAuthoritativeSpectralGhosts)
+{
+    const auto layout = make_layout(2, MomentMode::OneMoment);
+    erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+    const Box domain(IntVect(0, 0, 0), IntVect(1, 0, 0));
+    const BoxArray boxes(domain);
+    const DistributionMapping dm(boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(2.0, 1.0, 1.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    manager.define_level(0, boxes, dm, 2);
+    manager.output(0).setVal(0.0);
+    for (amrex::MFIter mfi(manager.output(0)); mfi.isValid(); ++mfi) {
+        const auto state = manager.output(0).array(mfi);
+        amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            state(i,j,k,0) = Real(2.5);
+            state(i,j,k,1) = Real(4.5);
+        });
+    }
+    manager.output(0).FillBoundary(geometry.periodicity());
+    amrex::MultiFab core(boxes, dm, RhoQ3_comp + 1, 2);
+    core.setVal(Real(123.0));
+    erf_sbm::SBMBulkProjection projection(layout);
+    for (amrex::MFIter mfi(manager.output(0)); mfi.isValid(); ++mfi) {
+        Box box = mfi.validbox();
+        box.grow(1);
+        projection.apply_to_core(box, manager.output(0).const_array(mfi), core.array(mfi));
+    }
+    amrex::Gpu::synchronize();
+    for (amrex::MFIter mfi(core); mfi.isValid(); ++mfi) {
+        const auto values = core.const_array(mfi);
+        EXPECT_DOUBLE_EQ(values(-1,0,0,RhoQ2_comp), Real(2.5));
+        EXPECT_DOUBLE_EQ(values(2,0,0,RhoQ3_comp), Real(4.5));
+    }
+}
+
 TEST(SBMP2, CoarseFineWENOInterfaceOracleUsesBothUpwindSigns)
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
@@ -1077,8 +1390,7 @@ TEST(SBMP2, CoarseFineWENOInterfaceOracleUsesBothUpwindSigns)
         const Real beta0 = positive ? (qm1-qm2)*(qm1-qm2) : (qp1-q)*(qp1-q);
         const Real beta1 = (q-qm1)*(q-qm1);
         const Real tau = std::abs(beta1-beta0);
-        const Real epsilon = Real(1.0e-40) + Real(1.0e-2) *
-            std::max(std::abs(q0), std::abs(q1));
+        const Real epsilon = Real(1.0e-40) + Real(64.0) * (beta0 + beta1);
         const Real w0 = (Real(1.0)/Real(3.0)) *
             (Real(1.0) + (tau*tau)/((epsilon+beta0)*(epsilon+beta0)));
         const Real w1 = (Real(2.0)/Real(3.0) *
@@ -1237,8 +1549,7 @@ TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
                     const Real b0 = (qm1-qm2)*(qm1-qm2);
                     const Real b1 = (q-qm1)*(q-qm1);
                     const Real tau = std::abs(b1-b0);
-                    const Real epsilon = Real(1.0e-40) +
-                        Real(1.0e-2) * std::max(std::abs(q0), std::abs(q1));
+                    const Real epsilon = Real(1.0e-40) + Real(64.0) * (b0 + b1);
                     const Real w0 = (Real(1.0)/Real(3.0)) *
                         (Real(1.0) + (tau*tau)/((epsilon+b0)*(epsilon+b0)));
                     const Real w1 = (Real(2.0)/Real(3.0)) *
@@ -1254,8 +1565,7 @@ TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
                     const Real b0 = (qp1-q)*(qp1-q);
                     const Real b1 = (q-qm1)*(q-qm1);
                     const Real tau = std::abs(b1-b0);
-                    const Real epsilon = Real(1.0e-40) +
-                        Real(1.0e-2) * std::max(std::abs(q0), std::abs(q1));
+                    const Real epsilon = Real(1.0e-40) + Real(64.0) * (b0 + b1);
                     const Real w0 = (Real(1.0)/Real(3.0)) *
                         (Real(1.0) + (tau*tau)/((epsilon+b0)*(epsilon+b0)));
                     const Real w1 = (Real(2.0)/Real(3.0)) *
@@ -1291,6 +1601,63 @@ TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
             EXPECT_LT(weno_negative_errors[i], donor_errors[i]);
         }
     }
+}
+
+TEST(SBMP2, WENOZ3TranslationCovarianceForSmoothAndDiscontinuousStencils)
+{
+    const Real shift = Real(37.25);
+    const Real smooth[] = {Real(1.2), Real(0.7), Real(1.1), Real(1.8)};
+    const Real jump[] = {Real(0.0), Real(0.0), Real(1.0), Real(1.0)};
+    for (const Real carrier : {Real(1.0), Real(-1.0)}) {
+        const Real smooth_base = erf_sbm::weno_z3_face_from_stencil(
+            smooth[0], smooth[1], smooth[2], smooth[3], carrier);
+        const Real smooth_shifted = erf_sbm::weno_z3_face_from_stencil(
+            smooth[0] + shift, smooth[1] + shift, smooth[2] + shift,
+            smooth[3] + shift, carrier);
+        EXPECT_NEAR(smooth_shifted - smooth_base, shift, 64 * std::numeric_limits<Real>::epsilon());
+
+        const Real jump_base = erf_sbm::weno_z3_face_from_stencil(
+            jump[0], jump[1], jump[2], jump[3], carrier);
+        const Real jump_shifted = erf_sbm::weno_z3_face_from_stencil(
+            jump[0] + shift, jump[1] + shift, jump[2] + shift,
+            jump[3] + shift, carrier);
+        EXPECT_NEAR(jump_shifted - jump_base, shift, 64 * std::numeric_limits<Real>::epsilon());
+    }
+}
+
+TEST(SBMP2, RuntimeCapabilityRejectsUnsupportedAMREnvelope)
+{
+    erf_sbm::CapabilityInput supported;
+    supported.p2_requested = true;
+    supported.max_level = 1;
+    supported.spatial_ref_ratio = IntVect(2, 2, 2);
+    supported.time_refinement_factor = 2;
+    supported.two_way_coupling = true;
+    supported.periodic_amr = true;
+    supported.native_subcycling = true;
+    EXPECT_TRUE(erf_sbm::evaluate_p2_capabilities(supported).supported);
+
+    auto rejected = supported;
+    rejected.max_level = 2;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(rejected).supported);
+    rejected = supported;
+    rejected.spatial_ref_ratio = IntVect(4, 4, 4);
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(rejected).supported);
+    rejected = supported;
+    rejected.time_refinement_factor = 1;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(rejected).supported);
+    rejected = supported;
+    rejected.time_refinement_factor = 4;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(rejected).supported);
+    rejected = supported;
+    rejected.two_way_coupling = false;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(rejected).supported);
+    rejected = supported;
+    rejected.periodic_amr = false;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(rejected).supported);
+    const auto report = erf_sbm::evaluate_p2_capabilities(supported);
+    EXPECT_NE(report.stable_description().find("spatial_ref_ratio=2,2,2"), std::string::npos);
+    EXPECT_NE(report.stable_description().find("time_refinement_factor=2"), std::string::npos);
 }
 
 TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
@@ -1366,6 +1733,7 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
                 result(i,j,k) = std::abs(production_operator - exact_operator);
             });
         }
+        amrex::Gpu::synchronize();
         return OperatorResult{error.norm0(0), minimum_limiter};
     };
 
@@ -1398,6 +1766,117 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
     }
 }
 
+TEST(SBMP2, VariableDensityWENOReconstructionHasBoundedConvergence)
+{
+    std::ofstream evidence("/private/tmp/erf_sbm_p2_variable_density_convergence.csv");
+    ASSERT_TRUE(evidence.good());
+    evidence << "N,error,order\n";
+    const Real pi = Real(3.1415926535897932384626433832795);
+    const Real wave = Real(2.0) * pi;
+    const Real rho_amplitude = Real(0.20);
+    const Real z0 = Real(0.50);
+    const Real z_amplitude = Real(0.05);
+    const Real velocity = Real(0.25);
+    const auto sinc = [](const Real argument) {
+        return std::abs(argument) < Real(1.e-14) ? Real(1.0) :
+            std::sin(argument) / argument;
+    };
+    const auto run = [&](const int ncell) {
+        const auto layout = make_layout(2, MomentMode::OneMoment);
+        erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+        const Box domain(IntVect(0, 0, 0), IntVect(ncell-1, 0, 0));
+        const BoxArray boxes(domain);
+        const DistributionMapping dm(boxes);
+        const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                      {AMREX_D_DECL(1.0, 1.0, 1.0)});
+        const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+        const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                                periodicity.data());
+        manager.define_level(0, boxes, dm, 2);
+        amrex::MultiFab rho(boxes, dm, 1, 2);
+        const Real h = Real(1.0) / static_cast<Real>(ncell);
+        const Real rho_average_factor = sinc(Real(0.5) * wave * h);
+        const Real product_average_factor = sinc(wave * h);
+        for (amrex::MFIter mfi(rho); mfi.isValid(); ++mfi) {
+            const auto density = rho.array(mfi);
+            const auto state = manager.output(0).array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const Real x = (static_cast<Real>(i) + Real(0.5)) * h;
+                const Real rho_cell = Real(1.0) + rho_amplitude * rho_average_factor *
+                    std::sin(wave * x);
+                const Real u_cell = z0 + z_amplitude * rho_average_factor *
+                    std::cos(wave * x) + rho_amplitude * z0 * rho_average_factor *
+                    std::sin(wave * x) + Real(0.5) * rho_amplitude * z_amplitude *
+                    product_average_factor * std::sin(Real(2.0) * wave * x);
+                density(i,j,k,0) = rho_cell;
+                state(i,j,k,0) = u_cell;
+                state(i,j,k,1) = Real(0.25);
+            });
+        }
+        rho.FillBoundary(geometry.periodicity());
+        manager.output(0).FillBoundary(geometry.periodicity());
+        manager.begin_step(0, 0.0);
+        amrex::MultiFab xflux(amrex::convert(boxes, IntVect(1, 0, 0)), dm, 1, 0);
+        amrex::MultiFab yflux(amrex::convert(boxes, IntVect(0, 1, 0)), dm, 1, 0);
+        amrex::MultiFab zflux(amrex::convert(boxes, IntVect(0, 0, 1)), dm, 1, 0);
+        for (amrex::MFIter mfi(xflux); mfi.isValid(); ++mfi) {
+            const auto flux = xflux.array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const Real x = static_cast<Real>(i) * h;
+                flux(i,j,k) = velocity * (Real(1.0) + rho_amplitude * std::sin(wave * x));
+            });
+        }
+        yflux.setVal(Real(0.0));
+        zflux.setVal(Real(0.0));
+        xflux.FillBoundary(geometry.periodicity());
+        yflux.FillBoundary(geometry.periodicity());
+        zflux.FillBoundary(geometry.periodicity());
+        amrex::MultiFab core(boxes, dm, RhoQ3_comp + 1, 0);
+        erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
+        stage_flux.define(boxes, dm, layout.ncomp(), 0);
+        const auto context = erf_auxiliary::make_compressible_stage(
+            2, 0.0, 0.0, Real(0.25) * h, Real(0.25) * h, nullptr, nullptr);
+        erf_sbm::advance_stage(manager, layout, context, rho, core,
+                               xflux, yflux, zflux, geometry, stage_flux,
+                               erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
+                               0, Real(0.0), 1);
+        amrex::MultiFab error(boxes, dm, 1, 0);
+        for (amrex::MFIter mfi(error); mfi.isValid(); ++mfi) {
+            const auto err = error.array(mfi);
+            const auto accepted = stage_flux.x().const_array(mfi);
+            amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                const Real x = (static_cast<Real>(i) + Real(0.5)) * h;
+                const Real left = x - Real(0.5) * h;
+                const Real right = x + Real(0.5) * h;
+                const Real rho_left = Real(1.0) + rho_amplitude * std::sin(wave * left);
+                const Real rho_right = Real(1.0) + rho_amplitude * std::sin(wave * right);
+                const Real z_left = z0 + z_amplitude * std::cos(wave * left);
+                const Real z_right = z0 + z_amplitude * std::cos(wave * right);
+                const Real exact = -velocity * (rho_right*z_right - rho_left*z_left) / h;
+                const Real numerical = -(accepted(i+1,j,k,0) - accepted(i,j,k,0)) / h;
+                err(i,j,k) = std::abs(numerical - exact);
+            });
+        }
+        amrex::Gpu::synchronize();
+        return error.norm0(0);
+    };
+
+    std::vector<Real> errors;
+    for (const int ncell : {16, 32, 64, 128}) errors.push_back(run(ncell));
+    for (std::size_t i = 0; i < errors.size(); ++i) {
+        const Real order = i == 0 ? Real(0.0) :
+            std::log(errors[i-1] / errors[i]) / std::log(Real(2.0));
+        evidence << (16 << i) << ',' << std::setprecision(17) << errors[i] << ',' << order << '\n';
+        if (i > 0) {
+            // The ratio is formed from cell averages U/rho, so this test
+            // records the conservative bounded claim (approximately second
+            // order) rather than claiming third-order whole-model accuracy.
+            EXPECT_GT(order, Real(1.5));
+            EXPECT_LT(order, Real(3.5));
+        }
+    }
+}
+
 TEST(SBMP2, FiniteVolumeWENOQuadraticOptimalCandidateIsExact)
 {
     const Real h = Real(1.0) / Real(32.0);
@@ -1413,6 +1892,7 @@ TEST(SBMP2, FiniteVolumeWENOQuadraticOptimalCandidateIsExact)
         const Real qm2 = cell_average(face-2);
         const Real qm1 = cell_average(face-1);
         const Real q = cell_average(face);
+        const Real qp1 = cell_average(face+1);
         const Real left_candidate = Real(0.5) * (-qm2 + Real(3.0)*qm1);
         const Real centered_candidate = Real(0.5) * (qm1 + q);
         const Real reconstructed = (left_candidate + Real(2.0)*centered_candidate) / Real(3.0);
@@ -1422,6 +1902,10 @@ TEST(SBMP2, FiniteVolumeWENOQuadraticOptimalCandidateIsExact)
         // substencils; it is exact through the quadratic term and exposes the
         // face-average indexing independently of nonlinear WENO weights.
         EXPECT_NEAR(reconstructed, exact, Real(2.e-12));
+        for (const Real carrier : {Real(1.0), Real(-1.0)}) {
+            EXPECT_NEAR(erf_sbm::weno_z3_face_from_stencil(
+                            qm2, qm1, q, qp1, carrier), exact, Real(2.e-12));
+        }
     }
 }
 

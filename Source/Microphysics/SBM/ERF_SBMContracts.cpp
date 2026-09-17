@@ -3,13 +3,20 @@
 #include "ERF_IndexDefines.H"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 
 namespace erf_sbm {
 
 CapabilityReport evaluate_p1_capabilities(const CapabilityInput& input)
 {
     CapabilityReport report;
+    report.max_level = input.max_level;
+    report.spatial_ref_ratio = input.spatial_ref_ratio;
+    report.time_refinement_factor = input.time_refinement_factor;
+    report.two_way_coupling = input.two_way_coupling;
     report.flags = {"single_level", "static_cartesian", "periodic_manufactured",
                     "runtime_bins", "first_order_donor", "qv_qc_qr", "double"};
     report.qualified_flags = report.flags;
@@ -49,6 +56,10 @@ CapabilityReport evaluate_p1_capabilities(const CapabilityInput& input)
 CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
 {
     CapabilityReport report;
+    report.max_level = input.max_level;
+    report.spatial_ref_ratio = input.spatial_ref_ratio;
+    report.time_refinement_factor = input.time_refinement_factor;
+    report.two_way_coupling = input.two_way_coupling;
     report.flags = {"multi_level", "static_cartesian", "runtime_bins", "one_moment", "two_moment",
                     "complete_groups", "constraints", "weno_z3_fct", "density_weighted_diffusion",
                     "periodic", "single_level_wall", "single_level_outflow", "periodic_amr",
@@ -64,7 +75,8 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
     report.qualification_status = "qualified";
     report.invariant_ids = {"SBM-P2-GROUP-COMPLETE", "SBM-P2-ENDPOINT-REALIZABLE",
                             "SBM-P2-PHYSICAL-TRANSFER", "SBM-P2-BOUNDARY-BUDGET",
-                            "SBM-P2-AMR-CONSERVATIVE", "SBM-P2-RESTART-STRICT"};
+                            "SBM-P2-AMR-CONSERVATIVE", "SBM-P2-CARRIER-WEIGHTED-AMR",
+                            "SBM-P2-RESTART-STRICT"};
     auto reject = [&report](const bool condition, const char* reason) {
         if (condition) report.rejected_reasons.emplace_back(reason);
     };
@@ -86,11 +98,19 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
     reject(input.tensor_diffusion, "tensor/cross-term diffusion is unsupported by P2");
     reject(input.prescribed_sbm_inflow,
            "production prescribed spectral inflow is not wired into the ERF SBM hook");
-    reject(!input.native_subcycling,
+    reject(input.max_level > 0 && !input.native_subcycling,
            "P2 qualification requires ERF native AMR subcycling with the qualified factor-2 mode");
     reject(input.amr_nonperiodic, "nonperiodic AMR is unsupported by P2");
     reject(input.max_level > 0 && !input.periodic_amr,
            "P2 AMR requires the periodic AMR FillPatch contract");
+    reject(input.max_level > 1,
+           "P2 supports at most one AMR refinement level");
+    reject(input.max_level > 0 && input.spatial_ref_ratio != amrex::IntVect(2),
+           "P2 AMR requires spatial refinement ratio exactly (2,2,2)");
+    reject(input.max_level > 0 && input.time_refinement_factor != 2,
+           "P2 AMR requires native time refinement factor exactly 2");
+    reject(input.max_level > 0 && !input.two_way_coupling,
+           "P2 AMR requires TwoWay coupling");
     reject(!input.periodic_cartesian && !input.impermeable_wall && !input.advective_outflow,
            "nonperiodic SBM transport requires an explicit wall or outward-only outflow boundary policy");
     reject(input.diffusion && !input.explicit_sbm_diffusion,
@@ -101,6 +121,22 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
     report.supported = report.rejected_reasons.empty();
     if (!report.supported) report.qualification_status = "unsupported";
     return report;
+}
+
+double admissible_host_timestep(const double advective_rate,
+                                const double diffusive_rate)
+{
+    if (!std::isfinite(advective_rate) || !std::isfinite(diffusive_rate) ||
+        advective_rate < 0.0 || diffusive_rate < 0.0) {
+        // A nonfinite rate is an invalid runtime state.  Returning zero makes
+        // the host selection fail closed without converting it into an
+        // apparently harmless unlimited timestep.
+        return 0.0;
+    }
+    const double combined_rate = advective_rate + diffusive_rate;
+    if (!std::isfinite(combined_rate)) return 0.0;
+    return combined_rate > 0.0 ? 0.5 / combined_rate :
+        std::numeric_limits<double>::max();
 }
 
 std::string validate_runtime_bin_count(const int nbins)
@@ -116,6 +152,11 @@ std::string CapabilityReport::stable_description() const
     std::ostringstream out;
     out << "supported=" << (supported ? 1 : 0) << "\nqualification_status="
         << qualification_status << "\nflags=";
+    out << "max_level=" << max_level << "\n"
+        << "spatial_ref_ratio=" << spatial_ref_ratio[0] << ','
+        << spatial_ref_ratio[1] << ',' << spatial_ref_ratio[2] << "\n"
+        << "time_refinement_factor=" << time_refinement_factor << "\n"
+        << "two_way_coupling=" << (two_way_coupling ? 1 : 0) << "\n";
     for (const auto& flag : flags) out << flag << ',';
     out << "\nqualified_flags=";
     for (const auto& flag : qualified_flags) out << flag << ',';

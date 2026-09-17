@@ -40,7 +40,10 @@ public:
                                   const amrex::Geometry& coarse_geometry,
                                   const amrex::Geometry& fine_geometry,
                                   const amrex::IntVect& ref_ratio,
-                                  double time, int scratch_ncomp = -1);
+                                  double time, int scratch_ncomp = -1,
+                                  const amrex::MultiFab* coarse_rho_old = nullptr,
+                                  const amrex::MultiFab* coarse_rho_output = nullptr,
+                                  const amrex::MultiFab* fine_rho_target = nullptr);
     void destroy_level(int level);
     void average_down_to(int coarse_level, int fine_level,
                          const amrex::IntVect& ref_ratio);
@@ -48,7 +51,10 @@ public:
                              const amrex::Geometry& coarse_geometry,
                              const amrex::Geometry& fine_geometry,
                              const amrex::IntVect& ref_ratio,
-                             double time = -1.0);
+                             double time = -1.0,
+                             const amrex::MultiFab* coarse_rho_old = nullptr,
+                             const amrex::MultiFab* coarse_rho_output = nullptr,
+                             const amrex::MultiFab* fine_rho_target = nullptr);
     void fill_stage_from_coarse(int coarse_level, int fine_level, double time,
                                 const amrex::Geometry& coarse_geometry,
                                 const amrex::Geometry& fine_geometry,
@@ -57,7 +63,10 @@ public:
                                 const amrex::Geometry& coarse_geometry,
                                 const amrex::Geometry& fine_geometry,
                                 const amrex::IntVect& ref_ratio,
-                                AuxiliaryTimeView target_view);
+                                AuxiliaryTimeView target_view,
+                                const amrex::MultiFab* coarse_rho_old = nullptr,
+                                const amrex::MultiFab* coarse_rho_output = nullptr,
+                                const amrex::MultiFab* fine_rho_target = nullptr);
     // `reset_face_transfer=false` starts another AMR fine substep while
     // retaining the accepted ledger accumulated over the parent coarse step.
     void begin_step(int level, double old_time = 0.0, bool reset_face_transfer = true);
