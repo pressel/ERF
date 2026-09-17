@@ -29,9 +29,9 @@ are not appended to ERF's compact ``cons`` state.
 P2 transport and constraints
 ----------------------------
 
-``GroupedFCT_WENOZ3`` reuses ERF's ``WENO_Z3`` reconstruction helper on the
-intensive ratio ``X/rho``.  The donor candidate is the low-order state and the
-WENO candidate is limited with one face coefficient for every complete
+``GroupedFCT_WENOZ3`` evaluates a local finite-volume WENO-Z3 reconstruction
+on the intensive ratio ``X/rho``.  The donor candidate is the low-order state
+and the WENO candidate is limited with one face coefficient for every complete
 population/bin group.  Groups include one-moment nonnegative mass, two-moment
 nonnegative endpoint variables
 
@@ -43,7 +43,9 @@ and attached-property nonnegativity, support, and mass-bounded-subset
 constraints.  Only cancellation-sized negative endpoints are normalized;
 materially inadmissible states fail collectively with a diagnostic.
 
-The production grouped limiter first accumulates the adverse demand of every
+The production grouped limiter uses the exact FCT algebra
+``A = high_adv - low_adv``, ``low_total = low_adv + low_diff``, and
+``accepted = low_total + lambda*A``.  It first accumulates the adverse demand of every
 incident face for every cell/group/constraint, communicates those cell-wide
 budgets across periodic FAB boundaries, and then applies one common coefficient
 to the complete group.  A multi-face counterexample therefore consumes the
@@ -232,80 +234,89 @@ Supported P2 matrix
 The P2 implementation extends the baseline to runtime-sized one- and
 two-moment auxiliary populations, ``DonorCell`` or ``GroupedFCT_WENOZ3``
 transport, complete grouped constraints, explicit orthogonal two-point
-diffusion, and the auxiliary AMR/restart lifecycle.  Direct production
-qualification covers static fully periodic Cartesian hierarchy cases, including
-the two-level 2M fixture and continuous/restart comparison.  Restriction is
-physical-volume weighted and prolongation is conservative piecewise constant.
-Accepted spectral transfers—not independently reconstructed compact fields—drive
-``qc``/``qr`` projections, boundary budgets, and provider-owned AMR registers.
-The production qualification gate is explicit: static Cartesian, fully
-periodic, double precision, explicit SBM diffusion only, no embedded
-boundaries or moving terrain, and no P3 physics.  Unsupported combinations
-fail closed.
+diffusion, and the auxiliary AMR/restart lifecycle.  Production qualification
+covers static Cartesian double-precision hierarchy cases with fully periodic
+AMR and native factor-two subcycling, plus single-level impermeable-wall and
+outward-only outflow cases.  Restriction is physical-volume weighted and
+prolongation is conservative piecewise constant.  Accepted spectral
+transfers—not independently reconstructed compact fields—drive ``qc``/``qr``
+projections, boundary budgets, and provider-owned AMR registers. Unsupported
+combinations fail closed, including prescribed production inflow and
+non-periodic AMR.
 
 The machine-readable inspection reports ``flags`` as the implementation
-inventory and ``qualified_flags`` plus ``qualification_status=qualified`` for
-the exercised supported runtime configuration.  ``rejected`` records
-unsupported requests; these fields are not inferred from compact ``qc``/``qr``
-state and do not authorize P3 physics.
+inventory and reports ``qualified_flags`` plus
+``qualification_status=qualified`` only after the complete P2 qualification
+matrix has passed.  ``rejected`` records unsupported requests; these fields
+are not inferred from compact ``qc``/``qr`` state and do not authorize P3
+physics.
 
 WENO qualification evidence
 ----------------------------
 
-The focused smooth periodic operator test measures the implemented WENO-Z3
-face reconstruction against the analytic periodic face value and compares it
-with the donor reconstruction.  The machine-readable output is written to
+The focused smooth periodic operator test measures the implemented finite-volume
+WENO-Z3 face reconstruction against the exact face value of the cell-average
+primitive ``2+sin(2*pi*x)`` for both positive and negative carrier signs.  It
+compares both against the donor reconstruction.  The machine-readable output is
+written to
 ``/private/tmp/erf_sbm_p2_weno_convergence.csv`` by
 ``SBMP2.WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator``.  The current
 double-precision measurements are:
 
-.. list-table:: Smooth periodic reconstruction errors
+.. list-table:: Smooth periodic FV reconstruction errors
    :header-rows: 1
 
    * - N
-     - WENO error
+     - WENO positive error
+     - WENO negative error
      - Donor error
-     - WENO order
+     - WENO positive order
+     - WENO negative order
      - Donor order
    * - 16
-     - 5.6906e-2
-     - 1.9509e-1
+     - 2.34696e-2
+     - 2.34696e-2
+     - 1.93839e-1
      - --
      - --
    * - 32
-     - 1.4400e-2
-     - 9.8018e-2
-     - 1.9826
-     - 0.9930
+     - 6.26796e-4
+     - 6.26796e-4
+     - 9.78598e-2
+     - 5.2267
+     - 5.2267
+     - 0.9861
    * - 64
-     - 3.6107e-3
-     - 4.9068e-2
-     - 1.9957
-     - 0.9983
+     - 7.87265e-5
+     - 7.87265e-5
+     - 4.90480e-2
+     - 2.9931
+     - 2.9931
+     - 0.9965
    * - 128
-     - 9.0336e-4
-     - 2.4541e-2
-     - 1.9989
-     - 0.9996
+     - 9.85267e-6
+     - 9.85267e-6
+     - 2.45388e-2
+     - 2.9983
+     - 2.9983
+     - 0.9991
 
-This qualifies the measured smooth operator and donor comparison only; it is
-not a universal third-order claim for the nonlinear ERF time integrator.
+This qualifies the measured finite-volume operator and donor comparison only;
+it is not a universal third-order claim for the nonlinear ERF time integrator.
+The full production semidiscrete manufactured transport check reaches WENO
+orders ``2.9777, 2.9944, 2.9986`` and donor orders ``0.9861, 0.9965, 0.9991``;
+its raw evidence is ``/private/tmp/erf_sbm_p2_full_transport_convergence.csv``.
+The coarse/fine interface oracle exercises both upwind signs and both
+``AuxiliaryTimeView::Old`` and ``AuxiliaryTimeView::Evaluation`` at the actual
+coarse/fine stage time.
 
-The ERF ``WENO_Z3`` helper consumes pointwise cell-center data.  The oracle
-therefore initializes point values at cell centers and compares the
-reconstructed face value with the analytic point value at the face.  A separate
-full grouped-transport manufactured test exercises the same production
-divergence/update path; its WENO error is second order over ``N=16,32,64,128``
-while the donor reference is approximately first order.  The qualification
-report records both raw tables and the generated CSV paths.
-
-The first physical boundary descriptor layer provides periodic,
-prescribed-spectral-inflow, advective-outflow, and impermeable-wall semantics
-at the generic transfer-service level.  These nonperiodic descriptors are
-reference/service infrastructure, not production-qualified ERF SBM boundary
-handling.  The production gate is periodic Cartesian only.  A prescribed
-inflow must contain a complete realizable group state; an impermeable wall has
-zero resolved spectral transfer and does not imply deposition.
+The physical boundary adapter maps ERF's configured faces internally to
+periodic, impermeable-wall, or outward-only advective-outflow semantics.
+Single-level wall and outflow production fixtures are qualified at one and two
+MPI ranks: walls have zero resolved advection and diffusion, while outflow
+uses an interior donor, zero diffusion, and rejects an inward carrier unless a
+future explicit spectral inflow is configured.  Prescribed spectral inflow is
+service-level infrastructure only and is not a production-qualified mode.
 
 Post-reflux admissibility is checked explicitly.  If a conservative hierarchy
 correction leaves the invariant domain, P2 fails collectively with diagnostic

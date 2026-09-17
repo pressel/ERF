@@ -43,9 +43,20 @@ BoundaryTransferBudget make_boundary_budget(const BoundaryDescriptor& boundary,
     }
     BoundaryTransferBudget result;
     result.auxiliary.resize(face_flux.size(), 0.0);
+    for (const auto flux : face_flux) {
+        if (!std::isfinite(flux)) throw std::invalid_argument("nonfinite SBM boundary flux");
+    }
     if (boundary.kind == BoundaryKind::ImpermeableWall || boundary.kind == BoundaryKind::Periodic) return result;
+    if (boundary.kind == BoundaryKind::AdvectiveOutflow &&
+        (boundary.face_id < 0 || boundary.face_id >= 2*AMREX_SPACEDIM)) {
+        throw std::invalid_argument("advective SBM outflow requires a valid oriented face id");
+    }
+    const bool low_face = boundary.face_id % 2 == 0;
     for (std::size_t i = 0; i < face_flux.size(); ++i) {
-        if (!std::isfinite(face_flux[i])) throw std::invalid_argument("nonfinite SBM boundary flux");
+        if (boundary.kind == BoundaryKind::AdvectiveOutflow &&
+            ((low_face && face_flux[i] > 0.0) || (!low_face && face_flux[i] < 0.0))) {
+            throw std::domain_error("SBM advective outflow boundary has inward spectral flux");
+        }
         result.auxiliary[i] = area * dt * face_flux[i];
     }
     if (qc_projection.size() != face_flux.size() || qr_projection.size() != face_flux.size()) {
@@ -59,4 +70,3 @@ BoundaryTransferBudget make_boundary_budget(const BoundaryDescriptor& boundary,
 }
 
 } // namespace erf_sbm
-

@@ -498,6 +498,29 @@ TEST(SBMP2, CapabilityGateKeepsP2NegativeControlsFailClosed)
     input.explicit_sbm_diffusion = true;
     input.chunk_size = 0;
     EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
+
+    input.chunk_size = 256;
+    input.periodic_cartesian = false;
+    input.impermeable_wall = true;
+    EXPECT_TRUE(erf_sbm::evaluate_p2_capabilities(input).supported);
+    input.impermeable_wall = false;
+    input.advective_outflow = true;
+    EXPECT_TRUE(erf_sbm::evaluate_p2_capabilities(input).supported);
+    input.prescribed_sbm_inflow = true;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
+    input.prescribed_sbm_inflow = false;
+    input.max_level = 1;
+    input.periodic_cartesian = true;
+    input.periodic_amr = true;
+    EXPECT_TRUE(erf_sbm::evaluate_p2_capabilities(input).supported);
+    input.amr_nonperiodic = true;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
+    input.amr_nonperiodic = false;
+    input.native_subcycling = false;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
+    input.native_subcycling = true;
+    input.tensor_diffusion = true;
+    EXPECT_FALSE(erf_sbm::evaluate_p2_capabilities(input).supported);
 }
 
 TEST(SBMP2, SyntheticSubsetPopulationSurvivesGroupedLimitAndAMRViews)
@@ -773,6 +796,82 @@ TEST(SBMP2, BoundaryBudgetsHaveNoWallSinkAndValidateInflow)
     EXPECT_FALSE(erf_sbm::validate_prescribed_inflow(inflow, groups));
 }
 
+TEST(SBMP2, ProductionOutflowRejectsInwardCarrierWithoutSpectralInflow)
+{
+    const auto layout = make_layout(2, MomentMode::OneMoment);
+    erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+    const Box domain(IntVect(0, 0, 0), IntVect(1, 1, 1));
+    const BoxArray boxes(domain);
+    const DistributionMapping dm(boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(2.0, 2.0, 2.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(0, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    manager.define_level(0, boxes, dm, 2);
+    manager.output(0).setVal(1.0);
+    manager.begin_step(0, 0.0);
+
+    amrex::MultiFab rho(boxes, dm, 1, 2);
+    rho.setVal(1.0);
+    rho.FillBoundary(geometry.periodicity());
+    amrex::MultiFab xflux(amrex::convert(boxes, IntVect(1, 0, 0)), dm, 1, 0);
+    amrex::MultiFab yflux(amrex::convert(boxes, IntVect(0, 1, 0)), dm, 1, 0);
+    amrex::MultiFab zflux(amrex::convert(boxes, IntVect(0, 0, 1)), dm, 1, 0);
+    xflux.setVal(0.0);
+    yflux.setVal(0.0);
+    zflux.setVal(0.0);
+    const int high_face = domain.bigEnd(0) + 1;
+    for (amrex::MFIter mfi(xflux); mfi.isValid(); ++mfi) {
+        const auto flux = xflux.array(mfi);
+        amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (i == high_face) flux(i,j,k) = -1.0;
+        });
+    }
+    amrex::MultiFab core(boxes, dm, RhoQ3_comp + 1, 0);
+    erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
+    stage_flux.define(boxes, dm, layout.ncomp(), 0);
+    const auto context = erf_auxiliary::make_compressible_stage(
+        0, 0.0, 0.0, 1.0/3.0, 1.0, nullptr, nullptr);
+    erf_sbm::TransportBoundaryPolicy boundary_policy;
+    boundary_policy.configured = true;
+    boundary_policy.face_kind[0] = erf_sbm::BoundaryKind::ImpermeableWall;
+    boundary_policy.face_kind[1] = erf_sbm::BoundaryKind::AdvectiveOutflow;
+    boundary_policy.face_kind[2] = erf_sbm::BoundaryKind::Periodic;
+    boundary_policy.face_kind[3] = erf_sbm::BoundaryKind::Periodic;
+    boundary_policy.face_kind[4] = erf_sbm::BoundaryKind::Periodic;
+    boundary_policy.face_kind[5] = erf_sbm::BoundaryKind::Periodic;
+    std::string diagnostic;
+    try {
+        erf_sbm::advance_stage(manager, layout, context, rho, rho, core,
+                               xflux, yflux, zflux, geometry, stage_flux,
+                               erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
+                               0, 0.0, 1, nullptr, boundary_policy);
+    } catch (const std::exception& error) {
+        diagnostic = error.what();
+    }
+    EXPECT_NE(diagnostic.find(
+        "SBM open boundary received inward carrier flux but no prescribed spectral inflow is configured"),
+        std::string::npos);
+}
+
+TEST(SBMP2, FCTCorrectionUsesHighMinusLowAdvectionWhenDiffusionReversesTotalSign)
+{
+    const Real low_adv = 0.75;
+    const Real low_diff = 1.0;
+    const Real high_adv = 0.25;
+    const Real high_total = high_adv + low_diff;
+    ASSERT_LT(high_adv - low_adv, 0.0);
+    ASSERT_GT(high_total - low_adv, 0.0);
+    const Real lambda = 0.5;
+    const Real accepted = low_adv + low_diff + lambda * (high_adv - low_adv);
+    const Real old_expression = low_adv + low_diff + lambda * (high_total - low_adv);
+    EXPECT_DOUBLE_EQ(erf_sbm::accepted_stage_correction({low_adv}, {high_adv}, lambda)[0], -0.25);
+    EXPECT_DOUBLE_EQ(accepted, 1.5);
+    EXPECT_DOUBLE_EQ(old_expression, 2.0);
+    EXPECT_NE(accepted, old_expression);
+}
+
 TEST(SBMP2, AMRRestrictionProlongationAndRegisterUnitsAreConservative)
 {
     const auto restricted = erf_sbm::volume_weighted_restrict({1.0, 3.0, 5.0, 7.0}, 4, 2, 1,
@@ -832,11 +931,25 @@ TEST(SBMP2, PostRefluxFailsClosedWithDiagnosticsAndNeverClips)
 TEST(SBMP2, RestartSchemaAndProjectionComparisonAreStrict)
 {
     const auto layout = make_layout(4, MomentMode::TwoMoment);
-    const auto schema = erf_sbm::make_checkpoint_schema(layout, "complete-groups-v1", "WENO_Z3+FCT-v1", "gamma-k-v1");
+    const auto schema = erf_sbm::make_checkpoint_schema(
+        layout, erf_sbm::SBM_CONSTRAINT_POLICY_ID, erf_sbm::SBM_TRANSPORT_POLICY_ID,
+        "gamma-k-v2", erf_sbm::SBM_BOUNDARY_POLICY_ID);
     EXPECT_TRUE(erf_sbm::compare_checkpoint_schema(schema, schema).empty());
+    const auto old_p2_schema = erf_sbm::make_checkpoint_schema(
+        layout, "complete-groups-v1", "WENO_Z3+FCT-v1", "gamma-k-v1", "periodic-only-v1");
+    EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, old_p2_schema).find("constraint_policy"),
+              std::string::npos);
+    auto old_transport_schema = schema;
+    old_transport_schema.transport_identity = "WENO_Z3+FCT-v1";
+    EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, old_transport_schema).find("transport_identity"),
+              std::string::npos);
     auto altered = schema;
     altered.moment_modes += "changed";
     EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, altered).find("moment_modes"), std::string::npos);
+    altered = schema;
+    altered.boundary_policy += "-changed";
+    EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, altered).find("boundary_policy"),
+              std::string::npos);
     EXPECT_TRUE(erf_sbm::compare_projection(1.0, 1.0 + 1.e-14, 1.0, 8));
     EXPECT_FALSE(erf_sbm::compare_projection(1.0, 1.0 + 1.e-4, 1.0, 8));
 }
@@ -924,6 +1037,84 @@ TEST(SBMP2, AuxiliaryStageFillPatchAndRemakeUseAuthoritativeCoarseSpectrum)
     EXPECT_DOUBLE_EQ(manager.output(1).max(0), 7.0);
 }
 
+TEST(SBMP2, CoarseFineWENOInterfaceOracleUsesBothUpwindSigns)
+{
+    const auto layout = make_layout(2, MomentMode::OneMoment);
+    erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+    const Box coarse_domain(IntVect(0, 0, 0), IntVect(1, 1, 1));
+    const BoxArray coarse_boxes(coarse_domain);
+    const DistributionMapping coarse_dm(coarse_boxes);
+    const IntVect ref_ratio(2, 2, 2);
+    const Box fine_domain = amrex::refine(coarse_domain, ref_ratio);
+    // Only the low-x half is a fine valid region.  The high-x stencil cells
+    // therefore come from the temporal coarse FillPatch path.
+    const BoxArray fine_boxes(Box(IntVect(0, 0, 0), IntVect(1, 3, 3)));
+    const DistributionMapping fine_dm(fine_boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(4.0, 4.0, 4.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry coarse_geometry(coarse_domain, &real_box, amrex::CoordSys::cartesian,
+                                   periodicity.data());
+    const Geometry fine_geometry(fine_domain, &real_box, amrex::CoordSys::cartesian,
+                                 periodicity.data());
+    manager.define_level(0, coarse_boxes, coarse_dm, 2);
+    manager.define_level(1, fine_boxes, fine_dm, 2);
+    manager.output(0).setVal(2.0);
+    manager.begin_step(0, 0.0);
+    manager.output(0).setVal(4.0);
+    manager.accept_stage(0, 1.0);
+    // The valid fine cells represent the same smooth constant state as the
+    // coarse bracket; only the high-x stencil cells cross the interface.
+    manager.evaluation(1).setVal(3.0);
+    manager.fill_stage_from_coarse(0, 1, 0.5, coarse_geometry, fine_geometry,
+                                   ref_ratio, erf_auxiliary::AuxiliaryTimeView::Evaluation);
+
+    const auto weno_z3 = [](const Real qm2, const Real qm1, const Real q,
+                            const Real qp1, const bool positive) {
+        const Real q0 = positive ? Real(0.5) * (-qm2 + Real(3.0)*qm1) :
+            Real(0.5) * (Real(3.0)*q - qp1);
+        const Real q1 = Real(0.5) * (qm1 + q);
+        const Real beta0 = positive ? (qm1-qm2)*(qm1-qm2) : (qp1-q)*(qp1-q);
+        const Real beta1 = (q-qm1)*(q-qm1);
+        const Real tau = std::abs(beta1-beta0);
+        const Real epsilon = Real(1.0e-40) + Real(1.0e-2) *
+            std::max(std::abs(q0), std::abs(q1));
+        const Real w0 = (Real(1.0)/Real(3.0)) *
+            (Real(1.0) + (tau*tau)/((epsilon+beta0)*(epsilon+beta0)));
+        const Real w1 = (Real(2.0)/Real(3.0) *
+            (Real(1.0) + (tau*tau)/((epsilon+beta1)*(epsilon+beta1))));
+        return (w0*q0 + w1*q1) / (w0 + w1);
+    };
+
+    Real positive_face = 0.0;
+    Real negative_face = 0.0;
+    for (amrex::MFIter mfi(manager.evaluation(1)); mfi.isValid(); ++mfi) {
+        const auto values = manager.evaluation(1).const_array(mfi);
+        // Face i=2 is the coarse/fine boundary.  The complete two-ghost
+        // stencil is authoritative coarse data at t=0.5 for this fixture.
+        const Real qm2 = values(0,1,1,0);
+        const Real qm1 = values(1,1,1,0);
+        const Real q = values(2,1,1,0);
+        const Real qp1 = values(3,1,1,0);
+        positive_face = weno_z3(qm2, qm1, q, qp1, true);
+        negative_face = weno_z3(qm2, qm1, q, qp1, false);
+    }
+    amrex::ParallelDescriptor::ReduceRealMax(positive_face);
+    amrex::ParallelDescriptor::ReduceRealMax(negative_face);
+    EXPECT_DOUBLE_EQ(positive_face, 3.0);
+    EXPECT_DOUBLE_EQ(negative_face, 3.0);
+
+    manager.old(1).setVal(0.0);
+    manager.fill_stage_from_coarse(0, 1, 0.5, coarse_geometry, fine_geometry,
+                                   ref_ratio, erf_auxiliary::AuxiliaryTimeView::Old);
+    Real old_view_ghost = 0.0;
+    for (amrex::MFIter mfi(manager.old(1)); mfi.isValid(); ++mfi) {
+        old_view_ghost = manager.old(1).const_array(mfi)(2,1,1,0);
+    }
+    amrex::ParallelDescriptor::ReduceRealMax(old_view_ghost);
+    EXPECT_DOUBLE_EQ(old_view_ghost, 3.0);
+}
+
 TEST(SBMP2, CompleteConstraintValidationCoversAttachedProperties)
 {
     const auto layout = make_layout(2, MomentMode::TwoMoment, true);
@@ -945,12 +1136,67 @@ TEST(SBMP2, CompleteConstraintValidationCoversAttachedProperties)
     EXPECT_THROW(erf_sbm::validate_admissible_state(manager, layout, 0), std::exception);
 }
 
+TEST(SBMP2, DonorSupportEnvelopeHandlesOneTwoMomentAndZeroCarrierCases)
+{
+    // The host oracle is the same ratio contract used by the chunk-local
+    // production envelope: a discontinuous donor composition is bounded by
+    // its actual carrier ratio, while an orphan property is never accepted.
+    EXPECT_TRUE(erf_sbm::property_support_is_admissible(1.0, 2.0, 0.25, 0.75));
+    EXPECT_FALSE(erf_sbm::property_support_is_admissible(0.25, 2.0, 0.25, 0.75));
+    EXPECT_TRUE(erf_sbm::property_support_is_admissible(0.0, 0.0, 0.0, 1.0));
+    EXPECT_FALSE(erf_sbm::property_support_is_admissible(1.e-8, 0.0, 0.0, 1.0));
+    EXPECT_TRUE(erf_sbm::property_support_is_admissible(
+        0.5, 1.0, 0.25, 0.75));
+    EXPECT_FALSE(erf_sbm::property_support_is_admissible(
+        0.2, 1.0, 0.25, 0.75));
+
+    const auto one_moment = erf_sbm::make_attached_property_support_descriptors(
+        make_layout(4, MomentMode::OneMoment, true));
+    ASSERT_EQ(one_moment.size(), 4U);
+    EXPECT_EQ(one_moment[0].two_moment, 0);
+    EXPECT_EQ(one_moment[0].carrier_component, 0);
+    EXPECT_DOUBLE_EQ(one_moment[0].pivot, 0.5);
+    EXPECT_DOUBLE_EQ(one_moment[0].hard_max, 2.0);
+
+    const auto two_moment = erf_sbm::make_attached_property_support_descriptors(
+        make_layout(4, MomentMode::TwoMoment, true));
+    ASSERT_EQ(two_moment.size(), 4U);
+    EXPECT_EQ(two_moment[0].two_moment, 1);
+    EXPECT_EQ(two_moment[0].carrier_component, 4);
+    EXPECT_DOUBLE_EQ(two_moment[0].hard_max, 1.0);
+
+    erf_sbm::SpectralPopulationSpec population;
+    population.population_id = 0;
+    population.semantic_id = "liquid";
+    population.phase = erf_sbm::PopulationPhase::Liquid;
+    population.grid.coordinate_kind = erf_sbm::CoordinateKind::Mass;
+    population.grid.coordinate_units = "kg";
+    population.grid.edges = {0.0, 1.0, 2.0};
+    population.grid.pivots = {0.5, 1.5};
+    population.mass_state_units = "kg m^-3";
+    population.number_state_units = "m^-3";
+    erf_sbm::SBMLayoutSpec spec;
+    spec.populations.push_back(population);
+    spec.liquid_projection = {0, 1};
+    spec.attached_properties.push_back({"solute", "solute", "kg m^-3", 0,
+        erf_sbm::PropertyKind::ExtensiveMass,
+        erf_sbm::SupportRequirement::PositiveMass,
+        erf_sbm::PropertyRemapPolicy::CarrierBinConservative,
+        true, false, 0.0, std::numeric_limits<Real>::quiet_NaN()});
+    const auto no_static_upper = erf_sbm::make_attached_property_support_descriptors(
+        erf_sbm::SBMLayout(std::move(spec)));
+    ASSERT_EQ(no_static_upper.size(), 2U);
+    EXPECT_EQ(no_static_upper[0].has_hard_max, 0);
+}
+
 TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
 {
     std::ofstream evidence("/private/tmp/erf_sbm_p2_weno_convergence.csv");
     ASSERT_TRUE(evidence.good());
-    evidence << "N,weno_max_error,donor_max_error,weno_order,donor_order\n";
+    evidence << "N,weno_positive_max_error,weno_negative_max_error,donor_positive_max_error,"
+                 "weno_positive_order,weno_negative_order,donor_positive_order\n";
     std::vector<Real> weno_errors;
+    std::vector<Real> weno_negative_errors;
     std::vector<Real> donor_errors;
     for (const int ncell : {16, 32, 64, 128}) {
         const Box domain(IntVect(0, 0, 0), IntVect(ncell-1, 0, 0));
@@ -966,44 +1212,84 @@ TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
             const auto values = ratio.array(mfi);
             amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 const Real x = (static_cast<Real>(i) + Real(0.5)) / static_cast<Real>(ncell);
-                values(i,j,k) = Real(2.0) + std::sin(Real(6.2831853071795864769) * x);
+                const Real h = Real(1.0) / static_cast<Real>(ncell);
+                const Real factor = std::sin(Real(3.14159265358979323846) * h) /
+                    (Real(3.14159265358979323846) * h);
+                values(i,j,k) = Real(2.0) +
+                    std::sin(Real(6.2831853071795864769) * x) * factor;
             });
         }
         ratio.FillBoundary(geometry.periodicity());
         const BoxArray face_boxes = amrex::convert(boxes, IntVect(1, 0, 0));
-        amrex::MultiFab errors(face_boxes, dm, 2, 0);
+        amrex::MultiFab errors(face_boxes, dm, 3, 0);
         for (amrex::MFIter mfi(errors); mfi.isValid(); ++mfi) {
             const auto input = ratio.const_array(mfi);
             const auto result = errors.array(mfi);
             const Box face_box = mfi.validbox();
             amrex::ParallelFor(face_box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                WENO_Z3 weno(input, Real(0.0));
-                Real reconstructed = Real(0.0);
-                weno.InterpolateInX(i, j, k, 0, reconstructed, Real(1.0));
-                const Real donor = input(i-1, j, k);
+                const Real positive = [&]() {
+                    const Real qm2 = input(i-2,j,k);
+                    const Real qm1 = input(i-1,j,k);
+                    const Real q = input(i,j,k);
+                    const Real qp1 = input(i+1,j,k);
+                    const Real q0 = Real(0.5) * (-qm2 + Real(3.0)*qm1);
+                    const Real q1 = Real(0.5) * (qm1 + q);
+                    const Real b0 = (qm1-qm2)*(qm1-qm2);
+                    const Real b1 = (q-qm1)*(q-qm1);
+                    const Real tau = std::abs(b1-b0);
+                    const Real epsilon = Real(1.0e-40) +
+                        Real(1.0e-2) * std::max(std::abs(q0), std::abs(q1));
+                    const Real w0 = (Real(1.0)/Real(3.0)) *
+                        (Real(1.0) + (tau*tau)/((epsilon+b0)*(epsilon+b0)));
+                    const Real w1 = (Real(2.0)/Real(3.0)) *
+                        (Real(1.0) + (tau*tau)/((epsilon+b1)*(epsilon+b1)));
+                    return (w0*q0 + w1*q1)/(w0+w1);
+                }();
+                const Real negative = [&]() {
+                    const Real qm1 = input(i-1,j,k);
+                    const Real q = input(i,j,k);
+                    const Real qp1 = input(i+1,j,k);
+                    const Real q0 = Real(0.5) * (Real(3.0)*q - qp1);
+                    const Real q1 = Real(0.5) * (qm1 + q);
+                    const Real b0 = (qp1-q)*(qp1-q);
+                    const Real b1 = (q-qm1)*(q-qm1);
+                    const Real tau = std::abs(b1-b0);
+                    const Real epsilon = Real(1.0e-40) +
+                        Real(1.0e-2) * std::max(std::abs(q0), std::abs(q1));
+                    const Real w0 = (Real(1.0)/Real(3.0)) *
+                        (Real(1.0) + (tau*tau)/((epsilon+b0)*(epsilon+b0)));
+                    const Real w1 = (Real(2.0)/Real(3.0)) *
+                        (Real(1.0) + (tau*tau)/((epsilon+b1)*(epsilon+b1)));
+                    return (w0*q0 + w1*q1)/(w0+w1);
+                }();
+                const Real donor_positive = input(i-1, j, k);
                 const Real exact = Real(2.0) + std::sin(
                     Real(6.2831853071795864769) * static_cast<Real>(i) / static_cast<Real>(ncell));
-                result(i,j,k,0) = std::abs(reconstructed - exact);
-                result(i,j,k,1) = std::abs(donor - exact);
+                result(i,j,k,0) = std::abs(positive - exact);
+                result(i,j,k,1) = std::abs(negative - exact);
+                result(i,j,k,2) = std::abs(donor_positive - exact);
             });
         }
         weno_errors.push_back(errors.norm0(0));
-        donor_errors.push_back(errors.norm0(1));
+        weno_negative_errors.push_back(errors.norm0(1));
+        donor_errors.push_back(errors.norm0(2));
     }
     for (std::size_t i = 0; i < weno_errors.size(); ++i) {
         const Real weno_order = i == 0 ? Real(0.0) :
             std::log(weno_errors[i-1] / weno_errors[i]) / std::log(Real(2.0));
+        const Real weno_negative_order = i == 0 ? Real(0.0) :
+            std::log(weno_negative_errors[i-1] / weno_negative_errors[i]) / std::log(Real(2.0));
         const Real donor_order = i == 0 ? Real(0.0) :
             std::log(donor_errors[i-1] / donor_errors[i]) / std::log(Real(2.0));
         evidence << (16 << i) << ',' << std::setprecision(17) << weno_errors[i] << ','
-                 << donor_errors[i] << ',' << weno_order << ',' << donor_order << '\n';
-        // Source archaeology shows that this helper consumes pointwise cell
-        // center values: its two substencils reconstruct the face between
-        // neighboring centers.  This oracle therefore uses point values and
-        // compares against the analytic face point value; it does not make a
-        // finite-volume cell-average claim.
-        if (i > 1) EXPECT_GT(weno_order, Real(1.8));
-        if (i > 0) EXPECT_LT(weno_errors[i], donor_errors[i]);
+                 << weno_negative_errors[i] << ',' << donor_errors[i] << ','
+                 << weno_order << ',' << weno_negative_order << ',' << donor_order << '\n';
+        if (i > 0) {
+            EXPECT_GT(weno_order, Real(2.5));
+            EXPECT_GT(weno_negative_order, Real(2.5));
+            EXPECT_LT(weno_errors[i], donor_errors[i]);
+            EXPECT_LT(weno_negative_errors[i], donor_errors[i]);
+        }
     }
 }
 
@@ -1011,7 +1297,12 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
 {
     std::ofstream evidence("/private/tmp/erf_sbm_p2_full_transport_convergence.csv");
     ASSERT_TRUE(evidence.good());
-    evidence << "N,weno_error,weno_order,donor_error,donor_order\n";
+    evidence << "N,weno_operator_error,weno_order,weno_min_lambda,"
+                 "donor_operator_error,donor_order\n";
+    struct OperatorResult {
+        Real error;
+        Real minimum_limiter;
+    };
     const auto run = [](const int ncell, const erf_sbm::TransportMethod method) {
         const auto layout = make_layout(2, MomentMode::OneMoment);
         erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
@@ -1028,7 +1319,12 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
             const auto state = manager.output(0).array(mfi);
             amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 const Real x = (static_cast<Real>(i) + Real(0.5)) / static_cast<Real>(ncell);
-                state(i,j,k,0) = Real(2.0) + std::sin(Real(6.2831853071795864769) * x);
+                const Real h = Real(1.0) / static_cast<Real>(ncell);
+                const Real average_factor = std::sin(
+                    Real(3.14159265358979323846) * h) /
+                    (Real(3.14159265358979323846) * h);
+                state(i,j,k,0) = Real(2.0) +
+                    std::sin(Real(6.2831853071795864769) * x) * average_factor;
                 state(i,j,k,1) = Real(1.0);
             });
         }
@@ -1048,28 +1344,40 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
         stage_flux.define(boxes, dm, layout.ncomp(), 0);
         const auto context = erf_auxiliary::make_compressible_stage(
             2, 0.0, 0.0, dt, dt, nullptr, nullptr);
+        Real minimum_limiter = Real(0.0);
         erf_sbm::advance_stage(manager, layout, context, rho, core,
                                xflux, yflux, zflux, geometry, stage_flux,
-                               method, 0, Real(0.0), 1);
+                               method, 0, Real(0.0), 1, &minimum_limiter);
         amrex::MultiFab error(boxes, dm, 1, 0);
         for (amrex::MFIter mfi(error); mfi.isValid(); ++mfi) {
             const auto result = error.array(mfi);
-            const auto state = manager.output(0).const_array(mfi);
+                const auto accepted = stage_flux.x().const_array(mfi);
             amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 const Real x = (static_cast<Real>(i) + Real(0.5)) / static_cast<Real>(ncell);
-                const Real exact = Real(2.0) + std::sin(
-                    Real(6.2831853071795864769) * (x - Real(0.25)*dt));
-                result(i,j,k) = std::abs(state(i,j,k,0) - exact);
+                const Real h = Real(1.0) / static_cast<Real>(ncell);
+                // The production state is a finite-volume average, so the
+                // exact semi-discrete operator is the cell-average of
+                // -u*dq/dx, equivalently the exact face-flux difference.
+                const Real exact_operator = -Real(0.25) *
+                    (std::sin(Real(6.2831853071795864769) * (x + Real(0.5)*h)) -
+                     std::sin(Real(6.2831853071795864769) * (x - Real(0.5)*h))) / h;
+                const Real production_operator = -static_cast<Real>(ncell) *
+                    (accepted(i+1,j,k,0) - accepted(i,j,k,0));
+                result(i,j,k) = std::abs(production_operator - exact_operator);
             });
         }
-        return error.norm0(0);
+        return OperatorResult{error.norm0(0), minimum_limiter};
     };
 
     std::vector<Real> weno_errors;
+    std::vector<Real> weno_limiters;
     std::vector<Real> donor_errors;
     for (const int ncell : {16, 32, 64, 128}) {
-        weno_errors.push_back(run(ncell, erf_sbm::TransportMethod::GroupedFCT_WENOZ3));
-        donor_errors.push_back(run(ncell, erf_sbm::TransportMethod::DonorCell));
+        const auto weno = run(ncell, erf_sbm::TransportMethod::GroupedFCT_WENOZ3);
+        const auto donor = run(ncell, erf_sbm::TransportMethod::DonorCell);
+        weno_errors.push_back(weno.error);
+        weno_limiters.push_back(weno.minimum_limiter);
+        donor_errors.push_back(donor.error);
     }
     for (std::size_t i = 0; i < weno_errors.size(); ++i) {
         const Real weno_order = i == 0 ? Real(0.0) :
@@ -1078,12 +1386,42 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
             std::log(donor_errors[i-1] / donor_errors[i]) / std::log(Real(2.0));
         evidence << (16 << i) << ',' << std::setprecision(17)
                  << weno_errors[i] << ',' << weno_order << ','
-                 << donor_errors[i] << ',' << donor_order << '\n';
+                 << weno_limiters[i] << ',' << donor_errors[i] << ','
+                 << donor_order << '\n';
         if (i > 0) {
-            EXPECT_GT(weno_order, Real(1.5));
+            EXPECT_GT(weno_order, Real(2.5));
+            EXPECT_GT(donor_order, Real(0.5));
             EXPECT_LT(donor_order, Real(1.5));
             EXPECT_LT(weno_errors[i], donor_errors[i]);
         }
+        EXPECT_NEAR(weno_limiters[i], Real(1.0), Real(1.e-12));
+    }
+}
+
+TEST(SBMP2, FiniteVolumeWENOQuadraticOptimalCandidateIsExact)
+{
+    const Real h = Real(1.0) / Real(32.0);
+    const auto cell_average = [=](const int cell) {
+        const Real lo = h * static_cast<Real>(cell);
+        const Real hi = lo + h;
+        const auto primitive = [](const Real x) {
+            return Real(0.5)*x*x + Real(0.5)*x*x*x;
+        };
+        return (primitive(hi) - primitive(lo)) / h;
+    };
+    for (int face = 2; face < 30; ++face) {
+        const Real qm2 = cell_average(face-2);
+        const Real qm1 = cell_average(face-1);
+        const Real q = cell_average(face);
+        const Real left_candidate = Real(0.5) * (-qm2 + Real(3.0)*qm1);
+        const Real centered_candidate = Real(0.5) * (qm1 + q);
+        const Real reconstructed = (left_candidate + Real(2.0)*centered_candidate) / Real(3.0);
+        const Real x = h * static_cast<Real>(face);
+        const Real exact = x + Real(1.5)*x*x;
+        // This is the linear optimal combination of the two smooth FV
+        // substencils; it is exact through the quadratic term and exposes the
+        // face-average indexing independently of nonlinear WENO weights.
+        EXPECT_NEAR(reconstructed, exact, Real(2.e-12));
     }
 }
 

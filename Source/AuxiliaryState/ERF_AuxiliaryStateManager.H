@@ -14,6 +14,8 @@
 
 namespace erf_auxiliary {
 
+enum class AuxiliaryTimeView { Old, Evaluation };
+
 /**
  * Owns auxiliary old/evaluation/output storage outside ERF's compact cons
  * state.  The class is generic and has no dependency on any physics provider.
@@ -51,6 +53,11 @@ public:
                                 const amrex::Geometry& coarse_geometry,
                                 const amrex::Geometry& fine_geometry,
                                 const amrex::IntVect& ref_ratio);
+    void fill_stage_from_coarse(int coarse_level, int fine_level, double time,
+                                const amrex::Geometry& coarse_geometry,
+                                const amrex::Geometry& fine_geometry,
+                                const amrex::IntVect& ref_ratio,
+                                AuxiliaryTimeView target_view);
     // `reset_face_transfer=false` starts another AMR fine substep while
     // retaining the accepted ledger accumulated over the parent coarse step.
     void begin_step(int level, double old_time = 0.0, bool reset_face_transfer = true);

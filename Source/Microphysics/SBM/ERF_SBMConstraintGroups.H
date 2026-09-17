@@ -66,6 +66,22 @@ struct ConstraintDescriptor {
     amrex::Real coefficient1{0.0};
 };
 
+/** Device-ready metadata for a donor-derived attached-property envelope. */
+struct AttachedPropertySupportDescriptor {
+    int group_index{0};
+    int property_index{0};
+    int property_component{-1};
+    int mass_component{-1};
+    int number_component{-1};
+    int carrier_component{-1};
+    int two_moment{0};
+    amrex::Real pivot{1.0};
+    amrex::Real hard_min{0.0};
+    amrex::Real hard_max{0.0};
+    int has_hard_min{0};
+    int has_hard_max{0};
+};
+
 /** Build deterministic groups from the immutable runtime layout. */
 [[nodiscard]] std::vector<ConstraintGroup>
 make_constraint_groups(const SBMLayout& layout);
@@ -73,6 +89,9 @@ make_constraint_groups(const SBMLayout& layout);
 /** Flatten complete semantic groups into bounded device descriptors. */
 [[nodiscard]] std::vector<ConstraintDescriptor>
 make_constraint_descriptors(const SBMLayout& layout);
+
+[[nodiscard]] std::vector<AttachedPropertySupportDescriptor>
+make_attached_property_support_descriptors(const SBMLayout& layout);
 
 /**
  * A production scratch chunk is a sequence of complete constraint groups.

@@ -29,6 +29,13 @@ struct CapabilityInput {
     bool sounding_nudging{false};
     bool sponge_or_wall_modification{false};
     bool periodic_cartesian{true};
+    bool impermeable_wall{false};
+    bool advective_outflow{false};
+    bool prescribed_sbm_inflow{false};
+    bool periodic_amr{true};
+    bool native_subcycling{true};
+    bool amr_nonperiodic{false};
+    bool tensor_diffusion{false};
     bool double_precision{true};
     bool p2_requested{false};
     bool explicit_sbm_diffusion{false};

@@ -9,7 +9,7 @@ contracts and their actual ERF/AMReX integration points.
 | Contract | Actual source symbol | Source path | Units / semantics | P2 use | Unsupported cases |
 |---|---|---|---|---|---|
 | Carrier mass flux | `ERF::advance_sbm_stage`, `avg_xmom/avg_ymom/avg_zmom` | `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp`, `Source/ERF.H` | ERF face-centered dry-air mass flux; the transport kernel consumes the existing face arrays | Common carrier flux for donor and WENO candidates | Independently reconstructed velocity fluxes |
-| High-order reconstruction | `WENO_Z3::InterpolateInX/Y/Z` | `Source/Utils/ERF_Interpolation_WENO_Z.H`; ordinary scalar caller `Source/Advection/ERF_AdvectionSrcForState.cpp` | Reusable ERF scalar WENO-Z3 helper on a grown `Array4`; reconstructed quantity is the intensive `X/rho` | `GroupedFCT_WENOZ3` candidate | Non-orthogonal/terrain reconstruction |
+| High-order reconstruction | `sbm_weno_z3_face` | `Source/Microphysics/SBM/ERF_SBMTransportPrototype.cpp`; ERF's scalar WENO helper remains a source-contract reference | Local finite-volume WENO-Z3 on a two-ghost intensive `X/rho` stencil; the accepted candidate is advection only | `GroupedFCT_WENOZ3` candidate | Non-orthogonal/terrain reconstruction |
 | Auxiliary stage state | `AuxiliaryStateManager::{old,evaluation,output,scratch}` | `Source/AuxiliaryState/ERF_AuxiliaryStateManager.{H,cpp}` | Old full-step baseline, accepted evaluation/output, bounded scratch | Stage recurrence and 2M endpoint workspace | Permanent full endpoint state |
 | Stage timing | `make_compressible_stage`, `make_anelastic_stage`, `StageContext::accepted_ledger_weight` | `Source/AuxiliaryState/ERF_AuxiliaryStageContext.H` | Compressible callback is anchored at `Z^n`; Heun corrector uses half-step transfer | Low/high update, FCT correction, accepted ledger | Final-stage-only Heun ledger |
 | Physical face transfer | `AuxiliaryFaceTransferLedger::record_stage` | `Source/AuxiliaryState/ERF_AuxiliaryFaceTransfer.{H,cpp}` | Conceptual `I=A*integral(F dt)`; internal face FAB is per-area flux and stage weights are explicit | One accepted transfer feeds divergence, projection, diagnostics, and AMR | Candidate/pre-limit transfers |
@@ -21,7 +21,7 @@ contracts and their actual ERF/AMReX integration points.
 | Level creation | `ERF::MakeNewLevelFromScratch`, `MakeNewLevelFromCoarse` | `Source/ERF_MakeNewLevel.cpp` | Auxiliary allocation at every SBM level; coarse-to-fine uses `pc_interp` and then projects compact state | Fresh and refined levels | Compact-to-spectrum reconstruction |
 | Regrid lifecycle | `ERF::RemakeLevel`, `ERF::ClearLevel` | `Source/ERF_MakeNewLevel.cpp` | Remake copies state into new FABs and rebuilds face ledgers; clear destroys all per-level ownership | No stale FAB/device views after regrid | Stale register/pointer retention |
 | Checkpoint/restart | `ERF::WriteCheckpointFile`, `ERF::ReadCheckpointFile` | `Source/IO/ERF_Checkpoint.cpp`; schema service `ERF_SBMRestart.{H,cpp}` | Per-level `SBMAux`, exact schema, compact projection compared before overwrite | Strict P2 restart integrity | Schema conversion or bulk reconstruction |
-| Physical boundaries | `BoundaryKind`, ERF `phys_bc_type` classification | `Source/Microphysics/SBM/ERF_SBMBoundary.{H,cpp}`, `Source/BoundaryConditions` | Periodic production path; prescribed spectral inflow, advective outflow, and impermeable wall budgets are generic service/reference semantics | Boundary service tests and fail-closed production capability gate | Nonperiodic production SBM boundary handling and wall deposition |
+| Physical boundaries | `BoundaryKind`, ERF `phys_bc_type` classification | `Source/Microphysics/SBM/ERF_SBMBoundary.{H,cpp}`, `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp` | Periodic hierarchy plus single-level impermeable-wall and outward-only advective-outflow policies; accepted boundary inventory is projected from the spectral ledger | `SBM_P2_BOUNDARIES_2M` at one and two MPI ranks | Prescribed production spectral inflow, nonperiodic AMR, wall deposition |
 
 ## G1 — layout and invariant domain
 
@@ -35,17 +35,23 @@ the cancellation-scaled tolerance `128*epsilon*scale`, normalizing only tiny
 negative endpoints.
 
 The P2 tests cover 4/16/64 runtime bins, exact cone edges, empty states,
-support/subset constraints, physical 2M storage, and a two-population
-synthetic ice-like subset property.  No ice process is present.
+static and donor-derived support/subset constraints, physical 2M storage, and
+a two-population synthetic ice-like subset property.  No ice process is
+present.  Donor support is built per chunk from the low source, actual incoming
+upwind donors, active diffusion neighbors, and the Heun old state; finite hard
+metadata is intersected without creating a universal carrier floor.
 
 ## G2 — accepted grouped transport
 
 `ERF_SBMTransportPrototype::advance_stage` constructs donor fluxes once from
 the existing ERF carrier mass flux.  The grouped path processes complete
-constraint-group chunks and fills chunk-sized scratch
-with `X/rho`, calls the shared ERF `WENO_Z3` helper, accumulates complete
-cell-wide per-constraint adverse budgets (including all incident faces), and
-applies one face limiter across the complete bin group.  The host
+constraint-group chunks and fills chunk-sized scratch with `X/rho`, evaluates
+the local finite-volume WENO-Z3 face reconstruction, and keeps the exact
+three-flux algebra `A=high_adv-low_adv`, `low_total=low_adv+low_diff`,
+`accepted=low_total+lambda*A`.  It accumulates complete cell-wide
+per-constraint adverse budgets (including all incident faces), evaluates
+cell-local donor-support bounds, and applies one face limiter across the
+complete bin group.  The host
 `limit_grouped` implementation and production FAB path both use the resolved
 constraint descriptors; final accepted physical `(M,C)` transfers are recorded
 and projected, and no compact field has an independent transport path.  Each
@@ -55,7 +61,9 @@ transport objects.
 
 The P2 test executable exercises positive/negative transfer signs, common
 limiting, duplicate face-ownership rejection, chunk-policy invariance, the
-production WENO path, and both temporal stage contracts.
+production WENO path, donor-support/orphan handling, both temporal stage
+contracts, the diffusion-sign negative control, and post-correction complete
+validation.
 
 ## G3 — diffusion and boundaries
 
@@ -66,13 +74,20 @@ diffusion bound is exceeded, and the combined low-order advection-plus-
 diffusion adverse demand is checked before high-order correction.  There is no
 hidden auxiliary subcycling or clipping.  The boundary service rejects
 incomplete/nonrealizable prescribed inflow and emits zero transfer for
-periodic and impermeable-wall descriptors.
+periodic and impermeable-wall descriptors.  The ERF adapter translates
+configured physical faces internally: walls set normal advection and
+diffusion to zero, outflow uses an interior donor and zero diffusion, and an
+inward carrier fails closed.  Boundary-adjacent WENO candidates use
+`high_adv=low_adv`.
 
 ## G4 — AMR and accounting
 
 `sbm_flux_reg` is allocated only when SBM and two-way coupling are active.  The
 integration hook registers the accepted spectral face FAB using YAFluxRegister's
-per-area-flux plus `dt/dx` convention.  `post_timestep` refluxes the
+per-area-flux plus `dt/dx` convention.  ERF's native `erf.dt_ref_ratio=2`
+recursively advances the fine level twice per coarse step; the
+`SBM_P2_AMR_SUBCYCLE_2M` fixture records those counts at one and two ranks.
+`post_timestep` refluxes the
 authoritative spectrum, validates every resolved constraint, projects `qc/qr`,
 then performs the normal ERF average-down and matched auxiliary average-down
 with another complete validation.  An inadmissible post-reflux state is
@@ -87,7 +102,10 @@ spectral/bulk transfer norms, and the provider reflux path.
 ## G5 — restart and regrid
 
 `SBM_Schema` records layout, moment, grid, property, projection, transport,
-constraint, and numerical identities.  On restart, ERF validates the schema
+constraint, boundary, and numerical identities.  The current policy IDs are
+`complete-groups-donor-support-v2`, `WENO_Z3-group-FCT-v2`, and
+`periodic+wall+outflow-no-inflow-v1`; old P2 IDs reject by exact comparison.
+On restart, ERF validates the schema
 before level restoration, allocates the auxiliary manager during
 `MakeNewLevelFromScratch`, reads per-level authoritative `SBMAux`, reconstructs
 the compact projection in scratch, compares it against checkpointed compact
@@ -102,8 +120,9 @@ makes the same-decomposition comparison deterministic.
 
 The P2 capability gate is selected by `sbm_transport_method`, 2M mode, or a
 positive explicit SBM diffusion coefficient.  A supported report is
-machine-readable as `qualification_status=qualified`, with implementation
-`flags`, `qualified_flags`, and `qualification_limitations` kept separate.
+machine-readable as `qualification_status=qualified` only after the complete
+P2 gate matrix is green, with implementation `flags`, `qualified_flags`, and
+`qualification_limitations` kept separate.
 The production chunk-equivalence qualification exercises the actual grouped
 transport path for 4, 16, and 64 bins, both moment modes, and chunk policies
 1, 2, 4, and all groups.  It compares the final authoritative spectrum,
@@ -113,10 +132,13 @@ reference and records the logical temporary bound in
 independent of total bin count for fixed chunk size and grows with the number
 of groups processed in one chunk.
 It fails closed for SHOC, implicit moisture diffusion, moving terrain, EB,
-nonperiodic production geometry/boundaries, dynamic grids, schema conversion,
-and P3+ physical processes.  WENO-Z3 convergence is measured for the
-implemented smooth face operator and donor comparison, but no universal
-third-order claim is made.  The production chunk path's local scratch bound is
+nonperiodic AMR, prescribed production spectral inflow, dynamic grids, schema
+conversion, tensor diffusion, and P3+ physical processes.  Static single-level
+walls and outward-only outflow are qualified in addition to periodic
+transport.  The finite-volume WENO-Z3 oracle and accepted production face
+operator show asymptotic order about three in the smooth constant-density
+case; this is not a variable-density or nonlinear time-integrator claim.  The
+production chunk path's local scratch bound is
 verified by the estimator and runtime 1M/2M chunk-policy tests.  Ordinary ERF
 paths remain unmodified when SBM is disabled.  Qualification counts and
 environment limitations are recorded in `P2_QUALIFICATION_REPORT.md`.

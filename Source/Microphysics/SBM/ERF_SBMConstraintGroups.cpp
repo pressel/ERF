@@ -116,7 +116,9 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                 group.attached_property_indices.push_back(static_cast<int>(property_index));
                 add_constraint(group, property.semantic_id + ".nonnegative", {{property_component, 1.0}});
 
-                const bool has_upper = finite(property.support_max) && property.support_max >= property.support_min;
+                const bool has_lower = finite(property.support_min) && property.support_min > amrex::Real(0.0);
+                const bool has_upper = finite(property.support_max) &&
+                    property.support_max >= property.support_min;
                 if (has_upper) {
                     if (number >= 0) {
                         // Two-moment storage is physical (M,C), so support
@@ -124,21 +126,23 @@ std::vector<ConstraintGroup> make_constraint_groups(const SBMLayout& layout)
                         add_constraint(group, property.semantic_id + ".support_upper",
                                        {{number, property.support_max},
                                         {property_component, -1.0}});
-                        if (property.support_min > amrex::Real(0.0)) {
-                            add_constraint(group, property.semantic_id + ".support_lower",
-                                           {{number, -property.support_min},
-                                            {property_component, 1.0}});
-                        }
                     } else {
                         const amrex::Real pivot = population.grid.pivot(bin);
                         add_constraint(group, property.semantic_id + ".support_upper",
                                        {{mass, property.support_max / pivot},
                                         {property_component, -1.0}});
-                        if (property.support_min > amrex::Real(0.0)) {
-                            add_constraint(group, property.semantic_id + ".support_lower",
-                                           {{mass, -property.support_min / pivot},
-                                            {property_component, 1.0}});
-                        }
+                    }
+                }
+                if (has_lower) {
+                    if (number >= 0) {
+                        add_constraint(group, property.semantic_id + ".support_lower",
+                                       {{number, -property.support_min},
+                                        {property_component, 1.0}});
+                    } else {
+                        const amrex::Real pivot = population.grid.pivot(bin);
+                        add_constraint(group, property.semantic_id + ".support_lower",
+                                       {{mass, -property.support_min / pivot},
+                                        {property_component, 1.0}});
                     }
                 }
 
@@ -189,6 +193,49 @@ std::vector<ConstraintDescriptor> make_constraint_descriptors(const SBMLayout& l
         }
     }
     return descriptors;
+}
+
+std::vector<AttachedPropertySupportDescriptor>
+make_attached_property_support_descriptors(const SBMLayout& layout)
+{
+    std::vector<AttachedPropertySupportDescriptor> result;
+    const auto groups = make_constraint_groups(layout);
+    for (std::size_t group_index = 0; group_index < groups.size(); ++group_index) {
+        const auto& group = groups[group_index];
+        const auto population = std::find_if(layout.populations().begin(), layout.populations().end(),
+            [&](const PopulationLayout& candidate) {
+                return candidate.population_id == group.population_id;
+            });
+        if (population == layout.populations().end()) {
+            throw std::logic_error("SBM attached-property group references an unknown population");
+        }
+        for (const int property_index : group.attached_property_indices) {
+            const auto& property = layout.attached_properties()[static_cast<std::size_t>(property_index)];
+            AttachedPropertySupportDescriptor descriptor;
+            descriptor.group_index = static_cast<int>(group_index);
+            descriptor.property_index = property_index;
+            descriptor.property_component = layout.property_offset(property_index) + group.bin;
+            descriptor.mass_component = population->mass_offset + group.bin;
+            descriptor.number_component = population->number_offset >= 0 ?
+                population->number_offset + group.bin : -1;
+            descriptor.two_moment = descriptor.number_component >= 0 ? 1 : 0;
+            descriptor.carrier_component = descriptor.two_moment ?
+                descriptor.number_component : descriptor.mass_component;
+            descriptor.pivot = population->grid.pivot(group.bin);
+            // The transport envelope is expressed as S/carrier.  For a
+            // two-moment carrier this is S/C, while a one-moment property
+            // uses C=M/m_pivot and therefore has normalized bounds
+            // (support_min/m_pivot, support_max/m_pivot).
+            const amrex::Real support_scale = descriptor.two_moment ?
+                amrex::Real(1.0) : descriptor.pivot;
+            descriptor.hard_min = property.support_min / support_scale;
+            descriptor.hard_max = property.support_max / support_scale;
+            descriptor.has_hard_min = finite(property.support_min) ? 1 : 0;
+            descriptor.has_hard_max = finite(property.support_max) ? 1 : 0;
+            result.push_back(descriptor);
+        }
+    }
+    return result;
 }
 
 std::vector<ConstraintClosureChunk>
@@ -261,6 +308,9 @@ bool property_support_is_admissible(const amrex::Real property,
 {
     if (!finite(property) || !finite(carrier_number) || !finite(lower) || !finite(upper) ||
         carrier_number < amrex::Real(0.0) || lower < amrex::Real(0.0) || upper < lower) return false;
+    if (carrier_number == amrex::Real(0.0)) {
+        return std::abs(property) <= tolerance;
+    }
     return property >= lower * carrier_number - tolerance &&
            property <= upper * carrier_number + tolerance;
 }

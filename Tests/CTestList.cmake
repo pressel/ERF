@@ -1060,6 +1060,66 @@ function(add_test_sbm_p2_active_mpi TEST_NAME)
         ATTACHED_FILES_ON_FAIL "${_log};${_test_dir}/active_mpi/run_1r.composite;${_test_dir}/active_mpi/run_2r.composite")
 endfunction(add_test_sbm_p2_active_mpi)
 
+# Qualify ERF's native hierarchy subcycling (not an SBM-specific scheduler)
+# at a factor of two and compare the positive case at one and two ranks.
+function(add_test_sbm_p2_amr_subcycle TEST_NAME)
+    set(_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_amr_subcycle")
+    set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
+    file(MAKE_DIRECTORY "${_test_dir}")
+    file(COPY "${_source_input}" DESTINATION "${_test_dir}")
+    resolve_test_exe("" "erf_exec" TEST_EXE)
+    set(_input "${_test_dir}/inputs_sbm_p2_amr_subcycle")
+    set(_log "${_test_dir}/${TEST_NAME}.log")
+    add_test(${TEST_NAME} ${CMAKE_COMMAND}
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}
+        -DTEST_EXE=${TEST_EXE}
+        -DINPUT=${_input}
+        -DWORKING_DIRECTORY=${_test_dir}
+        -DLOG=${_log}
+        -P ${PROJECT_SOURCE_DIR}/Tests/RunSBMP2AMRSubcycle.cmake)
+    set_tests_properties(${TEST_NAME}
+        PROPERTIES
+        TIMEOUT 1500
+        PROCESSORS 2
+        WORKING_DIRECTORY "${_test_dir}/"
+        LABELS "regression;sbm;sbm-p2;amr;subcycling;mpi"
+        ATTACHED_FILES_ON_FAIL "${_log};${_test_dir}/subcycle")
+endfunction(add_test_sbm_p2_amr_subcycle)
+
+# Single-level physical boundary qualification.  The wall case must have no
+# SBM boundary transfer; the outflow case must expose a positive per-component
+# outward inventory and close it with the production per-component tolerance.
+function(add_test_sbm_p2_boundaries TEST_NAME)
+    set(_wall_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_wall")
+    set(_outflow_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_outflow")
+    set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
+    file(MAKE_DIRECTORY "${_test_dir}")
+    file(COPY "${_wall_source_input}" "${_outflow_source_input}" DESTINATION "${_test_dir}")
+    resolve_test_exe("" "erf_exec" TEST_EXE)
+    add_test(${TEST_NAME} ${CMAKE_COMMAND}
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}
+        -DTEST_EXE=${TEST_EXE}
+        -DWALL_INPUT=${_test_dir}/inputs_sbm_p2_wall
+        -DOUTFLOW_INPUT=${_test_dir}/inputs_sbm_p2_outflow
+        -DWORKING_DIRECTORY=${_test_dir}
+        -DLOG=${_test_dir}/${TEST_NAME}.log
+        -P ${PROJECT_SOURCE_DIR}/Tests/RunSBMP2Boundaries.cmake)
+    set_tests_properties(${TEST_NAME}
+        PROPERTIES
+        TIMEOUT 1500
+        PROCESSORS 2
+        WORKING_DIRECTORY "${_test_dir}/"
+        LABELS "regression;sbm;sbm-p2;boundaries;mpi"
+        ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/wall;${_test_dir}/outflow")
+endfunction(add_test_sbm_p2_boundaries)
+
 #=============================================================================
 # Regression tests
 #=============================================================================
@@ -1074,6 +1134,8 @@ if(ERF_ENABLE_TESTS AND ERF_ENABLE_MPI)
     add_test_sbm_p2_amr(SBM_P2_AMR_2M 2)
     add_test_sbm_p2_restart(SBM_P2_AMR_RESTART_2M 2)
     add_test_sbm_p2_active_mpi(SBM_P2_ACTIVE_MPI)
+    add_test_sbm_p2_amr_subcycle(SBM_P2_AMR_SUBCYCLE_2M)
+    add_test_sbm_p2_boundaries(SBM_P2_BOUNDARIES_2M)
 
     # The checker is a small AMReX PlotFileData consumer and is built only
     # when regression tests are enabled.  All SHOC cases use explicit

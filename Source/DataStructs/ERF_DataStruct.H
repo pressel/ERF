@@ -1694,12 +1694,27 @@ struct SolverChoice {
             capability.large_scale_forcing = large_scale_forcing;
             capability.sounding_nudging = nudging_from_input_sounding;
             capability.sponge_or_wall_modification = spongeChoice.sponge_type != SpongeType::None;
+            capability.impermeable_wall = false;
+            capability.advective_outflow = false;
+            capability.prescribed_sbm_inflow = false;
 #ifdef AMREX_USE_FLOAT
             capability.double_precision = false;
 #endif
             capability.periodic_cartesian = true;
             for (int lev = 0; lev <= max_level; ++lev) {
                 capability.periodic_cartesian = capability.periodic_cartesian && geom_vect[lev].isAllPeriodic();
+            }
+            capability.periodic_amr = capability.periodic_cartesian;
+            capability.amr_nonperiodic = max_level > 0 && !capability.periodic_cartesian;
+            for (int face = 0; face < AMREX_SPACEDIM*2; ++face) {
+                const auto bc = phys_bc_type[face];
+                capability.impermeable_wall = capability.impermeable_wall ||
+                    bc == ERF_BC::symmetry || bc == ERF_BC::no_slip_wall ||
+                    bc == ERF_BC::slip_wall;
+                capability.advective_outflow = capability.advective_outflow ||
+                    bc == ERF_BC::outflow || bc == ERF_BC::ho_outflow || bc == ERF_BC::open;
+                capability.prescribed_sbm_inflow = capability.prescribed_sbm_inflow ||
+                    bc == ERF_BC::inflow || bc == ERF_BC::inflow_outflow;
             }
             // AMR is a P2 lifecycle feature even when the numerical reference
             // method remains DonorCell; otherwise a multi-level donor run

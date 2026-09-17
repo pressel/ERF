@@ -255,7 +255,8 @@ ERF::WriteCheckpointFile () const
     if (solverChoice.moisture_type == MoistureType::SBM && sbm_layout != nullptr &&
         sbm_auxiliary != nullptr && ParallelDescriptor::IOProcessor()) {
         const auto schema = ::erf_sbm::make_checkpoint_schema(
-            *sbm_layout, "complete-groups-v1", solverChoice.sbm_transport_method,
+            *sbm_layout, ::erf_sbm::SBM_CONSTRAINT_POLICY_ID,
+            solverChoice.sbm_transport_method + "|" + ::erf_sbm::SBM_TRANSPORT_POLICY_ID,
             "gamma-k-v1");
         ::erf_sbm::write_checkpoint_schema(checkpointname + "/SBM_Schema", schema);
     }
@@ -737,7 +738,8 @@ ERF::ReadCheckpointFile ()
             amrex::Error("SBM restart requires the strict P2 auxiliary schema file: " + schema_path);
         }
         const auto expected = ::erf_sbm::make_checkpoint_schema(
-            *sbm_layout, "complete-groups-v1", solverChoice.sbm_transport_method,
+            *sbm_layout, ::erf_sbm::SBM_CONSTRAINT_POLICY_ID,
+            solverChoice.sbm_transport_method + "|" + ::erf_sbm::SBM_TRANSPORT_POLICY_ID,
             "gamma-k-v1");
         const auto actual = ::erf_sbm::read_checkpoint_schema(schema_path);
         const auto mismatch = ::erf_sbm::compare_checkpoint_schema(expected, actual);

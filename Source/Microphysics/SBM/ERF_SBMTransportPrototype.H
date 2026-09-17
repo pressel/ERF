@@ -6,6 +6,7 @@
 #include "ERF_AuxiliaryStateManager.H"
 #include "ERF_SBMLayout.H"
 #include "ERF_SBMFCT.H"
+#include "ERF_SBMBoundary.H"
 
 #include <AMReX_Geometry.H>
 #include <AMReX_MultiFab.H>
@@ -37,6 +38,28 @@ HostState accepted_ledger(const ::erf_auxiliary::StageContext& context,
 void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    const SBMLayout& layout,
                    const ::erf_auxiliary::StageContext& context,
+                   const amrex::MultiFab& rho_anchor,
+                   const amrex::MultiFab& rho_input,
+                   amrex::MultiFab& core_state,
+                   const amrex::MultiFab& carrier_x,
+                   const amrex::MultiFab& carrier_y,
+                   const amrex::MultiFab& carrier_z,
+                   const amrex::Geometry& geometry,
+                   ::erf_auxiliary::AuxiliaryFaceTransfer& stage_flux,
+                   TransportMethod method = TransportMethod::DonorCell,
+                   int level = 0,
+                   amrex::Real diffusion_coefficient = amrex::Real(0.0),
+                   int chunk_size = 0,
+                   amrex::Real* minimum_accepted_limiter = nullptr,
+                   const TransportBoundaryPolicy& boundary_policy = {});
+
+/**
+ * Compatibility entry point for callers that have one density view.  New
+ * production callers must use the explicit anchor/input overload above.
+ */
+void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
+                   const SBMLayout& layout,
+                   const ::erf_auxiliary::StageContext& context,
                    const amrex::MultiFab& rho_evaluation,
                    amrex::MultiFab& core_state,
                    const amrex::MultiFab& carrier_x,
@@ -48,7 +71,8 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
                    int level = 0,
                    amrex::Real diffusion_coefficient = amrex::Real(0.0),
                    int chunk_size = 0,
-                   amrex::Real* minimum_accepted_limiter = nullptr);
+                   amrex::Real* minimum_accepted_limiter = nullptr,
+                   const TransportBoundaryPolicy& boundary_policy = {});
 
 /** Fail-closed finite/nonnegative check for authoritative spectral state. */
 void validate_nonnegative_state(const amrex::MultiFab& state, int ncomp,

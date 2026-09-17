@@ -49,9 +49,12 @@ CapabilityReport evaluate_p1_capabilities(const CapabilityInput& input)
 CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
 {
     CapabilityReport report;
-    report.flags = {"multi_level", "static_cartesian", "runtime_bins", "complete_groups",
+    report.flags = {"multi_level", "static_cartesian", "runtime_bins", "one_moment", "two_moment",
+                    "complete_groups", "constraints", "weno_z3_fct", "density_weighted_diffusion",
+                    "periodic", "single_level_wall", "single_level_outflow", "periodic_amr",
+                    "native_subcycling", "restart", "double",
                     "two_moment_endpoints", "explicit_density_weighted_diffusion",
-                    "weno_z3_fct", "conservative_amr", "strict_restart_schema", "double"};
+                    "conservative_amr", "strict_restart_schema"};
     // Every flag in this inventory is covered for the declared supported
     // configuration by the production AMR, restart, active-limiter MPI, and
     // chunk-memory qualification fixtures.  Unsupported physics and geometry
@@ -80,10 +83,19 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
     reject(input.large_scale_forcing, "large-scale forcing is unsupported by P2");
     reject(input.sounding_nudging, "sounding nudging is unsupported by P2");
     reject(input.sponge_or_wall_modification, "sponge/wall modification is unsupported by P2");
+    reject(input.tensor_diffusion, "tensor/cross-term diffusion is unsupported by P2");
+    reject(input.prescribed_sbm_inflow,
+           "production prescribed spectral inflow is not wired into the ERF SBM hook");
+    reject(!input.native_subcycling,
+           "P2 qualification requires ERF native AMR subcycling with the qualified factor-2 mode");
+    reject(input.amr_nonperiodic, "nonperiodic AMR is unsupported by P2");
+    reject(input.max_level > 0 && !input.periodic_amr,
+           "P2 AMR requires the periodic AMR FillPatch contract");
+    reject(!input.periodic_cartesian && !input.impermeable_wall && !input.advective_outflow,
+           "nonperiodic SBM transport requires an explicit wall or outward-only outflow boundary policy");
     reject(input.diffusion && !input.explicit_sbm_diffusion,
            "native moisture diffusion must not write provider-owned SBM components");
     reject(input.implicit_moisture_diffusion, "implicit moisture diffusion is unsupported by P2");
-    reject(!input.periodic_cartesian, "P2 production transport currently requires periodic Cartesian boundaries");
     reject(!input.double_precision, "P2 manufactured transport is currently double precision only");
     reject(input.chunk_size <= 0, "P2 scratch chunk size must be positive");
     report.supported = report.rejected_reasons.empty();

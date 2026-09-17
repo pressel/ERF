@@ -5,12 +5,21 @@
 
 #include <AMReX_REAL.H>
 
+#include <array>
 #include <string>
 #include <vector>
 
 namespace erf_sbm {
 
 enum class BoundaryKind { Periodic, PrescribedSpectralInflow, AdvectiveOutflow, ImpermeableWall };
+
+/** Physical face policy used by the production auxiliary transport hook. */
+struct TransportBoundaryPolicy {
+    // Face numbering is 2*dir for low and 2*dir+1 for high.  The zero value
+    // intentionally makes the default policy periodic in every direction.
+    std::array<BoundaryKind, AMREX_SPACEDIM*2> face_kind{};
+    bool configured{false};
+};
 
 struct BoundaryDescriptor {
     BoundaryKind kind{BoundaryKind::Periodic};

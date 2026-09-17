@@ -12,10 +12,11 @@ namespace erf_sbm {
 SBMCheckpointSchema make_checkpoint_schema(const SBMLayout& layout,
                                            const std::string& constraint_policy,
                                            const std::string& transport_identity,
-                                           const std::string& numerical_policy)
+                                           const std::string& numerical_policy,
+                                           const std::string& boundary_policy)
 {
     SBMCheckpointSchema result;
-    result.schema_version = "ERF-SBM-P2-1";
+    result.schema_version = "ERF-SBM-P2-2";
     std::ostringstream ids, moments, grids;
     for (const auto& population : layout.populations()) {
         ids << population.population_id << ':' << population.semantic_id << ';';
@@ -36,6 +37,7 @@ SBMCheckpointSchema make_checkpoint_schema(const SBMLayout& layout,
     result.projection_identity = projection.str();
     result.transport_identity = transport_identity;
     result.numerical_policy = numerical_policy;
+    result.boundary_policy = boundary_policy;
     return result;
 }
 
@@ -47,10 +49,11 @@ std::string compare_checkpoint_schema(const SBMCheckpointSchema& expected,
         {"moment_modes", expected.moment_modes}, {"grid_identity", expected.grid_identity},
         {"property_identity", expected.property_identity}, {"constraint_policy", expected.constraint_policy},
         {"projection_identity", expected.projection_identity}, {"transport_identity", expected.transport_identity},
-        {"numerical_policy", expected.numerical_policy}};
+        {"numerical_policy", expected.numerical_policy}, {"boundary_policy", expected.boundary_policy}};
     const std::string* actual_fields[] = {&actual.schema_version, &actual.population_ids, &actual.moment_modes,
         &actual.grid_identity, &actual.property_identity, &actual.constraint_policy,
-        &actual.projection_identity, &actual.transport_identity, &actual.numerical_policy};
+        &actual.projection_identity, &actual.transport_identity, &actual.numerical_policy,
+        &actual.boundary_policy};
     for (std::size_t i = 0; i < std::size(expected_fields); ++i) if (expected_fields[i].second != *actual_fields[i]) {
         return std::string("SBM checkpoint schema mismatch in ") + expected_fields[i].first +
                ": expected='" + expected_fields[i].second + "' actual='" + *actual_fields[i] + "'";
@@ -71,7 +74,8 @@ void write_checkpoint_schema(const std::string& path, const SBMCheckpointSchema&
            << "constraint_policy=" << schema.constraint_policy << '\n'
            << "projection_identity=" << schema.projection_identity << '\n'
            << "transport_identity=" << schema.transport_identity << '\n'
-           << "numerical_policy=" << schema.numerical_policy << '\n';
+           << "numerical_policy=" << schema.numerical_policy << '\n'
+           << "boundary_policy=" << schema.boundary_policy << '\n';
 }
 
 SBMCheckpointSchema read_checkpoint_schema(const std::string& path)
@@ -96,6 +100,7 @@ SBMCheckpointSchema read_checkpoint_schema(const std::string& path)
         else if (key == "projection_identity") schema.projection_identity = value;
         else if (key == "transport_identity") schema.transport_identity = value;
         else if (key == "numerical_policy") schema.numerical_policy = value;
+        else if (key == "boundary_policy") schema.boundary_policy = value;
         else throw std::runtime_error("unknown SBM checkpoint schema key: " + key);
     }
     return schema;

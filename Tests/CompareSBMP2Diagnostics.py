@@ -39,6 +39,10 @@ def numeric_keys(values):
     }
     fixed.update(key for key in values if key.startswith("composite_initial_comp_"))
     fixed.update(key for key in values if key.startswith("composite_final_comp_"))
+    fixed.update(key for key in values if key.startswith("boundary_inventory_outward_comp_"))
+    fixed.update(key for key in values if key.startswith("boundary_inventory_closure_error_comp_"))
+    fixed.update(key for key in values if key.startswith("composite_scale_comp_"))
+    fixed.update(key for key in values if key.startswith("composite_tolerance_comp_"))
     fixed.update(key for key in values if key.startswith("accepted_face_transfer_sum_comp_"))
     return sorted(fixed)
 

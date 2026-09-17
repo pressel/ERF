@@ -189,6 +189,40 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     Real accepted_bulk_transfer_max = Real(0.0);
     std::vector<Real> accepted_face_transfer_sum(static_cast<std::size_t>(ncomp), Real(0.0));
     std::vector<Real> accepted_bulk_transfer_sum(2, Real(0.0));
+    std::vector<Real> boundary_outward(static_cast<std::size_t>(ncomp), Real(0.0));
+    const auto boundary_kind = [](const ERF_BC bc) {
+        if (bc == ERF_BC::symmetry || bc == ERF_BC::no_slip_wall ||
+            bc == ERF_BC::slip_wall) {
+            return ::erf_sbm::BoundaryKind::ImpermeableWall;
+        }
+        if (bc == ERF_BC::outflow || bc == ERF_BC::ho_outflow ||
+            bc == ERF_BC::open) {
+            return ::erf_sbm::BoundaryKind::AdvectiveOutflow;
+        }
+        if (bc == ERF_BC::periodic) return ::erf_sbm::BoundaryKind::Periodic;
+        return ::erf_sbm::BoundaryKind::PrescribedSpectralInflow;
+    };
+    const auto boundary_kind_name = [](const ::erf_sbm::BoundaryKind kind) {
+        switch (kind) {
+        case ::erf_sbm::BoundaryKind::Periodic: return "Periodic";
+        case ::erf_sbm::BoundaryKind::ImpermeableWall: return "ImpermeableWall";
+        case ::erf_sbm::BoundaryKind::AdvectiveOutflow: return "AdvectiveOutflow";
+        case ::erf_sbm::BoundaryKind::PrescribedSpectralInflow: return "PrescribedSpectralInflow";
+        }
+        return "Unknown";
+    };
+    std::array<const char*, AMREX_SPACEDIM*2> boundary_policy_names{};
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        if (geom[0].isPeriodic(dir)) {
+            boundary_policy_names[2*dir] = "Periodic";
+            boundary_policy_names[2*dir+1] = "Periodic";
+        } else {
+            boundary_policy_names[2*dir] = boundary_kind_name(
+                boundary_kind(phys_bc_type[Orientation(dir, Orientation::low)]));
+            boundary_policy_names[2*dir+1] = boundary_kind_name(
+                boundary_kind(phys_bc_type[Orientation(dir, Orientation::high)]));
+        }
+    }
     for (int lev = 0; lev <= finest_level; ++lev) {
         const bool mask_coarse = lev < finest_level && fine_mask[lev+1] != nullptr;
         for (int comp = 0; comp < ncomp; ++comp) {
@@ -216,6 +250,49 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
                                                             bulk_face.norm0(comp));
                     accepted_bulk_transfer_sum[static_cast<std::size_t>(comp)] +=
                         bulk_face.sum(comp);
+                }
+                // The accepted ledger stores flux integrated in time but not
+                // multiplied by face area.  For the qualified static
+                // Cartesian single-level boundary policy, this inventory is
+                // the exact outward amount used by the conservation oracle.
+                if (lev == 0 && !geom[lev].isPeriodic(dir)) {
+                    const auto low_kind = boundary_kind(
+                        phys_bc_type[Orientation(dir, Orientation::low)]);
+                    const auto high_kind = boundary_kind(
+                        phys_bc_type[Orientation(dir, Orientation::high)]);
+                    const Real face_area = [&]() {
+                        Real area = Real(1.0);
+                        for (int transverse = 0; transverse < AMREX_SPACEDIM; ++transverse) {
+                            if (transverse != dir) area *= geom[lev].CellSize(transverse);
+                        }
+                        return area;
+                    }();
+                    const auto boundary_sum = [&](const int component, const int coordinate) {
+                        MultiFab selected(bulk_face.boxArray(), bulk_face.DistributionMap(), 1, 0);
+                        selected.setVal(Real(0.0));
+                        for (MFIter mfi(bulk_face); mfi.isValid(); ++mfi) {
+                            const auto source = accepted_face.const_array(mfi);
+                            const auto destination = selected.array(mfi);
+                            const Box box = mfi.validbox();
+                            ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                                const int face_coordinate = dir == 0 ? i : (dir == 1 ? j : k);
+                                if (face_coordinate == coordinate) {
+                                    destination(i,j,k,0) = source(i,j,k,component);
+                                }
+                            });
+                        }
+                        return selected.sum(0) * face_area;
+                    };
+                    for (int comp = 0; comp < ncomp; ++comp) {
+                        if (low_kind == ::erf_sbm::BoundaryKind::AdvectiveOutflow) {
+                            boundary_outward[static_cast<std::size_t>(comp)] -=
+                                boundary_sum(comp, geom[lev].Domain().smallEnd(dir));
+                        }
+                        if (high_kind == ::erf_sbm::BoundaryKind::AdvectiveOutflow) {
+                            boundary_outward[static_cast<std::size_t>(comp)] +=
+                                boundary_sum(comp, geom[lev].Domain().bigEnd(dir) + 1);
+                        }
+                    }
                 }
             }
             face_projection_error = amrex::max(face_projection_error,
@@ -274,24 +351,37 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
         amrex::Math::abs(compact_final - spectral_cloud_final - spectral_rain_final),
         amrex::Math::abs(compact_initial - spectral_cloud_initial - spectral_rain_initial));
 
+    std::vector<Real> component_scale(static_cast<std::size_t>(ncomp), Real(0.0));
+    std::vector<Real> component_tolerance(static_cast<std::size_t>(ncomp), Real(0.0));
+    const Real tolerance_factor = Real(1.0e-12);
+    const Real compact_scale = amrex::max(amrex::Math::abs(compact_initial),
+                                           amrex::Math::abs(compact_final));
+    const Real compact_tolerance = compact_scale == Real(0.0) ? Real(0.0) :
+        tolerance_factor * compact_scale;
+    const Real face_scale = amrex::max(accepted_face_transfer_max,
+                                       accepted_face_transfer_l1);
+    const Real face_tolerance = face_scale == Real(0.0) ? Real(0.0) :
+        tolerance_factor * face_scale;
     const Real composite_error = [&]() {
         Real error = Real(0.0);
         for (int comp = 0; comp < ncomp; ++comp) {
-            error = amrex::max(error, amrex::Math::abs(
-                final[static_cast<std::size_t>(comp)] - initial[static_cast<std::size_t>(comp)]));
+            const auto index = static_cast<std::size_t>(comp);
+            const Real conservation_residual = final[index] - initial[index] +
+                boundary_outward[index];
+            const Real component_error = amrex::Math::abs(conservation_residual);
+            component_scale[index] = amrex::max(amrex::Math::abs(initial[index]),
+                                                amrex::Math::abs(final[index]));
+            component_tolerance[index] = component_scale[index] == Real(0.0) ?
+                Real(0.0) : tolerance_factor * component_scale[index];
+            error = amrex::max(error, component_error);
         }
         return error;
     }();
-    const Real scale = [&]() {
-        Real result = Real(1.0);
-        for (int comp = 0; comp < ncomp; ++comp) {
-            result = amrex::max(result, amrex::Math::abs(initial[static_cast<std::size_t>(comp)]));
-            result = amrex::max(result, amrex::Math::abs(final[static_cast<std::size_t>(comp)]));
-        }
-        return result;
-    }();
-    const Real tolerance = Real(1.0e-10) * scale;
-    const Real interface_tolerance = Real(512.0) * std::numeric_limits<Real>::epsilon();
+    // The independent oracle compares two separately reduced paths (fine
+    // averaging and authoritative reflux).  Use a bounded machine-scale
+    // allowance for their different summation order, while retaining a
+    // relative tolerance with no order-one floor.
+    const Real interface_tolerance = Real(4096.0) * std::numeric_limits<Real>::epsilon();
     bool interface_passed = finest_level == 0;
     if (finest_level > 0) {
         interface_passed = sbm_interface_oracle_available &&
@@ -308,9 +398,16 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
             }
         }
     }
-    const bool passed = composite_error <= tolerance &&
-                        compact_projection_error <= tolerance &&
-                        face_projection_error <= tolerance &&
+    bool component_residuals_passed = true;
+    for (int comp = 0; comp < ncomp; ++comp) {
+        const auto index = static_cast<std::size_t>(comp);
+        component_residuals_passed = component_residuals_passed &&
+            amrex::Math::abs(final[index] - initial[index] + boundary_outward[index]) <=
+                component_tolerance[index];
+    }
+    const bool passed = component_residuals_passed &&
+                        compact_projection_error <= compact_tolerance &&
+                        face_projection_error <= face_tolerance &&
                         interface_passed;
     const std::size_t temporary_bytes = ::erf_sbm::grouped_fct_peak_working_bytes(
         *sbm_layout, grids[0], dmap[0], solverChoice.sbm_chunk_size);
@@ -322,14 +419,26 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
         output << std::setprecision(17)
                << "format=erf-sbm-p2-composite-v1\n"
                << "coarse_step=" << nstep + 1 << '\n'
+               << "coarse_steps=" << nstep + 1 << '\n'
+               << "fine_steps=" << (finest_level > 0 ? istep[1] : 0) << '\n'
+               << "fine_substeps_per_coarse=" << (finest_level > 0 ? nsubsteps[1] : 1) << '\n'
                << "time=" << time << '\n'
                << "dt_lev0=" << dt_lev0 << '\n'
+               << "boundary_policy_xlo=" << boundary_policy_names[0] << '\n'
+               << "boundary_policy_xhi=" << boundary_policy_names[1] << '\n'
+               << "boundary_policy_ylo=" << boundary_policy_names[2] << '\n'
+               << "boundary_policy_yhi=" << boundary_policy_names[3] << '\n'
+               << "boundary_policy_zlo=" << boundary_policy_names[4] << '\n'
+               << "boundary_policy_zhi=" << boundary_policy_names[5] << '\n'
                << "finest_level=" << finest_level << '\n'
                << "level_count=" << finest_level + 1 << '\n'
                << "nbins=" << population.grid.nbins() << '\n'
                << "moment_mode=" << (population.number_offset >= 0 ? 2 : 1) << '\n'
                << "composite_error=" << composite_error << '\n'
-               << "composite_tolerance=" << tolerance << '\n'
+               << "composite_tolerance_factor=" << tolerance_factor << '\n'
+               << "composite_residuals_passed=" << (component_residuals_passed ? 1 : 0) << '\n'
+               << "compact_tolerance=" << compact_tolerance << '\n'
+               << "accepted_face_projection_tolerance=" << face_tolerance << '\n'
                << "compact_projection_error=" << compact_projection_error << '\n'
                << "accepted_face_projection_error=" << face_projection_error << '\n'
                << "accepted_face_transfer_l1=" << accepted_face_transfer_l1 << '\n'
@@ -359,7 +468,16 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
             output << "composite_initial_comp_" << comp << '=' << initial[static_cast<std::size_t>(comp)] << '\n'
                    << "composite_final_comp_" << comp << '=' << final[static_cast<std::size_t>(comp)] << '\n'
                    << "composite_error_comp_" << comp << '=' << amrex::Math::abs(
-                       final[static_cast<std::size_t>(comp)] - initial[static_cast<std::size_t>(comp)]) << '\n';
+                       final[static_cast<std::size_t>(comp)] - initial[static_cast<std::size_t>(comp)] +
+                       boundary_outward[static_cast<std::size_t>(comp)]) << '\n'
+                   << "boundary_inventory_outward_comp_" << comp << '=' <<
+                       boundary_outward[static_cast<std::size_t>(comp)] << '\n'
+                   << "boundary_inventory_closure_error_comp_" << comp << '=' <<
+                       amrex::Math::abs(final[static_cast<std::size_t>(comp)] -
+                                        initial[static_cast<std::size_t>(comp)] +
+                                        boundary_outward[static_cast<std::size_t>(comp)]) << '\n'
+                   << "composite_scale_comp_" << comp << '=' << component_scale[static_cast<std::size_t>(comp)] << '\n'
+                   << "composite_tolerance_comp_" << comp << '=' << component_tolerance[static_cast<std::size_t>(comp)] << '\n';
             output << "accepted_face_transfer_sum_comp_" << comp << '=' <<
                 accepted_face_transfer_sum[static_cast<std::size_t>(comp)] << '\n';
             if (sbm_interface_oracle_available) {
@@ -385,7 +503,8 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
     if (!passed) {
         std::ostringstream message;
         message << "SBM P2 composite qualification failed: composite_error=" << composite_error
-                << ", tolerance=" << tolerance
+                << ", component_residuals_passed=" << (component_residuals_passed ? 1 : 0)
+                << ", compact_tolerance=" << compact_tolerance
                 << ", compact_projection_error=" << compact_projection_error
                 << ", accepted_face_projection_error=" << face_projection_error
                 << ", interface_oracle_passed=" << (interface_passed ? 1 : 0);
@@ -787,25 +906,56 @@ void ERF::advance_sbm_stage(const int lev,
         // qualification pattern at the final hand-off to SBM so the active
         // face is part of the actual production transport call.
         const int face_hi = geom[lev].Domain().bigEnd(0) + 1;
+        const ERF_BC xhi_bc = phys_bc_type[Orientation(0, Orientation::high)];
+        const bool xhi_outflow = xhi_bc == ERF_BC::outflow ||
+            xhi_bc == ERF_BC::ho_outflow || xhi_bc == ERF_BC::open;
         for (MFIter mfi(avg_xmom[lev]); mfi.isValid(); ++mfi) {
             const Box box = mfi.validbox();
             const auto flux = avg_xmom[lev].array(mfi);
             const Real velocity = solverChoice.sbm_manufactured_velocity;
             ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                flux(i,j,k) = (i >= 8 && i < face_hi) ? velocity : Real(0.0);
+                flux(i,j,k) = (i >= 8 && (i < face_hi || (xhi_outflow && i == face_hi))) ?
+                    velocity : Real(0.0);
             });
         }
     }
     Real stage_minimum_limiter = Real(1.0);
+    ::erf_sbm::TransportBoundaryPolicy boundary_policy;
+    boundary_policy.configured = true;
+    auto classify_boundary = [](const ERF_BC bc) {
+        if (bc == ERF_BC::symmetry || bc == ERF_BC::no_slip_wall ||
+            bc == ERF_BC::slip_wall) {
+            return ::erf_sbm::BoundaryKind::ImpermeableWall;
+        }
+        if (bc == ERF_BC::outflow || bc == ERF_BC::ho_outflow || bc == ERF_BC::open) {
+            return ::erf_sbm::BoundaryKind::AdvectiveOutflow;
+        }
+        if (bc == ERF_BC::periodic) return ::erf_sbm::BoundaryKind::Periodic;
+        return ::erf_sbm::BoundaryKind::PrescribedSpectralInflow;
+    };
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        if (geom[lev].isPeriodic(dir)) {
+            boundary_policy.face_kind[2*dir] = ::erf_sbm::BoundaryKind::Periodic;
+            boundary_policy.face_kind[2*dir+1] = ::erf_sbm::BoundaryKind::Periodic;
+        } else {
+            boundary_policy.face_kind[2*dir] = classify_boundary(
+                phys_bc_type[Orientation(dir, Orientation::low)]);
+            boundary_policy.face_kind[2*dir+1] = classify_boundary(
+                phys_bc_type[Orientation(dir, Orientation::high)]);
+        }
+    }
+    MultiFab rho_anchor(state_old[IntVars::cons], make_alias, Rho_comp, 1);
+    MultiFab rho_input(state_eval[IntVars::cons], make_alias, Rho_comp, 1);
     ::erf_sbm::advance_stage(*sbm_auxiliary, *sbm_layout, context,
-                            state_eval[IntVars::cons], state_new[IntVars::cons],
+                            rho_anchor, rho_input, state_new[IntVars::cons],
                             avg_xmom[lev], avg_ymom[lev], avg_zmom[lev], geom[lev],
                             sbm_auxiliary->face_transfer_ledger(lev).stage(),
                             solverChoice.sbm_transport_method == "GroupedFCT_WENOZ3" ?
                                 ::erf_sbm::TransportMethod::GroupedFCT_WENOZ3 :
                                 ::erf_sbm::TransportMethod::DonorCell, lev,
                             solverChoice.sbm_diffusion_coeff, solverChoice.sbm_chunk_size,
-                            solverChoice.sbm_composite_diagnostic_file.empty() ? nullptr : &stage_minimum_limiter);
+                            solverChoice.sbm_composite_diagnostic_file.empty() ? nullptr : &stage_minimum_limiter,
+                            boundary_policy);
     if (!solverChoice.sbm_composite_diagnostic_file.empty()) {
         sbm_minimum_accepted_limiter = amrex::min(sbm_minimum_accepted_limiter,
                                                   stage_minimum_limiter);

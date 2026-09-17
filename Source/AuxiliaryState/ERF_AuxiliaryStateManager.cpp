@@ -303,6 +303,15 @@ void AuxiliaryStateManager::fill_stage_from_coarse(
     const amrex::Geometry& coarse_geometry, const amrex::Geometry& fine_geometry,
     const amrex::IntVect& ref_ratio)
 {
+    fill_stage_from_coarse(coarse_level, fine_level, time, coarse_geometry,
+                           fine_geometry, ref_ratio, AuxiliaryTimeView::Evaluation);
+}
+
+void AuxiliaryStateManager::fill_stage_from_coarse(
+    const int coarse_level, const int fine_level, const double time,
+    const amrex::Geometry& coarse_geometry, const amrex::Geometry& fine_geometry,
+    const amrex::IntVect& ref_ratio, const AuxiliaryTimeView target_view)
+{
     if (!has_level(coarse_level) || !has_level(fine_level) || coarse_level >= fine_level ||
         ref_ratio.min() <= 0 || !coarse_geometry.isAllPeriodic() || !fine_geometry.isAllPeriodic()) {
         throw std::invalid_argument("invalid auxiliary stage FillPatch levels or geometry");
@@ -316,19 +325,20 @@ void AuxiliaryStateManager::fill_stage_from_coarse(
     }
     old(coarse_level).FillBoundary(coarse_geometry.periodicity());
     output(coarse_level).FillBoundary(coarse_geometry.periodicity());
-    evaluation(fine_level).FillBoundary(fine_geometry.periodicity());
+    auto& target = target_view == AuxiliaryTimeView::Old ? old(fine_level) : evaluation(fine_level);
+    target.FillBoundary(fine_geometry.periodicity());
     amrex::Vector<amrex::MultiFab*> coarse_states{&old(coarse_level), &output(coarse_level)};
     amrex::Vector<amrex::Real> coarse_times{static_cast<amrex::Real>(coarse_old_time),
                                             static_cast<amrex::Real>(coarse_new_time)};
-    amrex::Vector<amrex::MultiFab*> fine_states{&evaluation(fine_level), &evaluation(fine_level)};
+    amrex::Vector<amrex::MultiFab*> fine_states{&target, &target};
     amrex::Vector<amrex::Real> fine_times{static_cast<amrex::Real>(time), static_cast<amrex::Real>(time)};
     amrex::Vector<amrex::BCRec> bcs(static_cast<std::size_t>(m_layout.ncomp()));
-    amrex::FillPatchTwoLevels(evaluation(fine_level), evaluation(fine_level).nGrowVect(),
+    amrex::FillPatchTwoLevels(target, target.nGrowVect(),
                               amrex::IntVect(0), static_cast<amrex::Real>(time),
                               coarse_states, coarse_times, fine_states, fine_times,
                               0, 0, m_layout.ncomp(), coarse_geometry, fine_geometry,
                               ref_ratio, &amrex::pc_interp, bcs, 0);
-    evaluation(fine_level).FillBoundary(fine_geometry.periodicity());
+    target.FillBoundary(fine_geometry.periodicity());
 }
 
 void AuxiliaryStateManager::recompute_resident_bytes() noexcept
