@@ -18,7 +18,7 @@ it is not a claim of production warm-cloud microphysics or GPU performance.
 |---|---|
 | Branch | `sbm-p2-final-qualification` |
 | Required starting SHA | `ff96ba02c2a67d1aa7b8ab01f842e0ead87071e3` |
-| Final implementation SHA | Recorded in the final evidence commit immediately after this report update |
+| Final implementation SHA | `9c5e60925` |
 | Remote | `https://github.com/pressel/ERF.git` |
 | Compiler wrappers | `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin/mpicc` and `mpicxx` |
 | MPI launcher | `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin/mpiexec` |
