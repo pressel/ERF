@@ -24,12 +24,14 @@
 
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <limits>
 #include <fstream>
 #include <iomanip>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -44,6 +46,18 @@ using amrex::FArrayBox;
 using amrex::Geometry;
 using amrex::IntVect;
 using amrex::MultiFab;
+
+Real precision_tolerance(const Real scale, const Real ulps = Real(64.0))
+{
+    return ulps * std::numeric_limits<Real>::epsilon() *
+        std::max(Real(1.0), std::abs(scale));
+}
+
+Real relative_roundoff_tolerance(const Real scale, const Real ulps = Real(64.0))
+{
+    return ulps * std::numeric_limits<Real>::epsilon() * std::abs(scale) +
+        std::numeric_limits<Real>::denorm_min();
+}
 
 erf_sbm::SBMLayout make_layout(const int nbins, const MomentMode mode,
                                const bool with_property = false,
@@ -307,9 +321,9 @@ TEST(SBMP2, GroupedFCTUsesCellWideConstraintBudgets)
     face1.low = {0.0, 0.0}; face1.high = {0.75, 0.0};
     const auto result = erf_sbm::limit_grouped(low_state, 3, 2,
                                                {face0, face1}, groups, 1);
-    EXPECT_NEAR(result.limiter[0], 2.0/3.0, 1.e-14);
-    EXPECT_NEAR(result.limiter[1], 2.0/3.0, 1.e-14);
-    EXPECT_NEAR(result.updated_state[0], 0.0, 1.e-14);
+    EXPECT_NEAR(result.limiter[0], 2.0/3.0, precision_tolerance(Real(2.0/3.0)));
+    EXPECT_NEAR(result.limiter[1], 2.0/3.0, precision_tolerance(Real(2.0/3.0)));
+    EXPECT_NEAR(result.updated_state[0], 0.0, precision_tolerance(Real(0.0)));
     for (int cell = 0; cell < 3; ++cell) {
         const std::vector<Real> state(result.updated_state.begin() + cell*2,
                                       result.updated_state.begin() + (cell+1)*2);
@@ -324,13 +338,13 @@ TEST(SBMP2, TwoMomentEndpointTransformIsStableAtBounds)
     const auto upper = erf_sbm::transform_two_moment(2.0, 6.0, 1.0, 3.0);
     EXPECT_EQ(upper.L, 0.0); EXPECT_EQ(upper.H, 2.0);
     const auto center = erf_sbm::transform_two_moment(2.0, 4.0, 1.0, 3.0);
-    EXPECT_NEAR(center.L, 1.0, 32*std::numeric_limits<Real>::epsilon());
-    EXPECT_NEAR(center.H, 1.0, 32*std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(center.L, 1.0, precision_tolerance(Real(1.0), Real(32.0)));
+    EXPECT_NEAR(center.H, 1.0, precision_tolerance(Real(1.0), Real(32.0)));
     EXPECT_THROW((void)erf_sbm::transform_two_moment(1.0, 4.1, 1.0, 3.0), std::invalid_argument);
     EXPECT_THROW((void)erf_sbm::transform_two_moment(-1.0, 0.0, 1.0, 3.0), std::invalid_argument);
     const auto recovered = erf_sbm::inverse_two_moment(center.L, center.H, 1.0, 3.0);
-    EXPECT_NEAR(recovered.first, 2.0, 1.e-14);
-    EXPECT_NEAR(recovered.second, 4.0, 1.e-14);
+    EXPECT_NEAR(recovered.first, 2.0, precision_tolerance(Real(2.0)));
+    EXPECT_NEAR(recovered.second, 4.0, precision_tolerance(Real(4.0)));
 
     // Cancellation-sized endpoint roundoff is normalized only in the
     // derived (L,H) representation; the authoritative (C,M) inputs are not
@@ -343,27 +357,31 @@ TEST(SBMP2, TwoMomentEndpointTransformIsStableAtBounds)
     EXPECT_THROW((void)erf_sbm::transform_two_moment(2.0, 2.0 - 1.e-8, 1.0, 3.0), std::invalid_argument);
     EXPECT_THROW((void)erf_sbm::transform_two_moment(2.0, 6.0 + 1.e-8, 1.0, 3.0), std::invalid_argument);
 
-    const Real tiny_c = Real(1.e-100);
+    // Keep both stress values finite for float and double.  The square-root
+    // scales leave room for the two-moment factor-of-two arithmetic without
+    // relying on a literal exponent that underflows in SINGLE or overflows
+    // when the upper endpoint is formed.
+    const Real tiny_c = std::sqrt(std::numeric_limits<Real>::min());
     const Real tiny_m = Real(2.0) * tiny_c;
     const auto tiny = erf_sbm::transform_two_moment(tiny_c, tiny_m, 1.0, 3.0);
     const auto tiny_back = erf_sbm::inverse_two_moment(tiny.L, tiny.H, 1.0, 3.0);
-    EXPECT_NEAR(tiny_back.first, tiny_c, 64*eps*tiny_c);
-    EXPECT_NEAR(tiny_back.second, tiny_m, 64*eps*tiny_m);
+    EXPECT_NEAR(tiny_back.first, tiny_c, relative_roundoff_tolerance(tiny_c));
+    EXPECT_NEAR(tiny_back.second, tiny_m, relative_roundoff_tolerance(tiny_m));
 
-    const Real huge_c = Real(1.e100);
+    const Real huge_c = std::sqrt(std::numeric_limits<Real>::max()) / Real(4.0);
     const Real huge_m = Real(2.0) * huge_c;
     const auto huge = erf_sbm::transform_two_moment(huge_c, huge_m, 1.0, 3.0);
     const auto huge_back = erf_sbm::inverse_two_moment(huge.L, huge.H, 1.0, 3.0);
-    EXPECT_NEAR(huge_back.first, huge_c, 64*eps*huge_c);
-    EXPECT_NEAR(huge_back.second, huge_m, 64*eps*huge_m);
+    EXPECT_NEAR(huge_back.first, huge_c, relative_roundoff_tolerance(huge_c));
+    EXPECT_NEAR(huge_back.second, huge_m, relative_roundoff_tolerance(huge_m));
 
     const Real lower_edge = Real(2.5), upper_edge = Real(9.25), count = Real(3.75);
     const Real mass = Real(6.125) * count;
     const auto nontrivial = erf_sbm::transform_two_moment(count, mass, lower_edge, upper_edge);
     const auto nontrivial_back = erf_sbm::inverse_two_moment(
         nontrivial.L, nontrivial.H, lower_edge, upper_edge);
-    EXPECT_NEAR(nontrivial_back.first, count, 64*eps*count);
-    EXPECT_NEAR(nontrivial_back.second, mass, 64*eps*std::abs(mass));
+    EXPECT_NEAR(nontrivial_back.first, count, relative_roundoff_tolerance(count));
+    EXPECT_NEAR(nontrivial_back.second, mass, relative_roundoff_tolerance(mass));
 }
 
 TEST(SBMP2, ProductionChunkWorkingMemoryScalesWithAtomicChunkPolicy)
@@ -487,15 +505,18 @@ TEST(SBMP2, GroupedFCTUsesOneFaceLimiterAndConservesEveryComponent)
     auto result = erf_sbm::limit_grouped(low_state, 2, 2, {face}, groups);
     ASSERT_EQ(result.accepted_faces.size(), 1U);
     EXPECT_EQ(result.limiter[0], 2.0/3.0);
-    EXPECT_NEAR(result.updated_state[0], 0.0, 1.e-14);
-    EXPECT_NEAR(result.updated_state[2], 4.0, 1.e-14);
-    EXPECT_NEAR(result.updated_state[0]*2.0 + result.updated_state[2], 4.0, 1.e-14);
+    EXPECT_NEAR(result.updated_state[0], 0.0, precision_tolerance(Real(0.0)));
+    EXPECT_NEAR(result.updated_state[2], 4.0, precision_tolerance(Real(4.0)));
+    EXPECT_NEAR(result.updated_state[0]*2.0 + result.updated_state[2], 4.0,
+                precision_tolerance(Real(4.0)));
     EXPECT_EQ(result.accepted_faces[0].low[0], 2.0);
     EXPECT_THROW((void)erf_sbm::limit_grouped(low_state, 2, 2, {face, face}, groups),
                  std::invalid_argument);
     const auto chunked = erf_sbm::limit_grouped(low_state, 2, 2, {face}, groups, 1);
-    EXPECT_NEAR(chunked.updated_state[0], result.updated_state[0], 1.e-14);
-    EXPECT_NEAR(chunked.updated_state[2], result.updated_state[2], 1.e-14);
+    EXPECT_NEAR(chunked.updated_state[0], result.updated_state[0],
+                precision_tolerance(result.updated_state[0]));
+    EXPECT_NEAR(chunked.updated_state[2], result.updated_state[2],
+                precision_tolerance(result.updated_state[2]));
 }
 
 TEST(SBMP2, GroupedFCTHonorsCompleteTwoMomentGroupAndSubset)
@@ -516,7 +537,7 @@ TEST(SBMP2, GroupedFCTHonorsCompleteTwoMomentGroupAndSubset)
     face.high = {1.0, 0.0, 0.0, 0.0, 0.6, 0.0};
     auto result = erf_sbm::limit_grouped(low_state, 2, 6, {face}, groups);
     EXPECT_GE(result.limiter[0], 0.0);
-    EXPECT_LE(result.limiter[0], 0.5 + 1.e-14);
+    EXPECT_LE(result.limiter[0], Real(0.5) + precision_tolerance(Real(0.5)));
     for (const auto& group : groups) {
         std::vector<Real> state(result.updated_state.begin(), result.updated_state.begin()+6);
         EXPECT_TRUE(group.admissible(state));
@@ -610,11 +631,13 @@ TEST(SBMP2, ActualStageDemandUsesProductionCarrierAndExactStageDuration)
     // The real box is 4 x 2 x 2, so the independent two-direction carrier
     // demand is .2/2 + .3/1 = .4.  Diffusion uses the same arithmetic
     // rho-face convention as production: .1*(2*.25 + 2*1 + 2*1) = .45.
-    EXPECT_NEAR(demand.stage_duration, 1.0/3.0, 1.e-15);
-    EXPECT_NEAR(demand.advective_rate, Real(0.4), 1.e-14);
-    EXPECT_NEAR(demand.diffusive_rate, Real(0.45), 1.e-14);
-    EXPECT_NEAR(demand.maximum_rate, Real(0.85), 1.e-14);
-    EXPECT_NEAR(demand.maximum_tau_rate, Real(0.85/3.0), 1.e-14);
+    EXPECT_NEAR(demand.stage_duration, 1.0/3.0,
+                precision_tolerance(Real(1.0/3.0)));
+    EXPECT_NEAR(demand.advective_rate, Real(0.4), precision_tolerance(Real(0.4)));
+    EXPECT_NEAR(demand.diffusive_rate, Real(0.45), precision_tolerance(Real(0.45)));
+    EXPECT_NEAR(demand.maximum_rate, Real(0.85), precision_tolerance(Real(0.85)));
+    EXPECT_NEAR(demand.maximum_tau_rate, Real(0.85/3.0),
+                precision_tolerance(Real(0.85/3.0)));
     EXPECT_EQ(demand.level, 0);
     EXPECT_EQ(demand.stage_index, 0);
     EXPECT_EQ(demand.worst_i, 0);
@@ -622,7 +645,7 @@ TEST(SBMP2, ActualStageDemandUsesProductionCarrierAndExactStageDuration)
     EXPECT_EQ(demand.worst_k, 0);
 }
 
-TEST(SBMP2, ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux)
+void sbm_test_ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux()
 {
     const Box domain(IntVect(0, 0, 0), IntVect(1, 0, 0));
     const BoxArray cell_boxes(domain);
@@ -665,16 +688,21 @@ TEST(SBMP2, ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux)
         context, density, carrier_x, carrier_y, carrier_z, geometry,
         Real(0.0), 0);
 
-    EXPECT_NEAR(demand.advective_rate, Real(0.2), 1.e-14);
-    EXPECT_NEAR(demand.diffusive_rate, Real(0.0), 1.e-14);
-    EXPECT_NEAR(demand.maximum_rate, Real(0.2), 1.e-14);
-    EXPECT_NEAR(demand.maximum_tau_rate, Real(0.2), 1.e-14);
+    EXPECT_NEAR(demand.advective_rate, Real(0.2), precision_tolerance(Real(0.2)));
+    EXPECT_NEAR(demand.diffusive_rate, Real(0.0), precision_tolerance(Real(0.0)));
+    EXPECT_NEAR(demand.maximum_rate, Real(0.2), precision_tolerance(Real(0.2)));
+    EXPECT_NEAR(demand.maximum_tau_rate, Real(0.2), precision_tolerance(Real(0.2)));
     EXPECT_EQ(demand.worst_i, 1);
     EXPECT_EQ(demand.worst_j, 0);
     EXPECT_EQ(demand.worst_k, 0);
 }
 
-TEST(SBMP2, ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues)
+TEST(SBMP2, ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux)
+{
+    sbm_test_ActualStageDemandUsesTheAnchorDensityForVariableCarrierFlux();
+}
+
+void sbm_test_ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues()
 {
     const Box domain(IntVect(0, 0, 0), IntVect(0, 1, 1));
     const BoxArray cell_boxes(domain);
@@ -730,13 +758,19 @@ TEST(SBMP2, ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues)
     // The x-wall density ghosts are NaN deliberately.  A valid oracle must
     // not read them, and only the two periodic transverse directions remain:
     // K * (2/dy^2 + 2/dz^2) = 4.
-    EXPECT_NEAR(demand.advective_rate, Real(0.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
-    EXPECT_NEAR(demand.diffusive_rate, Real(4.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
-    EXPECT_NEAR(demand.maximum_rate, Real(4.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
-    EXPECT_NEAR(demand.maximum_tau_rate, Real(4.0/3.0), Real(32.0) * std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(demand.advective_rate, Real(0.0), precision_tolerance(Real(0.0), Real(32.0)));
+    EXPECT_NEAR(demand.diffusive_rate, Real(4.0), precision_tolerance(Real(4.0), Real(32.0)));
+    EXPECT_NEAR(demand.maximum_rate, Real(4.0), precision_tolerance(Real(4.0), Real(32.0)));
+    EXPECT_NEAR(demand.maximum_tau_rate, Real(4.0/3.0),
+                precision_tolerance(Real(4.0/3.0), Real(32.0)));
 }
 
-TEST(SBMP2, HostCFLBoundarySemanticsSkipWallPoisonAndRejectInwardOutflow)
+TEST(SBMP2, ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues)
+{
+    sbm_test_ActualStageDemandSkipsWallDiffusionWithoutPhysicalGhostValues();
+}
+
+void sbm_test_HostCFLBoundarySemanticsSkipWallPoisonAndRejectInwardOutflow()
 {
     const Box domain(IntVect(0, 0, 0), IntVect(0, 0, 0));
     const BoxArray boxes(domain);
@@ -817,6 +851,11 @@ TEST(SBMP2, HostCFLBoundarySemanticsSkipWallPoisonAndRejectInwardOutflow)
     EXPECT_EQ(inward.valid, 0);
 }
 
+TEST(SBMP2, HostCFLBoundarySemanticsSkipWallPoisonAndRejectInwardOutflow)
+{
+    sbm_test_HostCFLBoundarySemanticsSkipWallPoisonAndRejectInwardOutflow();
+}
+
 TEST(SBMP2, ERFBoundaryPolicyMapsPhysicalFacesAndHonorsPeriodicity)
 {
     EXPECT_EQ(erf_sbm::classify_erf_boundary(ERF_BC::symmetry),
@@ -852,28 +891,46 @@ TEST(SBMP2, ERFBoundaryPolicyMapsPhysicalFacesAndHonorsPeriodicity)
 
 TEST(SBMP2, StageZeroAdvectionCarrierMatchesArithmeticFaceMomentum)
 {
+    // AdvectionSrcForRho may execute on a GPU.  These are intentionally
+    // pinned host/device-accessible FABs: initialization and the independent
+    // host oracle use RunOn::Host, while the production kernel can still
+    // consume the same Array4 views without host dereferences of device-only
+    // storage.
+    auto* host_arena = amrex::The_Pinned_Arena();
     const Box domain(IntVect(0, 0, 0), IntVect(1, 1, 1));
     const Box xbox = amrex::surroundingNodes(domain, 0);
     const Box ybox = amrex::surroundingNodes(domain, 1);
     const Box zbox = amrex::surroundingNodes(domain, 2);
     Box density_box = domain;
     density_box.grow(1);
-    FArrayBox density(density_box, 1);
-    FArrayBox rho_u(xbox, 1), rho_v(ybox, 1), omega(zbox, 1);
-    FArrayBox avg_xmom(xbox, 1), avg_ymom(ybox, 1), avg_zmom(zbox, 1);
-    FArrayBox ax(xbox, 1), ay(ybox, 1), az(zbox, 1), detJ(domain, 1);
-    FArrayBox mf_mx(domain, 1), mf_my(domain, 1);
-    FArrayBox mf_uy(xbox, 1), mf_vx(ybox, 1);
-    FArrayBox source(domain, 1);
+    FArrayBox density(density_box, 1, host_arena);
+    FArrayBox rho_u(xbox, 1, host_arena), rho_v(ybox, 1, host_arena),
+        omega(zbox, 1, host_arena);
+    FArrayBox avg_xmom(xbox, 1, host_arena), avg_ymom(ybox, 1, host_arena),
+        avg_zmom(zbox, 1, host_arena);
+    FArrayBox ax(xbox, 1, host_arena), ay(ybox, 1, host_arena),
+        az(zbox, 1, host_arena), detJ(domain, 1, host_arena);
+    FArrayBox mf_mx(domain, 1, host_arena), mf_my(domain, 1, host_arena);
+    FArrayBox mf_uy(xbox, 1, host_arena), mf_vx(ybox, 1, host_arena);
+    FArrayBox source(domain, 1, host_arena);
     std::array<FArrayBox, AMREX_SPACEDIM> flux{
-        FArrayBox(xbox, 1), FArrayBox(ybox, 1), FArrayBox(zbox, 1)};
-    density.setVal(Real(1.0));
-    ax.setVal(Real(1.0)); ay.setVal(Real(1.0)); az.setVal(Real(1.0));
-    detJ.setVal(Real(1.0)); mf_mx.setVal(Real(1.0)); mf_my.setVal(Real(1.0));
-    mf_uy.setVal(Real(1.0)); mf_vx.setVal(Real(1.0)); omega.setVal(Real(0.0));
-    avg_xmom.setVal(Real(0.0)); avg_ymom.setVal(Real(0.0)); avg_zmom.setVal(Real(0.0));
-    source.setVal(Real(0.0));
-    for (auto& face_flux : flux) face_flux.setVal(Real(0.0));
+        FArrayBox(xbox, 1, host_arena), FArrayBox(ybox, 1, host_arena),
+        FArrayBox(zbox, 1, host_arena)};
+    density.setVal<amrex::RunOn::Host>(Real(1.0));
+    ax.setVal<amrex::RunOn::Host>(Real(1.0));
+    ay.setVal<amrex::RunOn::Host>(Real(1.0));
+    az.setVal<amrex::RunOn::Host>(Real(1.0));
+    detJ.setVal<amrex::RunOn::Host>(Real(1.0));
+    mf_mx.setVal<amrex::RunOn::Host>(Real(1.0));
+    mf_my.setVal<amrex::RunOn::Host>(Real(1.0));
+    mf_uy.setVal<amrex::RunOn::Host>(Real(1.0));
+    mf_vx.setVal<amrex::RunOn::Host>(Real(1.0));
+    omega.setVal<amrex::RunOn::Host>(Real(0.0));
+    avg_xmom.setVal<amrex::RunOn::Host>(Real(0.0));
+    avg_ymom.setVal<amrex::RunOn::Host>(Real(0.0));
+    avg_zmom.setVal<amrex::RunOn::Host>(Real(0.0));
+    source.setVal<amrex::RunOn::Host>(Real(0.0));
+    for (auto& face_flux : flux) face_flux.setVal<amrex::RunOn::Host>(Real(0.0));
 
     for (int k = density.box().smallEnd(2); k <= density.box().bigEnd(2); ++k) {
         for (int j = density.box().smallEnd(1); j <= density.box().bigEnd(1); ++j) {
@@ -942,21 +999,21 @@ TEST(SBMP2, StageZeroAdvectionCarrierMatchesArithmeticFaceMomentum)
     for (int k = domain.smallEnd(2); k <= domain.bigEnd(2); ++k) {
         for (int j = domain.smallEnd(1); j <= domain.bigEnd(1); ++j) {
             for (int i = domain.smallEnd(0); i <= domain.bigEnd(0) + 1; ++i) {
-                EXPECT_DOUBLE_EQ(avg_xmom.const_array()(i,j,k), rho_u.const_array()(i,j,k));
+                EXPECT_EQ(avg_xmom.const_array()(i,j,k), rho_u.const_array()(i,j,k));
             }
         }
     }
     for (int k = domain.smallEnd(2); k <= domain.bigEnd(2); ++k) {
         for (int j = domain.smallEnd(1); j <= domain.bigEnd(1) + 1; ++j) {
             for (int i = domain.smallEnd(0); i <= domain.bigEnd(0); ++i) {
-                EXPECT_DOUBLE_EQ(avg_ymom.const_array()(i,j,k), rho_v.const_array()(i,j,k));
+                EXPECT_EQ(avg_ymom.const_array()(i,j,k), rho_v.const_array()(i,j,k));
             }
         }
     }
     for (int k = domain.smallEnd(2); k <= domain.bigEnd(2) + 1; ++k) {
         for (int j = domain.smallEnd(1); j <= domain.bigEnd(1); ++j) {
             for (int i = domain.smallEnd(0); i <= domain.bigEnd(0); ++i) {
-                EXPECT_DOUBLE_EQ(avg_zmom.const_array()(i,j,k), omega.const_array()(i,j,k));
+                EXPECT_EQ(avg_zmom.const_array()(i,j,k), omega.const_array()(i,j,k));
             }
         }
     }
@@ -1059,17 +1116,17 @@ TEST(SBMP2, DensityWeightedDiffusionUsesIntensiveRatioAndPhysicalGeometry)
                                                                {4.0, 1.0}, {face}, 0.2);
     // X/rho is 1 and 2; I=-A dt rho_f K grad(X/rho)=-0.45.
     ASSERT_EQ(result.integrated_transfers.size(), 1U);
-    EXPECT_NEAR(result.integrated_transfers[0], -0.45, 1.e-14);
-    EXPECT_NEAR(result.updated_state[0], 2.1125, 1.e-14);
-    EXPECT_NEAR(result.updated_state[1], 7.55, 1.e-14);
+    EXPECT_NEAR(result.integrated_transfers[0], -0.45, precision_tolerance(Real(0.45)));
+    EXPECT_NEAR(result.updated_state[0], 2.1125, precision_tolerance(Real(2.1125)));
+    EXPECT_NEAR(result.updated_state[1], 7.55, precision_tolerance(Real(7.55)));
     const auto uniform = erf_sbm::explicit_two_point_diffusion({2.0, 4.0}, 2, 1,
                                                                 {1.0, 1.0}, {face}, 1.0);
-    EXPECT_NEAR(uniform.integrated_transfers[0], 0.0, 1.e-14);
+    EXPECT_NEAR(uniform.integrated_transfers[0], 0.0, precision_tolerance(Real(0.0)));
     EXPECT_GT(erf_sbm::admissible_explicit_timestep({2.0, 8.0}, 2, 1,
                                                     {4.0, 1.0}, {face}), 0.0);
 }
 
-TEST(SBMP2, ProductionCombinedAdvectionDiffusionFailsClosed)
+void sbm_test_ProductionCombinedAdvectionDiffusionFailsClosed()
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
@@ -1128,7 +1185,12 @@ TEST(SBMP2, ProductionCombinedAdvectionDiffusionFailsClosed)
     EXPECT_LT(recommended_dt, 0.8);
 }
 
-TEST(SBMP2, ProductionVariableDensityHostCFLBypassFailsClosed)
+TEST(SBMP2, ProductionCombinedAdvectionDiffusionFailsClosed)
+{
+    sbm_test_ProductionCombinedAdvectionDiffusionFailsClosed();
+}
+
+void sbm_test_ProductionVariableDensityHostCFLBypassFailsClosed()
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
@@ -1210,7 +1272,12 @@ TEST(SBMP2, ProductionVariableDensityHostCFLBypassFailsClosed)
         0, Real(0.0), 1));
 }
 
-TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
+TEST(SBMP2, ProductionVariableDensityHostCFLBypassFailsClosed)
+{
+    sbm_test_ProductionVariableDensityHostCFLBypassFailsClosed();
+}
+
+void sbm_test_ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts()
 {
     const auto run_case = [](const Real advection_demand, const Real diffusion,
                              const bool anelastic, const int stage,
@@ -1292,10 +1359,13 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
         return diagnostic;
     };
 
+    const std::array<std::pair<bool, int>, 3> stage_contracts{{
+        {false, 0}, {true, 0}, {true, 1}}};
+
     // The exact host-stage guard is now the first production invariant.  Keep
     // these cases below its bound so that the subsequent production
     // low-order budget still gets exercised for admissible stages.
-    for (const auto& contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
+    for (const auto& contract : stage_contracts) {
         SCOPED_TRACE(std::string(contract.first ? "anelastic" : "compressible") +
                      " stage=" + std::to_string(contract.second));
         EXPECT_TRUE(run_case(Real(0.6), Real(0.0), contract.first, contract.second).empty());
@@ -1308,7 +1378,7 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
     // Advection and diffusion are each admissible, but their combined demand
     // is not.  The second case deliberately exceeds the final low state while
     // remaining below the pre-stage baseline and must therefore pass.
-    for (const auto& contract : {std::pair<bool,int>{false,0}, {true,0}, {true,1}}) {
+    for (const auto& contract : stage_contracts) {
         const Real combined_fail_advection = Real(0.8);
         const Real combined_pass_advection = Real(0.4);
         const auto invalid = run_case(combined_fail_advection, Real(0.15), contract.first, contract.second);
@@ -1327,7 +1397,12 @@ TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
     }
 }
 
-TEST(SBMP2, ProductionTargetDensityPreservesConstantRatioForBothTemporalContracts)
+TEST(SBMP2, ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts)
+{
+    sbm_test_ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts();
+}
+
+void sbm_test_ProductionTargetDensityPreservesConstantRatioForBothTemporalContracts()
 {
     const Real pi = Real(3.1415926535897932384626433832795);
     const Real k = Real(0.37);
@@ -1465,6 +1540,11 @@ TEST(SBMP2, ProductionTargetDensityPreservesConstantRatioForBothTemporalContract
     EXPECT_GT(maximum_error, Real(0.0));
 }
 
+TEST(SBMP2, ProductionTargetDensityPreservesConstantRatioForBothTemporalContracts)
+{
+    sbm_test_ProductionTargetDensityPreservesConstantRatioForBothTemporalContracts();
+}
+
 TEST(SBMP2, BoundaryBudgetsHaveNoWallSinkAndValidateInflow)
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
@@ -1481,7 +1561,7 @@ TEST(SBMP2, BoundaryBudgetsHaveNoWallSinkAndValidateInflow)
     EXPECT_FALSE(erf_sbm::validate_prescribed_inflow(inflow, groups));
 }
 
-TEST(SBMP2, ProductionOutflowRejectsInwardCarrierWithoutSpectralInflow)
+void sbm_test_ProductionOutflowRejectsInwardCarrierWithoutSpectralInflow()
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
@@ -1540,6 +1620,11 @@ TEST(SBMP2, ProductionOutflowRejectsInwardCarrierWithoutSpectralInflow)
         std::string::npos);
 }
 
+TEST(SBMP2, ProductionOutflowRejectsInwardCarrierWithoutSpectralInflow)
+{
+    sbm_test_ProductionOutflowRejectsInwardCarrierWithoutSpectralInflow();
+}
+
 TEST(SBMP2, FCTCorrectionUsesHighMinusLowAdvectionWhenDiffusionReversesTotalSign)
 {
     const Real low_adv = 0.75;
@@ -1575,7 +1660,7 @@ TEST(SBMP2, IndependentInterfaceOracleCatchesRefluxSignAreaAndTimeErrors)
     const std::vector<Real> fine{1.0, 1.0, 1.0, 1.0};
     const auto good = erf_sbm::check_interface_transfer(
         coarse, fine, 4.0, 1.0, 0.5, 0.5, -2.0,
-        64*std::numeric_limits<Real>::epsilon());
+        precision_tolerance(Real(2.0), Real(64.0)));
     EXPECT_TRUE(good.passes);
     EXPECT_DOUBLE_EQ(good.coarse_transfer, 4.0);
     EXPECT_DOUBLE_EQ(good.fine_transfer, 2.0);
@@ -1583,22 +1668,23 @@ TEST(SBMP2, IndependentInterfaceOracleCatchesRefluxSignAreaAndTimeErrors)
 
     const auto missing_reflux = erf_sbm::check_interface_transfer(
         coarse, fine, 4.0, 1.0, 0.5, 0.5, 0.0,
-        64*std::numeric_limits<Real>::epsilon());
+        precision_tolerance(Real(2.0), Real(64.0)));
     EXPECT_FALSE(missing_reflux.passes);
     const auto wrong_sign = erf_sbm::check_interface_transfer(
         coarse, fine, 4.0, 1.0, 0.5, 0.5, 2.0,
-        64*std::numeric_limits<Real>::epsilon());
+        precision_tolerance(Real(2.0), Real(64.0)));
     EXPECT_FALSE(wrong_sign.passes);
     const auto wrong_area = erf_sbm::check_interface_transfer(
         coarse, fine, 4.0, 2.0, 0.5, 0.5, -6.0,
-        64*std::numeric_limits<Real>::epsilon());
+        precision_tolerance(Real(6.0), Real(64.0)));
     EXPECT_FALSE(wrong_area.passes);
     const auto wrong_time = erf_sbm::check_interface_transfer(
         coarse, fine, 4.0, 1.0, 0.5, 1.0, -2.0,
-        64*std::numeric_limits<Real>::epsilon());
+        precision_tolerance(Real(2.0), Real(64.0)));
     EXPECT_FALSE(wrong_time.passes);
     EXPECT_THROW((void)erf_sbm::check_interface_transfer(
-        coarse, fine, 4.0, 1.0, 0.5, 0.0, -2.0, 1.e-12), std::invalid_argument);
+        coarse, fine, 4.0, 1.0, 0.5, 0.0, -2.0,
+        precision_tolerance(Real(2.0), Real(64.0))), std::invalid_argument);
 }
 
 TEST(SBMP2, PostRefluxFailsClosedWithDiagnosticsAndNeverClips)
@@ -1642,7 +1728,8 @@ TEST(SBMP2, RestartSchemaAndProjectionComparisonAreStrict)
     altered.boundary_policy += "-changed";
     EXPECT_NE(erf_sbm::compare_checkpoint_schema(schema, altered).find("boundary_policy"),
               std::string::npos);
-    EXPECT_TRUE(erf_sbm::compare_projection(1.0, 1.0 + 1.e-14, 1.0, 8));
+    EXPECT_TRUE(erf_sbm::compare_projection(
+        1.0, 1.0 + precision_tolerance(Real(1.0), Real(8.0)), 1.0, 8));
     EXPECT_FALSE(erf_sbm::compare_projection(1.0, 1.0 + 1.e-4, 1.0, 8));
 }
 
@@ -1729,7 +1816,7 @@ TEST(SBMP2, AuxiliaryStageFillPatchAndRemakeUseAuthoritativeCoarseSpectrum)
     EXPECT_DOUBLE_EQ(manager.output(1).max(0), 7.0);
 }
 
-TEST(SBMP2, CarrierWeightedAMRTransferUsesTargetDensityAndPreservesRatios)
+void sbm_test_CarrierWeightedAMRTransferUsesTargetDensityAndPreservesRatios()
 {
     const auto layout = make_layout(2, MomentMode::TwoMoment, true);
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
@@ -1866,7 +1953,12 @@ TEST(SBMP2, CarrierWeightedAMRTransferUsesTargetDensityAndPreservesRatios)
     EXPECT_LE(check_ratio(manager.output(1), remade_rho_target, false), ratio_tolerance);
 }
 
-TEST(SBMP2, CarrierWeightedStageFillPreservesFineFABAuthority)
+TEST(SBMP2, CarrierWeightedAMRTransferUsesTargetDensityAndPreservesRatios)
+{
+    sbm_test_CarrierWeightedAMRTransferUsesTargetDensityAndPreservesRatios();
+}
+
+void sbm_test_CarrierWeightedStageFillPreservesFineFABAuthority()
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
     const Box coarse_domain(IntVect(0, 0, 0), IntVect(3, 1, 1));
@@ -1956,7 +2048,12 @@ TEST(SBMP2, CarrierWeightedStageFillPreservesFineFABAuthority)
     EXPECT_LE(valid_error, Real(512.0) * std::numeric_limits<Real>::epsilon() * Real(8.0));
 }
 
-TEST(SBMP2, AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary)
+TEST(SBMP2, CarrierWeightedStageFillPreservesFineFABAuthority)
+{
+    sbm_test_CarrierWeightedStageFillPreservesFineFABAuthority();
+}
+
+void sbm_test_AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary()
 {
     const auto layout = make_layout(2, MomentMode::TwoMoment, true, Real(10.0), Real(10.0));
     const auto& population = layout.populations().front();
@@ -2069,7 +2166,12 @@ TEST(SBMP2, AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary)
     EXPECT_LE(ratio_error, Real(1024.0) * std::numeric_limits<Real>::epsilon());
 }
 
-TEST(SBMP2, DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors)
+TEST(SBMP2, AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary)
+{
+    sbm_test_AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary();
+}
+
+void sbm_test_DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors()
 {
     const auto layout = make_layout(2, MomentMode::TwoMoment);
     const auto& population = layout.populations().front();
@@ -2202,7 +2304,12 @@ TEST(SBMP2, DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors)
     EXPECT_LE(compact_error, Real(1024.0) * std::numeric_limits<Real>::epsilon());
 }
 
-TEST(SBMP2, CompactGhostsAreProjectedFromAuthoritativeSpectralGhosts)
+TEST(SBMP2, DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors)
+{
+    sbm_test_DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors();
+}
+
+void sbm_test_CompactGhostsAreProjectedFromAuthoritativeSpectralGhosts()
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
@@ -2238,6 +2345,11 @@ TEST(SBMP2, CompactGhostsAreProjectedFromAuthoritativeSpectralGhosts)
         EXPECT_DOUBLE_EQ(values(-1,0,0,RhoQ2_comp), Real(2.5));
         EXPECT_DOUBLE_EQ(values(2,0,0,RhoQ3_comp), Real(4.5));
     }
+}
+
+TEST(SBMP2, CompactGhostsAreProjectedFromAuthoritativeSpectralGhosts)
+{
+    sbm_test_CompactGhostsAreProjectedFromAuthoritativeSpectralGhosts();
 }
 
 TEST(SBMP2, CoarseFineWENOInterfaceOracleUsesBothUpwindSigns)
@@ -2391,7 +2503,7 @@ TEST(SBMP2, DonorSupportEnvelopeHandlesOneTwoMomentAndZeroCarrierCases)
     EXPECT_EQ(no_static_upper[0].has_hard_max, 0);
 }
 
-TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
+void sbm_test_WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator()
 {
     std::ofstream evidence(std::filesystem::temp_directory_path() /
                             "erf_sbm_p2_weno_convergence.csv");
@@ -2493,6 +2605,11 @@ TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
     }
 }
 
+TEST(SBMP2, WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator)
+{
+    sbm_test_WENOZ3ConvergenceBeatsDonorOnPeriodicSmoothOperator();
+}
+
 TEST(SBMP2, WENOZ3TranslationCovarianceForSmoothAndDiscontinuousStencils)
 {
     const Real shift = Real(37.25);
@@ -2504,14 +2621,16 @@ TEST(SBMP2, WENOZ3TranslationCovarianceForSmoothAndDiscontinuousStencils)
         const Real smooth_shifted = erf_sbm::weno_z3_face_from_stencil(
             smooth[0] + shift, smooth[1] + shift, smooth[2] + shift,
             smooth[3] + shift, carrier);
-        EXPECT_NEAR(smooth_shifted - smooth_base, shift, 64 * std::numeric_limits<Real>::epsilon());
+        EXPECT_NEAR(smooth_shifted - smooth_base, shift,
+                    precision_tolerance(shift, Real(64.0)));
 
         const Real jump_base = erf_sbm::weno_z3_face_from_stencil(
             jump[0], jump[1], jump[2], jump[3], carrier);
         const Real jump_shifted = erf_sbm::weno_z3_face_from_stencil(
             jump[0] + shift, jump[1] + shift, jump[2] + shift,
             jump[3] + shift, carrier);
-        EXPECT_NEAR(jump_shifted - jump_base, shift, 64 * std::numeric_limits<Real>::epsilon());
+        EXPECT_NEAR(jump_shifted - jump_base, shift,
+                    precision_tolerance(shift, Real(64.0)));
     }
 }
 
@@ -2549,8 +2668,8 @@ TEST(SBMP2, WENOZ3CanonicalERFDiscontinuityAndConstantStencils)
                 stencil[0], stencil[1], stencil[2], stencil[3], carrier);
             const Real actual = erf_sbm::weno_z3_face_from_stencil(
                 stencil[0], stencil[1], stencil[2], stencil[3], carrier);
-            EXPECT_NEAR(actual, expected, Real(512.0) *
-                        std::numeric_limits<Real>::epsilon());
+            EXPECT_NEAR(actual, expected,
+                        precision_tolerance(expected, Real(512.0)));
             EXPECT_TRUE(std::isfinite(actual));
         }
     }
@@ -2598,7 +2717,7 @@ TEST(SBMP2, RuntimeCapabilityRejectsUnsupportedAMREnvelope)
     EXPECT_NE(report.stable_description().find("time_refinement_factor=2"), std::string::npos);
 }
 
-TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
+void sbm_test_FullGroupedTransportHasSmoothManufacturedConvergence()
 {
     std::ofstream evidence(std::filesystem::temp_directory_path() /
                             "erf_sbm_p2_full_transport_convergence.csv");
@@ -2708,11 +2827,17 @@ TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
                 std::max(Real(1.0), std::abs(donor_errors[i]));
             EXPECT_LE(weno_errors[i], donor_errors[i] + ordering_tolerance);
         }
-        EXPECT_NEAR(weno_limiters[i], Real(1.0), Real(1.e-12));
+        EXPECT_NEAR(weno_limiters[i], Real(1.0),
+                    precision_tolerance(Real(1.0), Real(128.0)));
     }
 }
 
-TEST(SBMP2, VariableDensityWENOReconstructionHasBoundedConvergence)
+TEST(SBMP2, FullGroupedTransportHasSmoothManufacturedConvergence)
+{
+    sbm_test_FullGroupedTransportHasSmoothManufacturedConvergence();
+}
+
+void sbm_test_VariableDensityWENOReconstructionHasBoundedConvergence()
 {
     std::ofstream evidence(std::filesystem::temp_directory_path() /
                             "erf_sbm_p2_variable_density_convergence.csv");
@@ -2725,7 +2850,7 @@ TEST(SBMP2, VariableDensityWENOReconstructionHasBoundedConvergence)
     const Real z_amplitude = Real(0.05);
     const Real velocity = Real(0.25);
     const auto sinc = [](const Real argument) {
-        return std::abs(argument) < Real(1.e-14) ? Real(1.0) :
+        return std::abs(argument) < precision_tolerance(Real(1.0), Real(16.0)) ? Real(1.0) :
             std::sin(argument) / argument;
     };
     const auto run = [&](const int ncell) {
@@ -2822,6 +2947,11 @@ TEST(SBMP2, VariableDensityWENOReconstructionHasBoundedConvergence)
             EXPECT_LT(order, Real(1.5));
         }
     }
+}
+
+TEST(SBMP2, VariableDensityWENOReconstructionHasBoundedConvergence)
+{
+    sbm_test_VariableDensityWENOReconstructionHasBoundedConvergence();
 }
 
 TEST(SBMP2, FiniteVolumeWENOQuadraticOptimalCandidateIsExact)

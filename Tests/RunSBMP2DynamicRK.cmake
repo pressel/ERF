@@ -46,35 +46,39 @@ function(run_dynamic_case mode nranks output_prefix)
         message(FATAL_ERROR "SBM dynamic ${output_prefix} ${nranks}-rank run reported ${_count} ${_temporal_mode} stages, expected ${_expected_stages}")
     endif()
 
-    set(_rates)
+    set(_actual_rates)
+    set(_tau_rates)
     foreach(_stage RANGE 0 ${_expected_stages})
         if(_stage GREATER_EQUAL _expected_stages)
             break()
         endif()
         string(REGEX MATCH
-            "SBM actual stage low-order demand level=[0-9]+ stage=${_stage} temporal_mode=${_temporal_mode} acoustic_substepping=disabled tau=[0-9eE+.-]+ actual_rate=[0-9eE+.-]+ actual_advective_rate=[0-9eE+.-]+ actual_diffusive_rate=[0-9eE+.-]+ tau_actual_rate=([0-9eE+.-]+)"
+            "SBM actual stage low-order demand level=[0-9]+ stage=${_stage} temporal_mode=${_temporal_mode} acoustic_substepping=disabled tau=[0-9eE+.-]+ actual_rate=([0-9eE+.-]+) actual_advective_rate=[0-9eE+.-]+ actual_diffusive_rate=[0-9eE+.-]+ tau_actual_rate=([0-9eE+.-]+)"
             _stage_match "${_text}")
         if(NOT _stage_match)
             message(FATAL_ERROR "SBM dynamic ${output_prefix} ${nranks}-rank stage ${_stage} was not parseable")
         endif()
-        set(_tau_rate "${CMAKE_MATCH_1}")
+        set(_actual_rate "${CMAKE_MATCH_1}")
+        set(_tau_rate "${CMAKE_MATCH_2}")
         if(_tau_rate GREATER 1.0000000001)
             message(FATAL_ERROR "SBM dynamic ${output_prefix} ${nranks}-rank stage ${_stage} exceeds the exact-stage bound: ${_tau_rate}")
         endif()
-        list(APPEND _rates "${_tau_rate}")
+        list(APPEND _actual_rates "${_actual_rate}")
+        list(APPEND _tau_rates "${_tau_rate}")
     endforeach()
 
     if(mode EQUAL 0)
-        list(GET _rates 0 _rate0)
-        list(GET _rates 1 _rate1)
-        list(GET _rates 2 _rate2)
+        list(GET _actual_rates 0 _rate0)
+        list(GET _actual_rates 1 _rate1)
+        list(GET _actual_rates 2 _rate2)
         if("${_rate0}" STREQUAL "${_rate1}" AND "${_rate1}" STREQUAL "${_rate2}")
             message(FATAL_ERROR "SBM dynamic compressible carrier demand did not change across RK stages")
         endif()
     endif()
 
     set(${output_prefix}_${nranks}_count "${_count}" PARENT_SCOPE)
-    set(${output_prefix}_${nranks}_rates "${_rates}" PARENT_SCOPE)
+    set(${output_prefix}_${nranks}_actual_rates "${_actual_rates}" PARENT_SCOPE)
+    set(${output_prefix}_${nranks}_tau_rates "${_tau_rates}" PARENT_SCOPE)
 endfunction()
 
 run_dynamic_case(0 1 compressible)
@@ -82,20 +86,30 @@ run_dynamic_case(0 2 compressible)
 run_dynamic_case(1 1 anelastic)
 run_dynamic_case(1 2 anelastic)
 
-if(NOT "${compressible_1_rates}" STREQUAL "${compressible_2_rates}")
-    message(FATAL_ERROR "SBM dynamic compressible global stage demands differ between 1 and 2 ranks")
+if(NOT "${compressible_1_actual_rates}" STREQUAL "${compressible_2_actual_rates}")
+    message(FATAL_ERROR "SBM dynamic compressible actual-rate vectors differ between 1 and 2 ranks")
 endif()
-if(NOT "${anelastic_1_rates}" STREQUAL "${anelastic_2_rates}")
-    message(FATAL_ERROR "SBM dynamic anelastic global stage demands differ between 1 and 2 ranks")
+if(NOT "${compressible_1_tau_rates}" STREQUAL "${compressible_2_tau_rates}")
+    message(FATAL_ERROR "SBM dynamic compressible tau-rate vectors differ between 1 and 2 ranks")
+endif()
+if(NOT "${anelastic_1_actual_rates}" STREQUAL "${anelastic_2_actual_rates}")
+    message(FATAL_ERROR "SBM dynamic anelastic actual-rate vectors differ between 1 and 2 ranks")
+endif()
+if(NOT "${anelastic_1_tau_rates}" STREQUAL "${anelastic_2_tau_rates}")
+    message(FATAL_ERROR "SBM dynamic anelastic tau-rate vectors differ between 1 and 2 ranks")
 endif()
 
 file(WRITE "${LOG}"
     "dynamic_compressible_1rank_count=${compressible_1_count}\n"
-    "dynamic_compressible_1rank_tau_rates=${compressible_1_rates}\n"
+    "dynamic_compressible_1rank_actual_rates=${compressible_1_actual_rates}\n"
+    "dynamic_compressible_1rank_tau_rates=${compressible_1_tau_rates}\n"
     "dynamic_compressible_2rank_count=${compressible_2_count}\n"
-    "dynamic_compressible_2rank_tau_rates=${compressible_2_rates}\n"
+    "dynamic_compressible_2rank_actual_rates=${compressible_2_actual_rates}\n"
+    "dynamic_compressible_2rank_tau_rates=${compressible_2_tau_rates}\n"
     "dynamic_anelastic_1rank_count=${anelastic_1_count}\n"
-    "dynamic_anelastic_1rank_tau_rates=${anelastic_1_rates}\n"
+    "dynamic_anelastic_1rank_actual_rates=${anelastic_1_actual_rates}\n"
+    "dynamic_anelastic_1rank_tau_rates=${anelastic_1_tau_rates}\n"
     "dynamic_anelastic_2rank_count=${anelastic_2_count}\n"
-    "dynamic_anelastic_2rank_tau_rates=${anelastic_2_rates}\n"
+    "dynamic_anelastic_2rank_actual_rates=${anelastic_2_actual_rates}\n"
+    "dynamic_anelastic_2rank_tau_rates=${anelastic_2_tau_rates}\n"
     "dynamic_no_acoustic_real_carrier=verified\n")
