@@ -3,8 +3,8 @@
 This document records the source-level contract used to close out
 `sbm-p2-final-qualification` and `sbm-p2-final-closeout`. The current
 implementation is on `sbm-p2-final-closeout` at
-`c5e1b4bda9e76137ef07bb1baf13d9c115b29641`, starting from the required
-`f57d5b5e0b1da862adf45b853a9cd17f09e99cdb`. The design authority is
+`c3eed779c36c2d24f95c317c371ad75a01a3549c`, starting from the required
+`d006aef20410703e40bb7c19d6de1804588551a5`. The design authority is
 `/Users/pres026/Research/ERF_SBM_Public/ERF_SBM_Warm_Aerosol_Design_and_Implementation_Specification_v1.0.md`.
 
 This trace separates the current-state host estimate from the actual ERF
@@ -164,19 +164,22 @@ performs one fixed-size, bin-independent GPU reduction over the current host
 state. Its low-order demand is
 
 ```text
-R_host = max_i {
-    sum_d outgoing(velocity_face*rho_face)/(rho_i*V_i)
-  + sum_faces A_f*rho_face*K/d_if/(rho_i*V_i)
-}
-dt_host = 0.5/R_host
+A_i = outgoing advective demand in cell i
+D_i = density-weighted diffusive demand in cell i
+A_max = max_i A_i
+D_max = max_i D_i
+R_cell_max = max_i (A_i + D_i)
+selected_dt_host = 0.5 / (A_max + D_max)
+diagnostic_bound = 1 / R_cell_max
 ```
 
-The diagnostic explicitly says `host_carrier=reconstructed_u_rho`. The path
-has no per-bin reduction, full host spectral copy, host-only device capture,
-private retry, private subcycle, clipping, or narrow empirical carrier
-multiplier. Invalid density, velocity, coefficient, terrain, EB, or missing
-host ghost input fails closed and reports a recommended timestep when one
-can be computed.
+The selected host value is conservative because `A_max + D_max` is at least
+`R_cell_max`. The diagnostic explicitly says
+`host_carrier=reconstructed_u_rho`. The path has no per-bin reduction, full
+host spectral copy, host-only device capture, private retry, private
+subcycle, clipping, or narrow empirical carrier multiplier. Invalid density,
+velocity, coefficient, terrain, EB, or missing host ghost input fails closed
+and reports a recommended timestep when one can be computed.
 
 The actual-stage path is `ERF::advance_sbm_stage` into
 `ERF_SBMTransportPrototype::advance_stage`. Before spectral transport,
@@ -189,11 +192,16 @@ cell, and `recommended_max_host_dt`.
 The stage guard is unconditional and diagnostic-only pointer state cannot
 disable it. It rejects non-finite demand or `tau*rate > 1` (within the
 scale-aware floating-point comparison), before stage flux mutation or
-spectral transport. For a finite positive rate it recommends
+spectral transport. For a finite positive rate, with
+`rhs_interval = alpha_s * current_full_step`, it recommends
 
 ```text
-recommended_max_host_dt = full_step / total_rate
+recommended_max_host_dt = current_full_step / tau_rate
+                         = 1 / (alpha_s * actual_total_rate)
 ```
+
+This is a full-step cap derived from the measured stage contract, not
+`full_step / total_rate`.
 
 The host estimate and actual check are intentionally distinct. Fast
 pressure/source and AMR updates can change `avg_*mom` after the host estimate.
@@ -237,10 +245,22 @@ The closeout test registration is in `Tests/CTestList.cmake`.
   demand, variable density, and fail-closed behavior.
 * `RunSBMP2DynamicRK.cmake` runs real compressible RK3 and anelastic Heun
   carriers at one and two ranks and checks stage count, stage intervals,
-  `tau*rate`, and rank-equivalent evidence.
+  separate `actual_rate` and `tau*rate` vectors, and rank-equivalent evidence.
 * `RunSBMP2AcousticSubsteppingRejection.cmake` covers the explicit rejection.
 * `ERF_GTestSBMP0P1.cpp` and `ERF_GTestSBMP2.cpp` contain the direct unit
   and negative controls.
+
+The local dynamic-RK evidence recorded by that script is:
+
+```text
+compressible_rk3 actual_rate (1r, 2r):
+  302.73955166118299;302.93466123274578;302.90599276820632
+compressible_rk3 tau_actual_rate (1r, 2r):
+  0.100913183887061;0.15146733061637288;0.30290599276820634
+anelastic_heun actual_rate (1r, 2r): 1;1
+anelastic_heun tau_actual_rate (1r, 2r): 0.0001;0.0001
+no_acoustic_real_carrier=verified
+```
 
 The final numerical disposition and CI ledger are maintained in
 `P2_QUALIFICATION_REPORT.md`. No P3 work is authorized by this trace.

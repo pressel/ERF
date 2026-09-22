@@ -11,10 +11,11 @@ remains the architectural authority. P3 physics was not started.
 ## Disposition
 
 The code and local qualification evidence are complete for the declared P2
-configuration. The required GitHub Actions matrix for implementation SHA
-`c5e1b4bda` is still in progress; several jobs have passed, but the matrix is
-not yet final. GPU runtime qualification is separate and was not run on this
-host. Until the remote matrix is complete, the exact permitted disposition is:
+configuration. Commit A has been pushed as implementation SHA
+`c3eed779c36c2d24f95c317c371ad75a01a3549c`; its required GitHub Actions
+matrix is still in progress. GPU runtime qualification is separate and was
+not run on this host. Until the remote matrix is complete, the exact
+permitted disposition is:
 
 ```text
 P2 PARTIAL — DO NOT BEGIN P3
@@ -31,12 +32,12 @@ every required gate is green.
 |---|---|
 | Remote | `https://github.com/pressel/ERF` |
 | Branch | `sbm-p2-final-closeout` |
-| Required starting SHA | `f57d5b5e0b1da862adf45b853a9cd17f09e99cdb` |
-| Implementation SHA | `c5e1b4bda9e76137ef07bb1baf13d9c115b29641` |
-| `origin/development` checked | `805bdd156cd1213200d839c3945a023c3d9bd7e6` |
+| Required starting SHA | `d006aef20410703e40bb7c19d6de1804588551a5` |
+| Implementation SHA | `c3eed779c36c2d24f95c317c371ad75a01a3549c` |
+| `origin/development` checked | `b4eda429e` (already included in the required starting SHA) |
 | Development relation | Already an ancestor of the required starting SHA; no additional merge was needed |
-| Implementation commit | `c5e1b4bda` — `SBM P2: close archaeology-driven qualification gaps` |
-| Evidence commit | This docs-only snapshot; final CI ledger update may add a later docs-only commit |
+| Implementation commit | `c3eed779c` — `tests: make SBM P2 qualification GPU portable` |
+| Evidence commit | This docs-only snapshot; CI ledger records Commit A's final state |
 | Spack compiler wrappers | `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin/mpicc`, `mpicxx`, `mpifort` |
 | Spack MPI launcher | `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin/mpiexec` |
 | Build parallelism | `-j8` / `--parallel 8` |
@@ -46,33 +47,20 @@ preserved and are not part of the implementation commit.
 
 ## Implemented changes
 
-The implementation commit changes the following production and qualification
-files:
+Earlier commits in the current branch lineage provide the production P2
+carrier, CFL, boundary, AMR, and restart implementation. Commit A changes only
+the following qualification files:
 
-* `Source/Microphysics/SBM/ERF_SBMErfBoundary.H` — one ERF-to-SBM boundary
-  policy constructor with periodicity precedence.
-* `Source/Microphysics/SBM/ERF_SBMHostCFL.H` — fixed-size GPU-safe host face
-  and cell demand oracle.
-* `Source/Microphysics/SBM/ERF_SBMErfIntegration.cpp` — shared boundary
-  policy in production integration and portable device captures.
-* `Source/Microphysics/SBM/ERF_SBMTransportPrototype.{H,cpp}` — exact-stage
-  carrier measurement, unconditional guard, and recommended full-step cap.
-* `Source/Microphysics/SBM/Make.package` — build registration for the new
-  provider helpers.
-* `Source/TimeIntegration/ERF_ComputeTimestep.cpp` — current-state host
-  estimate using the shared oracle and fixed-size reduction.
-* `Tests/CTestList.cmake` — real dynamic carrier fixture registration.
-* `Tests/RunSBMP2DynamicRK.cmake` — one/two-rank RK3 and Heun evidence.
-* `Tests/Unit/Microphysics/SBM/ERF_GTestSBMP2.cpp` — direct carrier,
-  boundary, host-CFL, stage-guard, AMR, restart, and negative-control tests.
-* `Tests/Unit/Microphysics/SBM/inputs_sbm_p2_dynamic_rk` — compressible
-  static-Cartesian real-carrier fixture.
-* `Tests/Unit/Microphysics/SBM/inputs_sbm_p2_anelastic_heun` — anelastic
-  real-carrier Heun fixture.
+* `Tests/Unit/Microphysics/SBM/ERF_GTestSBMP2.cpp` — moved all GPU extended
+  lambdas out of GoogleTest bodies into namespace-scope test helpers, made the
+  StageZero arithmetic oracle use pinned host/device-accessible FABs with
+  explicit host initialization, replaced non-portable extreme literals, and
+  made P2 precision checks scale-aware.
+* `Tests/RunSBMP2DynamicRK.cmake` — parses and stores `actual_rate` and
+  `tau_actual_rate` separately, checks the RK3/Heun stage contracts, compares
+  one-rank/two-rank vectors, and records both vectors in the evidence log.
 
-Earlier commits in the current branch lineage retain the P0/P1/P2 carrier,
-AMR, precision, warning, and portable-capture fixes. The current closeout
-commit starts exactly at the required `f57d5b5e0` state.
+The current closeout commit starts exactly at the required `d006aef204` state.
 
 ## Carrier and CFL contract
 
@@ -93,12 +81,17 @@ momentum_face = velocity_face * (rho_cell + rho_neighbor) / 2.
 ```
 
 The host estimator in `ERF_ComputeTimestep.cpp` is bin-independent and uses
-the current host state. Its diagnostic is explicitly
-`host_carrier=reconstructed_u_rho`; it retains the locked `0.5` safety factor.
-It includes outgoing advection and density-weighted diffusion, rejects invalid
-state/coefficient/geometry data, and fails closed. It does not copy the host
-spectrum, reduce per bin, allocate per bin, retry, clip, or privately
-subcycle.
+the current host state. Let `A_i` be the cell's outgoing advective demand and
+`D_i` its density-weighted diffusive demand. The reduction keeps
+`A_max=max_i A_i`, `D_max=max_i D_i`, and
+`R_cell_max=max_i(A_i+D_i)` distinct. The selected host timestep is
+`0.5/(A_max+D_max)`; the diagnostic mathematical bound is `1/R_cell_max`.
+Because `A_max+D_max >= R_cell_max`, the selected host timestep is
+conservative relative to that per-cell diagnostic. Its diagnostic is
+explicitly `host_carrier=reconstructed_u_rho`; it retains the locked `0.5`
+safety factor. It rejects invalid state/coefficient/geometry data and fails
+closed. It does not copy the host spectrum, reduce per bin, allocate per bin,
+retry, clip, or privately subcycle.
 
 The actual-stage oracle in `ERF_SBMTransportPrototype.cpp` consumes the exact
 `avg_xmom`, `avg_ymom`, and `avg_zmom` arrays handed to SBM after the ERF
@@ -108,11 +101,17 @@ updates. It uses exact stage density, geometry, shared boundary policy, and
 `recommended_max_host_dt`, and rejects non-finite demand or `tau_rate > 1`
 within a scale-aware roundoff tolerance before stage flux mutation.
 
-For a finite positive actual rate:
+For a finite positive actual rate, with `tau_rate` equal to the stage
+interval times the actual total rate:
 
 ```text
-recommended_max_host_dt = full_step / total_rate.
+recommended_max_host_dt = current_full_step / tau_rate
+                         = 1 / (alpha_s * actual_total_rate)
 ```
+
+where `rhs_interval = alpha_s * current_full_step`. The recommendation is a
+full-step cap derived from the measured stage contract; it is not
+`full_step / total_rate`.
 
 The guard is diagnostic-only-pointer independent. There is no retry, clipping,
 private subcycle, empirical speed multiplier, or narrowed carrier definition.
@@ -184,11 +183,17 @@ is:
 
 ```text
 compressible RK3, 1 rank: 3 stages
+actual_rate: 302.73955166118299; 302.93466123274578; 302.90599276820632
 tau*rate: 0.100913183887061; 0.15146733061637288; 0.30290599276820634
-compressible RK3, 2 ranks: 3 stages, exact same values
+compressible RK3, 2 ranks: 3 stages
+actual_rate: 302.73955166118299; 302.93466123274578; 302.90599276820632
+tau*rate: 0.100913183887061; 0.15146733061637288; 0.30290599276820634
 anelastic Heun, 1 rank: 2 stages
+actual_rate: 1; 1
 tau*rate: 0.0001; 0.0001
-anelastic Heun, 2 ranks: 2 stages, exact same values
+anelastic Heun, 2 ranks: 2 stages
+actual_rate: 1; 1
+tau*rate: 0.0001; 0.0001
 no_acoustic_real_carrier=verified
 ```
 
@@ -226,16 +231,13 @@ All current CMake and GNU Make compilation used the pinned Spack wrappers and
 
 | Check | Result |
 |---|---|
-| `cmake --build BuildTests --parallel 8` | Passed |
-| `ctest --test-dir BuildTests -L sbm --output-on-failure -j8` | Passed, 23/23 |
-| `ctest --test-dir BuildTests --output-on-failure -j8` | Passed, 912/912 |
-| Production `cmake --build Build --parallel 8` | Passed, DOUBLE, MPI, particles OFF |
-| `cmake --build BuildTestsSingle --parallel 8` | Passed, SINGLE/SINGLE, MPI and particles ON, all warnings |
-| SINGLE runtime SBM label | Not a qualification gate: legacy DOUBLE-oriented tolerances produce known runtime failures; compile gate passes |
-| GNU Make DOUBLE MPI, NetCDF OFF | Passed; produced `Exec/ERF3d.gnu.TEST.MPI.ex` |
-| GNU Make NetCDF ON | Not available in the pinned Spack view; no host provider substituted |
+| `cmake --build BuildTestsDevelopmentMerge --parallel 8` | Passed |
+| `make -C BuildTestsDevelopmentMerge -j8` | Passed |
+| `ctest --test-dir BuildTestsDevelopmentMerge -R '^SBMP2\.' --output-on-failure --parallel 8` | Passed, 51/51 |
+| SBM P1/P2 integration label | Passed, 23/23 |
+| Full CTest matrix | 977/978 passed; unrelated `Closure_BoxParity_MYNNEDMF` reproducibly aborts with macOS `SIGILL` in `ComputeDiffusivityMYNNEDMF` |
 | Dynamic real-carrier fixtures | Passed at 1 and 2 ranks for RK3 and Heun |
-| GPU runtime | Not run on this host |
+| GPU compiler/runtime locally | Not available; CUDA/HIP/SYCL runtime not run on this host |
 
 The full CTest matrix includes P0/P1 regressions, AMR, restart, boundary,
 host-CFL, acoustic rejection, MPI, and the new real-carrier fixture. The
@@ -244,30 +246,31 @@ scale-aware WENO ordering check only admits the measured CI rounding spread
 
 ## CI ledger
 
-The exact pre-closeout failures were inspected from the f57 artifacts. The
-shared serial failure was a one-ULP WENO ordering difference, CUDA/SYCL
-failures were device-capture/extended-lambda portability issues, and the
-Windows/Linux warning and precision reports were branch-introduced. The
-implementation fixes those concrete causes without disabling tests.
+The exact pre-closeout failures were inspected from the prior CI artifacts.
+The shared serial failure was a one-ULP WENO ordering difference, and the
+CUDA/HIP/SYCL failures were device-capture/extended-lambda portability issues
+in the new P2 helpers. Commit A fixes those concrete causes without disabling
+tests. The current matrix is attached to Commit A below; this report does not
+substitute local CPU evidence for a required remote GPU result.
 
-| Workflow | Implementation SHA `c5e1b4bda` result |
+| Workflow | Implementation SHA `c3eed779c` result |
 |---|---|
-| Style | Passed |
-| codespell | Passed |
-| draft PDF | Passed |
-| DocHTML | Passed |
-| Linux GCC | Pending final run completion at report update |
-| Linux GCC NetCDF/RRTMGP | Pending final run completion at report update |
-| ERF CI | Pending final run completion at report update |
-| macOS | Pending final run completion at report update |
-| Windows / Windows MPI | Pending final run completion at report update |
-| CUDA | Pending final run completion at report update |
-| HIP | Pending final run completion at report update |
-| SYCL | Pending final run completion at report update |
+| Style | Passed — run `35743610011` |
+| codespell | Passed — run `35743610040` |
+| draft PDF | Passed — run `35743609927` |
+| DocHTML | In progress — run `35743609873` at 2026-09-22T15:08Z |
+| Linux GCC | In progress — run `35743609858` at 2026-09-22T15:08Z |
+| Linux GCC NetCDF/RRTMGP | In progress — run `35743609867` at 2026-09-22T15:08Z |
+| ERF CI | In progress — run `35743609884` at 2026-09-22T15:08Z |
+| macOS | In progress — run `35743610074` at 2026-09-22T15:08Z |
+| Windows / Windows MPI | In progress — runs `35743609805`, `35743609831` at 2026-09-22T15:08Z |
+| CUDA | In progress — run `35743610042` at 2026-09-22T15:08Z |
+| HIP | In progress — run `35743610110` at 2026-09-22T15:08Z |
+| SYCL | In progress — run `35743609919` at 2026-09-22T15:08Z |
 
-The final evidence commit must replace the pending entries with the exact
-conclusion/job result or an exact, reproducible external-infrastructure
-limitation. A local pass must never be substituted for a required CI result.
+The final evidence commit records the exact conclusion/job result or an exact,
+reproducible external-infrastructure limitation. A local pass must never be
+substituted for a required CI result.
 
 ## Classification and stop conditions
 
