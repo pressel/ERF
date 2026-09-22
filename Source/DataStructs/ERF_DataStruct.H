@@ -1746,7 +1746,8 @@ struct SolverChoice {
             for (int lev = 0; lev <= max_level; ++lev) {
                 capability.acoustic_substepping_enabled =
                     capability.acoustic_substepping_enabled ||
-                    substepping_type[static_cast<std::size_t>(lev)] != SubsteppingType::None;
+                    ::erf_sbm::acoustic_substepping_enabled_from_substepping_type(
+                        substepping_type[static_cast<std::size_t>(lev)] == SubsteppingType::None);
             }
             capability.amr_nonperiodic = max_level > 0 && !capability.periodic_cartesian;
             for (int face = 0; face < AMREX_SPACEDIM*2; ++face) {

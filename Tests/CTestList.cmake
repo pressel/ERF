@@ -1208,20 +1208,11 @@ function(add_test_sbm_p2_dynamic_rk TEST_NAME)
         ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/compressible_1r;${_test_dir}/compressible_2r;${_test_dir}/anelastic_1r;${_test_dir}/anelastic_2r")
 endfunction(add_test_sbm_p2_dynamic_rk)
 
-function(add_test_sbm_p2_acoustic_rejection TEST_NAME NRANKS METHOD MOMENT)
-    set(_source_input
-        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_variable_host_cfl")
+function(add_test_sbm_p2_acoustic_rejection TEST_NAME METHOD MOMENT)
     set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
     file(MAKE_DIRECTORY "${_test_dir}")
-    file(COPY "${_source_input}" DESTINATION "${_test_dir}")
-    resolve_test_exe("" "erf_exec" TEST_EXE)
     add_test(${TEST_NAME} ${CMAKE_COMMAND}
-        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
-        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
-        -DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}
-        -DNRANKS=${NRANKS}
-        -DTEST_EXE=${TEST_EXE}
-        -DINPUT=${_test_dir}/inputs_sbm_p2_variable_host_cfl
+        -DCHECKER=${SBM_ACOUSTIC_SUBSTEPPING_CHECKER}
         -DWORKING_DIRECTORY=${_test_dir}
         -DMETHOD=${METHOD}
         -DMOMENT=${MOMENT}
@@ -1229,10 +1220,10 @@ function(add_test_sbm_p2_acoustic_rejection TEST_NAME NRANKS METHOD MOMENT)
         -P ${PROJECT_SOURCE_DIR}/Tests/RunSBMP2AcousticSubsteppingRejection.cmake)
     set_tests_properties(${TEST_NAME}
         PROPERTIES
-        TIMEOUT 300
-        PROCESSORS ${NRANKS}
+        TIMEOUT 60
+        PROCESSORS 1
         WORKING_DIRECTORY "${_test_dir}/"
-        LABELS "regression;sbm;sbm-p2;capability;mpi"
+        LABELS "regression;sbm;sbm-p2;capability;host"
         ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/${TEST_NAME}.log.evidence")
 endfunction(add_test_sbm_p2_acoustic_rejection)
 
@@ -1262,10 +1253,6 @@ if(ERF_ENABLE_TESTS AND ERF_ENABLE_MPI)
     add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_1 1)
     add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_2 2)
     add_test_sbm_p2_dynamic_rk(SBM_P2_DYNAMIC_REAL_CARRIERS)
-    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_DONOR_1M 1 DonorCell 1)
-    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_DONOR_2M 1 DonorCell 2)
-    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_GROUPED_1M 1 GroupedFCT_WENOZ3 1)
-    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_GROUPED_2M 1 GroupedFCT_WENOZ3 2)
 
     # The checker is a small AMReX PlotFileData consumer and is built only
     # when regression tests are enabled.  All SHOC cases use explicit
@@ -1360,6 +1347,15 @@ if(ERF_ENABLE_TESTS AND ERF_ENABLE_MPI)
     add_test_shoc_mutation(SHOC_Mutation_Disable_Theta_State_Update
         "erf.shoc.debug_disable_theta_state_update=true" theta
         1.0e-2 1.0e-2 0.05)
+endif()
+
+# This is a host-only capability preflight and does not require the MPI
+# regression harness that surrounds the full ERF SBM integration tests.
+if(ERF_ENABLE_TESTS)
+    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_DONOR_1M DonorCell 1)
+    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_DONOR_2M DonorCell 2)
+    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_GROUPED_1M GroupedFCT_WENOZ3 1)
+    add_test_sbm_p2_acoustic_rejection(SBM_P2_REJECT_ACOUSTIC_GROUPED_2M GroupedFCT_WENOZ3 2)
 endif()
 
 # These tests will all be built in Exec

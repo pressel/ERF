@@ -163,6 +163,9 @@ ProductionChunkRun run_production_chunk_case(const int nbins, const MomentMode m
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
     manager.define_level(0, boxes, dm, 2);
     const auto& population = layout.populations().front();
+    const int mass_offset = population.mass_offset;
+    const int number_offset = population.number_offset;
+    const bool two_moment = (mode == MomentMode::TwoMoment);
     for (amrex::MFIter mfi(manager.output(0)); mfi.isValid(); ++mfi) {
         const auto state = manager.output(0).array(mfi);
         const auto density = rho.const_array(mfi);
@@ -173,9 +176,9 @@ ProductionChunkRun run_production_chunk_case(const int nbins, const MomentMode m
             for (int b = 0; b < nbins; ++b) {
                 const Real mass = density(i,j,k,0) * Real(1.e-3) *
                     Real(b + 1) * variation;
-                state(i,j,k,population.mass_offset+b) = mass;
-                if (mode == MomentMode::TwoMoment) {
-                    state(i,j,k,population.number_offset+b) = mass / (Real(b) + Real(0.5));
+                state(i,j,k,mass_offset+b) = mass;
+                if (two_moment) {
+                    state(i,j,k,number_offset+b) = mass / (Real(b) + Real(0.5));
                 }
             }
         });
@@ -1435,7 +1438,6 @@ void sbm_test_ProductionTargetDensityPreservesConstantRatioForBothTemporalContra
         for (amrex::MFIter mfi(rho_anchor); mfi.isValid(); ++mfi) {
             const auto anchor = rho_anchor.array(mfi);
             const auto input = rho_input.array(mfi);
-            const auto target = rho_target.array(mfi);
             const auto state = manager.output(0).array(mfi);
             amrex::ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE (int i, int j, int kidx) noexcept {
                 const Real x = (Real(i) + Real(0.5)) * h;

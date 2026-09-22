@@ -279,7 +279,7 @@ TEST (SBMP0, GenericManagerPreservesBaselineAndPublishesAcceptedState)
 
 TEST (SBMP0, CapabilityReportFailsClosedAndIsStable)
 {
-    const erf_sbm::CapabilityInput supported_input;
+    const erf_sbm::CapabilityInput supported_input{};
     const auto supported = erf_sbm::evaluate_p1_capabilities(supported_input);
     EXPECT_TRUE(supported.supported);
     EXPECT_EQ(supported.stable_description(),

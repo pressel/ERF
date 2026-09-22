@@ -127,6 +127,12 @@ CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input)
     return report;
 }
 
+bool acoustic_substepping_enabled_from_substepping_type(
+    const bool substepping_type_is_none) noexcept
+{
+    return !substepping_type_is_none;
+}
+
 double admissible_host_timestep(const double advective_rate,
                                 const double diffusive_rate)
 {

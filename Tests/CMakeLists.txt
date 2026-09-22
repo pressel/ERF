@@ -113,6 +113,24 @@ if(ERF_ENABLE_TESTS)
   set(SBM_QUALIFICATION_CHECKER
       "${CMAKE_CURRENT_BINARY_DIR}/erf_sbm_qualification_check${CMAKE_EXECUTABLE_SUFFIX}")
 
+  # Host-only preflight oracle for the P2 acoustic-substepping capability
+  # contract.  It shares the production evaluator without launching ERF or
+  # entering an MPI fatal-abort path.
+  add_executable(erf_sbm_acoustic_substepping_check
+    ${CMAKE_CURRENT_SOURCE_DIR}/SBMAcousticSubsteppingCheck.cpp
+    ${PROJECT_SOURCE_DIR}/Source/AuxiliaryState/ERF_AuxiliaryProjection.cpp
+    ${PROJECT_SOURCE_DIR}/Source/Microphysics/SBM/ERF_SBMLayout.cpp
+    ${PROJECT_SOURCE_DIR}/Source/Microphysics/SBM/ERF_SpectralGrid.cpp
+    ${PROJECT_SOURCE_DIR}/Source/Microphysics/SBM/ERF_SBMContracts.cpp)
+  target_link_libraries(erf_sbm_acoustic_substepping_check PRIVATE AMReX::amrex)
+  target_include_directories(erf_sbm_acoustic_substepping_check PRIVATE
+    ${PROJECT_SOURCE_DIR}/Source
+    ${PROJECT_SOURCE_DIR}/Source/AuxiliaryState
+    ${PROJECT_SOURCE_DIR}/Source/Microphysics/SBM)
+  target_compile_features(erf_sbm_acoustic_substepping_check PRIVATE cxx_std_17)
+  set(SBM_ACOUSTIC_SUBSTEPPING_CHECKER
+      "${CMAKE_CURRENT_BINARY_DIR}/erf_sbm_acoustic_substepping_check${CMAKE_EXECUTABLE_SUFFIX}")
+
   if(ERF_ENABLE_CUDA)
     foreach(_erf_test_tool IN ITEMS
         erf_shoc_plotfile_check
@@ -123,7 +141,8 @@ if(ERF_ENABLE_TESTS)
         erf_cloud_chamber_check
         erf_cloud_chamber_wall_dt_guard_check
         erf_two_stream_radiation_check
-        erf_sbm_qualification_check)
+        erf_sbm_qualification_check
+        erf_sbm_acoustic_substepping_check)
       setup_target_for_cuda_compilation(${_erf_test_tool})
     endforeach()
   endif()

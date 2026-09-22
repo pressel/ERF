@@ -77,6 +77,15 @@ CapabilityReport evaluate_p1_capabilities(const CapabilityInput& input);
 CapabilityReport evaluate_p2_capabilities(const CapabilityInput& input);
 
 /**
+ * Convert ERF's per-level substepping presence test into the capability flag
+ * consumed by the shared P2 evaluator.  The argument is intentionally the
+ * host-side enum comparison result so this helper has no dependency on ERF's
+ * solver-choice types.
+ */
+[[nodiscard]] bool acoustic_substepping_enabled_from_substepping_type(
+    bool substepping_type_is_none) noexcept;
+
+/**
  * Conservative host timestep bound for the explicit SBM donor/diffusion
  * contract.  The two nonnegative rates are combined before applying the
  * common 1/2 safety factor; zero transport returns infinity and therefore
