@@ -1,14 +1,17 @@
 # ERF SBM P2 archaeology-driven source trace
 
 This document records the source-level contract used to close out
-`sbm-p2-final-qualification` and `sbm-p2-final-closeout`. The corrective-pass
-implementation is committed on `sbm-p2-final-closeout` at
-`54feca77060b100bd842d3142ce627a14c92ba8e`, starting from
+`sbm-p2-final-qualification` and `sbm-p2-final-closeout`. This final
+corrective-pass implementation is committed on `sbm-p2-final-closeout` at
+`224d822d8c85f589dae97c8a115bfdd9f3ff84b6`, starting from audited HEAD
+`5eb23dd04648688ffdf27a0f507bcc669cb61ad8`. The earlier substantive
+implementation remains `54feca77060b100bd842d3142ce627a14c92ba8e`, based on
 `8aea39e633932909453c504e1763fa291192bec0`. The checked
 `origin/development` revision is `b4eda429ed3c47804666c75c79fae18c94d22c0d`,
 already at the merge base. The AMReX submodule is
-`53fb957f5e136ed8317d584b75edd321c142d1c7`. The design authority is
-`/Users/pres026/Research/ERF_SBM_Public/ERF_SBM_Warm_Aerosol_Design_and_Implementation_Specification_v1.0.md`.
+`53fb957f5e136ed8317d584b75edd321c142d1c7`. The design authority is the
+project-level `ERF_SBM_Warm_Aerosol_Design_and_Implementation_Specification_v1.0.md`
+at the `ERF_SBM_Public` root.
 
 The pinned CPU qualification toolchain is Spack `mpicc`/`mpicxx` and
 `mpiexec` under `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin`.
@@ -264,9 +267,13 @@ The closeout test registration is in `Tests/CTestList.cmake`.
   carriers at one and two ranks and checks stage count, stage intervals,
   separate `actual_rate` and `tau*rate` vectors, and rank-equivalent evidence.
 * `RunSBMP2ActiveMPI.cmake` runs one-FAB, split-FAB, and two-rank split-FAB
-  active-limiter layouts at zero and positive diffusion. Its diagnostics
+  active-limiter layouts at zero and positive diffusion for both
+  `internal_fab_face` and `periodic_seam` locations. The seam fixture puts the
+  limiting donor at the high-domain cell and sets only the low/high stored
+  periodic face copies to the positive test carrier. Its diagnostics
   canonicalize duplicated face-centered interface storage so per-component
-  transfer norms and sums are decomposition-independent.
+  transfer norms and sums are decomposition-independent; zero-diffusion seam
+  transfer is explicitly required to be nonzero.
 * `RunSBMP2AcousticSubsteppingRejection.cmake` covers the explicit rejection.
 * `RunSBMP2OwnershipFault.cmake` covers the three retained compact-state
   ownership mutations.
@@ -287,10 +294,19 @@ f01_density_view=verified
 f01_negative_ratio_mutant=verified
 ```
 
-The active-limiter qualification reports all six layout/diffusion cases as
-verified. The direct unit matrix contains 53 passing `SBMP2.*` tests,
+The active-limiter qualification reports all twelve location/layout/diffusion
+cases as verified. The direct unit matrix contains 53 passing `SBMP2.*` tests,
 including the post-remake attached-property transaction and the actual schema
-file round trip with distinct finite property support maxima.
+file round trip with distinct finite property support maxima. The schema test
+uses an invocation-local filename containing AMReX `NProcs()` and `MyProc()`;
+the exact two-rank stress passed 20 repetitions.
+
+The acoustic rejection registration uses the target generator expression
+`$<TARGET_FILE:erf_sbm_acoustic_substepping_check>`. A Ninja Multi-Config Debug
+build generated configuration-specific `Tests/Debug/...` checker paths and
+passed all four acoustic tests. `ERF_SBM_QUALIFICATION_TEST_HOOKS` is a PUBLIC
+usage requirement for tests-enabled consumers, resolving the inline-header ODR
+split; it remains absent from the tests-disabled production flags and binary.
 
 The final numerical disposition and CI ledger are maintained in
 `P2_QUALIFICATION_REPORT.md`. No P3 work is authorized by this trace.
