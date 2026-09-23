@@ -15,16 +15,28 @@ foreach(_fault IN ITEMS qc_advection qr_diffusion bulk_clip)
     set(_fault_log "${WORKING_DIRECTORY}/${_fault}.log")
     file(REMOVE "${_fault_log}")
     set(_command ${_mpi_command} ${TEST_EXE} ${INPUT}
-        "erf.sbm_test_fault_injection=${_fault}")
+        "erf.sbm_test_fault_injection=${_fault}"
+        amrex.call_addr2line=0)
+    message(STATUS "SBM F05: starting fault=${_fault} expected failure")
     execute_process(
         COMMAND ${_command}
         WORKING_DIRECTORY "${WORKING_DIRECTORY}"
         OUTPUT_FILE "${_fault_log}"
         ERROR_FILE "${_fault_log}"
+        TIMEOUT 60
         RESULT_VARIABLE _result)
-    if(_result EQUAL 0)
+    message(STATUS "SBM F05: fault=${_fault} result=${_result}")
+    if("${_result}" STREQUAL "Process terminated due to timeout")
+        message(FATAL_ERROR
+            "SBM ownership fault ${_fault} timed out after 60 seconds")
+    endif()
+    if("${_result}" STREQUAL "0")
         message(FATAL_ERROR
             "SBM ownership fault ${_fault} unexpectedly completed successfully")
+    endif()
+    if(NOT EXISTS "${_fault_log}")
+        message(FATAL_ERROR
+            "SBM ownership fault ${_fault} produced no log")
     endif()
     file(READ "${_fault_log}" _fault_text)
     string(FIND "${_fault_text}"

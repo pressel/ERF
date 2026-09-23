@@ -124,16 +124,27 @@ run_dynamic_case(1 2 anelastic)
 set(_wrong_dir "${WORKING_DIRECTORY}/wrong_density_1r")
 file(MAKE_DIRECTORY "${_wrong_dir}")
 set(_wrong_log "${_wrong_dir}/simulation.log")
+file(REMOVE "${_wrong_log}")
 set(_wrong_command ${_mpi_command} 1 ${TEST_EXE} ${INPUT}
-    erf.anelastic=0 erf.sbm_test_use_state_eval_density=true)
+    erf.anelastic=0 erf.sbm_test_use_state_eval_density=true
+    amrex.call_addr2line=0)
+message(STATUS "SBM F01: starting wrong-density expected failure")
 execute_process(
     COMMAND ${_wrong_command}
     WORKING_DIRECTORY "${_wrong_dir}"
     OUTPUT_FILE "${_wrong_log}"
     ERROR_FILE "${_wrong_log}"
+    TIMEOUT 60
     RESULT_VARIABLE _wrong_result)
-if(_wrong_result EQUAL 0)
+message(STATUS "SBM F01: wrong-density result=${_wrong_result}")
+if("${_wrong_result}" STREQUAL "Process terminated due to timeout")
+    message(FATAL_ERROR "SBM F01 state-evaluation-density mutant timed out after 60 seconds")
+endif()
+if("${_wrong_result}" STREQUAL "0")
     message(FATAL_ERROR "SBM F01 state-evaluation-density mutant unexpectedly passed")
+endif()
+if(NOT EXISTS "${_wrong_log}")
+    message(FATAL_ERROR "SBM F01 state-evaluation-density mutant produced no log")
 endif()
 file(READ "${_wrong_log}" _wrong_text)
 if(NOT _wrong_text MATCHES "SBM variable-density stage ratio contract failed")
