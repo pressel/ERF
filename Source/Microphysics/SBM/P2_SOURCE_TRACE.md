@@ -20,7 +20,9 @@ SBM qualification is complete; GPU runtime/memory evidence and a full
 repository run remain explicitly `NOT RUN` on this host. Remote CI for the
 implementation/docs revision was observed: ancillary style, spelling, PDF,
 and HTML checks passed, while the substantive platform/backend workflows were
-still in progress at final inspection. No design-baseline edit was performed.
+still in progress when inspected. A subsequent documentation-only follow-up
+also launched CI that remained in progress at final inspection. No
+design-baseline edit was performed.
 
 This trace separates the current-state host estimate from the actual ERF
 carrier and identifies the exact no-acoustic production path. It is a P2

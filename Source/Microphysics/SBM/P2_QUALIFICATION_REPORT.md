@@ -46,7 +46,7 @@ Acoustic matrix:         4/4 passed in single-config and Ninja Multi-Config Debu
 GPU runtime:            NOT RUN
 GPU memory safety:      NOT RUN
 Full repository:        NOT RUN in this pass
-Remote CI:              observed for implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`; Style, codespell, draft-PDF, and DocHTML passed; ERF CI, Linux GCC, macOS, Windows, CUDA, HIP, SYCL, and Linux GCC NetCDF/RRTMGP were still in progress at final inspection
+Remote CI:              source implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: Style, codespell, draft-PDF, and DocHTML passed; substantive workflows were in progress when inspected, with no completed branch-specific failure observed. Documentation-only SHA `da3ee92f1` then launched a fresh CI set, still in progress at final inspection
 ```
 
 ## Claim disposition
@@ -125,7 +125,7 @@ selected configuration directory without a Windows-specific path rule.
 | `cmake --build /private/tmp/ERF_sbm_no_tests --target erf_exec --parallel 8` | Passed; production flags and binary contain no qualification hook or `sbm_test_*` strings |
 | `ctest --test-dir BuildTestsDevelopmentMerge -R '^(IsentropicVortexAdvecting|DensityCurrent|ScalarAdvectionUniformU)$' --output-on-failure` | 3/3 ordinary ERF regressions passed |
 | `git diff --check` | Passed before implementation commit and before docs commit |
-| `gh run list --repo pressel/ERF --branch sbm-p2-final-closeout` | For implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: Style, codespell, draft-PDF, and DocHTML passed; substantive platform/backend workflows remained in progress at final inspection; no completed branch-specific failure was observed |
+| `gh run list --repo pressel/ERF --branch sbm-p2-final-closeout` | Source implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: ancillary checks passed and substantive workflows were in progress when inspected, with no completed branch-specific failure observed; documentation-only SHA `da3ee92f1` launched a fresh set that remained in progress at final inspection |
 
 The final dynamic-RK summary is:
 
@@ -174,12 +174,13 @@ dynamic spectral grids, and P3 physics remain rejected or out of scope.
 
 GPU runtime and memory qualification are `NOT RUN`, not inferred from the CPU
 build. HIP/SYCL compilation and CUDA/HIP/SYCL runtime were not available on
-this host. The branch-specific remote CUDA, HIP, and SYCL workflows were
-observed but had not completed at final inspection; no result is claimed for
-those backends. MYNNEDMF baseline reproduction and the full repository matrix
-are `NOT RUN` in this corrective pass. The known development-side Ubuntu
-particles-off failure and the earlier un-reproduced MYNNEDMF report were not
-modified.
+this host. The branch-specific remote CUDA, HIP, and SYCL workflows for the
+source-bearing revision were observed but had not completed when inspected;
+the documentation-only follow-up also had not completed at final inspection.
+No result is claimed for those backends. MYNNEDMF baseline reproduction and
+the full repository matrix are `NOT RUN` in this corrective pass. The known
+development-side Ubuntu particles-off failure and the earlier un-reproduced
+MYNNEDMF report were not modified.
 
 Pre-existing untracked build/test artifacts were preserved and are not part of
 the commits. The design specification was not modified.
