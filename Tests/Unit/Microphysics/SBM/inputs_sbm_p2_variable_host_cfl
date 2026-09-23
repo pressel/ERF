@@ -9,6 +9,7 @@ erf.sbm_manufactured_initialization = true
 erf.sbm_manufactured_velocity = 0.125
 erf.sbm_manufactured_variable_density = false
 erf.sbm_manufactured_host_cfl_counterexample = true
+erf.sbm_test_manufactured_carrier_override = true
 erf.sbm_transport_method = GroupedFCT_WENOZ3
 erf.sbm_diffusion_coeff = 1.0
 erf.sbm_chunk_size = 1

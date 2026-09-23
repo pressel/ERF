@@ -11,6 +11,10 @@ erf.sbm_transport_method = GroupedFCT_WENOZ3
 erf.sbm_diffusion_coeff = 0.0
 erf.sbm_chunk_size = 1
 erf.sbm_test_dynamic_regrid = true
+# This legacy AMR variable-density fixture intentionally keeps its stationary
+# manufactured carrier; the positive host-path F01 regression is
+# inputs_sbm_p2_dynamic_rk and leaves this qualification hook disabled.
+erf.sbm_test_manufactured_carrier_override = true
 erf.anelastic = 0
 erf.use_gravity = false
 erf.substepping_type = None

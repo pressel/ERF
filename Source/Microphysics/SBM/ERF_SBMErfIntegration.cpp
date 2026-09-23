@@ -117,6 +117,63 @@ std::size_t sbm_cell_bytes(const amrex::MultiFab& state)
     return ::erf_auxiliary::allocated_payload_bytes(state);
 }
 
+struct UniqueFaceTransferDiagnostics {
+    std::vector<amrex::Real> sum;
+    amrex::Real l1{0.0};
+    amrex::Real maximum{0.0};
+};
+
+// A face-centered MultiFab made with convert(cell_ba, direction) contains
+// both copies of an interface face when the cell BoxArray is split.  That is
+// the correct storage for conservative cell updates, but a raw MultiFab
+// norm/sum counts the shared face once per adjacent FAB and therefore changes
+// with max_grid_size.  Diagnostics must describe unique physical faces, so
+// assign each face to the FAB containing its canonical adjacent cell.  For a
+// periodic direction the high endpoint is the same physical face as the low
+// endpoint and is intentionally omitted.
+UniqueFaceTransferDiagnostics unique_face_transfer_diagnostics(
+    const amrex::MultiFab& face,
+    const amrex::Geometry& geometry,
+    const int dir,
+    const int ncomp)
+{
+    UniqueFaceTransferDiagnostics result;
+    result.sum.assign(static_cast<std::size_t>(ncomp), amrex::Real(0.0));
+    amrex::MultiFab unique(face.boxArray(), face.DistributionMap(), ncomp, 0);
+    unique.setVal(amrex::Real(0.0));
+    const amrex::Box domain = geometry.Domain();
+    const bool periodic = geometry.isPeriodic(dir);
+    for (amrex::MFIter mfi(face); mfi.isValid(); ++mfi) {
+        const amrex::Box face_box = mfi.validbox();
+        const amrex::Box owner_box = amrex::enclosedCells(face_box);
+        const auto source = face.const_array(mfi);
+        const auto destination = unique.array(mfi);
+        amrex::ParallelFor(face_box, ncomp,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k, int comp) noexcept {
+                const int coordinate = dir == 0 ? i : (dir == 1 ? j : k);
+                if (periodic && coordinate == domain.bigEnd(dir) + 1) return;
+                const int owner_coordinate = coordinate == domain.bigEnd(dir) + 1 ?
+                    domain.bigEnd(dir) : coordinate;
+                int owner_i = i;
+                int owner_j = j;
+                int owner_k = k;
+                if (dir == 0) owner_i = owner_coordinate;
+                if (dir == 1) owner_j = owner_coordinate;
+                if (dir == 2) owner_k = owner_coordinate;
+                if (owner_box.contains(owner_i, owner_j, owner_k)) {
+                    destination(i,j,k,comp) = source(i,j,k,comp);
+                }
+            });
+    }
+    amrex::Gpu::synchronize();
+    for (int comp = 0; comp < ncomp; ++comp) {
+        result.l1 += unique.norm1(comp);
+        result.maximum = amrex::max(result.maximum, unique.norm0(comp));
+        result.sum[static_cast<std::size_t>(comp)] = unique.sum(comp);
+    }
+    return result;
+}
+
 void write_sbm_diagnostic(const std::string& path,
                           const bool anelastic,
                           const int nbins,
@@ -263,21 +320,25 @@ void ERF::write_sbm_composite_diagnostic(const int nstep, const double time,
             sbm_accepted_bulk_face_transfer[static_cast<std::size_t>(lev)] != nullptr) {
             for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
                 const auto& accepted_face = sbm_auxiliary->face_transfer_ledger(lev).accepted().direction(dir);
+                const auto accepted_face_diagnostics = unique_face_transfer_diagnostics(
+                    accepted_face, geom[lev], dir, ncomp);
+                accepted_face_transfer_l1 += accepted_face_diagnostics.l1;
+                accepted_face_transfer_max = amrex::max(accepted_face_transfer_max,
+                                                        accepted_face_diagnostics.maximum);
                 for (int comp = 0; comp < ncomp; ++comp) {
-                    accepted_face_transfer_l1 += accepted_face.norm1(comp);
-                    accepted_face_transfer_max = amrex::max(accepted_face_transfer_max,
-                                                            accepted_face.norm0(comp));
                     accepted_face_transfer_sum[static_cast<std::size_t>(comp)] +=
-                        accepted_face.sum(comp);
+                        accepted_face_diagnostics.sum[static_cast<std::size_t>(comp)];
                 }
                 const auto& bulk_face = sbm_accepted_bulk_face_transfer[
                     static_cast<std::size_t>(lev)]->direction(dir);
+                const auto bulk_face_diagnostics = unique_face_transfer_diagnostics(
+                    bulk_face, geom[lev], dir, 2);
+                accepted_bulk_transfer_l1 += bulk_face_diagnostics.l1;
+                accepted_bulk_transfer_max = amrex::max(accepted_bulk_transfer_max,
+                                                        bulk_face_diagnostics.maximum);
                 for (int comp = 0; comp < 2; ++comp) {
-                    accepted_bulk_transfer_l1 += bulk_face.norm1(comp);
-                    accepted_bulk_transfer_max = amrex::max(accepted_bulk_transfer_max,
-                                                            bulk_face.norm0(comp));
                     accepted_bulk_transfer_sum[static_cast<std::size_t>(comp)] +=
-                        bulk_face.sum(comp);
+                        bulk_face_diagnostics.sum[static_cast<std::size_t>(comp)];
                 }
                 // The accepted ledger stores flux integrated in time but not
                 // multiplied by face area.  For the qualified static
@@ -833,8 +894,14 @@ void ERF::initialize_sbm_auxiliary(const int lev)
     // not a new thermodynamic or P3 process.
     const bool host_cfl_counterexample =
         solverChoice.sbm_manufactured_host_cfl_counterexample;
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
+    const bool preserve_host_density = solverChoice.sbm_test_preserve_host_density;
+#else
+    const bool preserve_host_density = false;
+#endif
     if (lev == 0 && (solverChoice.sbm_manufactured_variable_density ||
-                     host_cfl_counterexample)) {
+                     host_cfl_counterexample) &&
+        !preserve_host_density) {
         auto& core_old = vars_old[lev][Vars::cons];
         const Real xlo = geom[lev].ProbLo(0);
         const Real xlen = geom[lev].ProbHi(0) - xlo;
@@ -911,7 +978,11 @@ void ERF::initialize_sbm_auxiliary(const int lev)
         const auto aux_arr = aux.array(mfi);
         const auto core_arr = core.array(mfi);
         const bool manufactured = solverChoice.sbm_manufactured_initialization;
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
         const bool active_limiter = solverChoice.sbm_test_active_limiter;
+#else
+        const bool active_limiter = false;
+#endif
         const bool variable_density = solverChoice.sbm_manufactured_variable_density;
         const Real xlo = geom[lev].ProbLo(0);
         const Real xlen = geom[lev].ProbHi(0) - xlo;
@@ -1099,6 +1170,7 @@ void ERF::advance_sbm_stage(const int lev,
     // avg_*mom are ERF's actual dry-air carrier mass flux fields.  The
     // transport helper consumes them directly and never rebuilds rho*u from
     // the velocity MultiFabs.
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
     if (lev == 0 && solverChoice.sbm_test_active_limiter) {
         // The ERF time integrator owns these fields and may have regenerated
         // them since level initialization.  Reapply the coordinate-defined
@@ -1118,8 +1190,13 @@ void ERF::advance_sbm_stage(const int lev,
             });
         }
     }
-    if (solverChoice.sbm_manufactured_variable_density ||
-        solverChoice.sbm_manufactured_host_cfl_counterexample) {
+#endif
+    // This is a qualification-only carrier override for the independent
+    // host-CFL counterexample and legacy stage-demand fixture.  The positive
+    // variable-density RK3 qualification deliberately leaves this block
+    // disabled so avg_*mom remain the fields constructed by ERF's dynamics.
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
+    if (solverChoice.sbm_test_manufactured_carrier_override) {
         // Keep the variable-density qualification carrier synchronized with
         // the manufactured host state at the final production hand-off.  A
         // uniform mass flux is divergence-free on the periodic fixture, so
@@ -1138,6 +1215,7 @@ void ERF::advance_sbm_stage(const int lev,
         avg_ymom[lev].setVal(Real(0.0));
         avg_zmom[lev].setVal(Real(0.0));
     }
+#endif
     Real stage_minimum_limiter = Real(1.0);
     const auto boundary_policy =
         ::erf_sbm::make_erf_transport_boundary_policy(geom[lev], phys_bc_type);
@@ -1158,6 +1236,19 @@ void ERF::advance_sbm_stage(const int lev,
     const MultiFab& predictor_density =
         *sbm_evaluation_density[static_cast<std::size_t>(lev)];
     MultiFab rho_target(state_new[IntVars::cons], make_alias, Rho_comp, 2);
+    MultiFab state_eval_density(state_eval[IntVars::cons], make_alias, Rho_comp, 2);
+
+    const MultiFab* density_for_transport = &predictor_density;
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
+    // Negative qualification mutant: pair the accepted spectrum with ERF's
+    // fast state-evaluation density instead of the predictor density from
+    // the same temporal view.  The variable-density ratio contract below
+    // must reject this semantic mismatch before any unrelated CFL path can
+    // hide it.
+    if (solverChoice.sbm_test_use_state_eval_density) {
+        density_for_transport = &state_eval_density;
+    }
+#endif
 
     // Detect forbidden native qc/qr mutations before the provider projection
     // can overwrite their evidence.  At this point manager.output is the
@@ -1165,6 +1256,7 @@ void ERF::advance_sbm_stage(const int lev,
     // in S_new.  The check is deliberately independent of the projection
     // performed by advance_stage itself.
     if (sbm_ownership->owns(RhoQ2_comp, ::erf_sbm::NativeWritePath::Advection)) {
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
         if (solverChoice.sbm_test_fault_injection == "qc_advection") {
             state_new[IntVars::cons].plus(Real(1.0e-7), RhoQ2_comp, 1, 0);
         } else if (solverChoice.sbm_test_fault_injection == "qr_diffusion") {
@@ -1172,6 +1264,7 @@ void ERF::advance_sbm_stage(const int lev,
         } else if (solverChoice.sbm_test_fault_injection == "bulk_clip") {
             state_new[IntVars::cons].setVal(Real(0.0), RhoQ2_comp, 1, 0);
         }
+#endif
         const Real pre_projection_error = sbm_max_projection_error(
             *sbm_layout, sbm_auxiliary->output(lev), state_new[IntVars::cons]);
         const Real pre_projection_scale = amrex::max(
@@ -1191,7 +1284,7 @@ void ERF::advance_sbm_stage(const int lev,
     }
     ::erf_sbm::ActualStageDemand actual_stage_demand;
     ::erf_sbm::advance_stage(*sbm_auxiliary, *sbm_layout, context,
-                            rho_anchor, predictor_density, rho_target, state_new[IntVars::cons],
+                            rho_anchor, *density_for_transport, rho_target, state_new[IntVars::cons],
                             avg_xmom[lev], avg_ymom[lev], avg_zmom[lev], geom[lev],
                             sbm_auxiliary->face_transfer_ledger(lev).stage(),
                             solverChoice.sbm_transport_method == "GroupedFCT_WENOZ3" ?
@@ -1200,14 +1293,6 @@ void ERF::advance_sbm_stage(const int lev,
                             solverChoice.sbm_diffusion_coeff, solverChoice.sbm_chunk_size,
                             solverChoice.sbm_composite_diagnostic_file.empty() ? nullptr : &stage_minimum_limiter,
                             boundary_policy, &actual_stage_demand);
-    // The output spectrum just accepted by the manager is now paired with the
-    // host dry density at this stage target.  Preserve only that scalar view
-    // for the next callback; do not retain a full conserved-state duplicate.
-    auto& next_predictor_density =
-        *sbm_evaluation_density[static_cast<std::size_t>(lev)];
-    amrex::MultiFab::Copy(next_predictor_density, state_new[IntVars::cons],
-                          Rho_comp, 0, 1, next_predictor_density.nGrowVect());
-    next_predictor_density.FillBoundary(geom[lev].periodicity());
     if (solverChoice.sbm_manufactured_variable_density) {
         const Real stage_ratio_error = sbm_max_manufactured_ratio_error(
             *sbm_layout, sbm_auxiliary->output(lev), state_new[IntVars::cons]);
@@ -1220,6 +1305,40 @@ void ERF::advance_sbm_stage(const int lev,
                     << " error=" << stage_ratio_error
                     << " tolerance=" << stage_ratio_tolerance << '\n';
         }
+
+        const Real predictor_target_difference = sbm_max_change(
+            predictor_density, rho_target, 1);
+        const Real predictor_eval_difference = sbm_max_change(
+            predictor_density, state_eval_density, 1);
+        const Real target_eval_difference = sbm_max_change(
+            rho_target, state_eval_density, 1);
+        const Real predictor_density_min = predictor_density.min(0);
+        const Real predictor_density_max = predictor_density.max(0);
+        const Real target_density_min = rho_target.min(0);
+        const Real target_density_max = rho_target.max(0);
+        const Real eval_density_min = state_eval_density.min(0);
+        const Real eval_density_max = state_eval_density.max(0);
+        const Real actual_carrier_max = amrex::max(
+            avg_xmom[lev].norm0(0),
+            amrex::max(avg_ymom[lev].norm0(0), avg_zmom[lev].norm0(0)));
+        if (ParallelDescriptor::IOProcessor()) {
+            Print() << std::setprecision(17)
+                    << "SBM F01 variable-density views level=" << lev
+                    << " stage=" << stage
+                    << " predictor_target_max=" << predictor_target_difference
+                    << " predictor_eval_max=" << predictor_eval_difference
+                    << " target_eval_max=" << target_eval_difference
+                    << " predictor_density_min=" << predictor_density_min
+                    << " predictor_density_max=" << predictor_density_max
+                    << " target_density_min=" << target_density_min
+                    << " target_density_max=" << target_density_max
+                    << " eval_density_min=" << eval_density_min
+                    << " eval_density_max=" << eval_density_max
+                    << " ratio_residual=" << stage_ratio_error
+                    << " actual_carrier_max=" << actual_carrier_max
+                    << " actual_carrier_demand=" << actual_stage_demand.maximum_rate
+                    << "\n";
+        }
         if (stage_ratio_error > stage_ratio_tolerance) {
             std::ostringstream message;
             message << "SBM variable-density stage ratio contract failed: level=" << lev
@@ -1228,6 +1347,18 @@ void ERF::advance_sbm_stage(const int lev,
             amrex::Error(message.str());
         }
     }
+    // The output spectrum just accepted by the manager is now paired with the
+    // host dry density at this stage target.  Preserve only that scalar view
+    // for the next callback; do not retain a full conserved-state duplicate.
+    // This copy intentionally follows the diagnostics above: otherwise the
+    // input predictor would be overwritten before the qualification compared
+    // it with the current ERF target/evaluation views, making the positive
+    // density-pairing check vacuous and masking the negative mutant.
+    auto& next_predictor_density =
+        *sbm_evaluation_density[static_cast<std::size_t>(lev)];
+    amrex::MultiFab::Copy(next_predictor_density, state_new[IntVars::cons],
+                          Rho_comp, 0, 1, next_predictor_density.nGrowVect());
+    next_predictor_density.FillBoundary(geom[lev].periodicity());
     if (verbose > 1 && ParallelDescriptor::IOProcessor()) {
         const char* temporal_mode = anelastic ? "anelastic_heun" : "compressible_rk3";
         Print() << std::setprecision(17)

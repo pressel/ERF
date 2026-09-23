@@ -1738,6 +1738,31 @@ TEST(SBMP2, RestartSchemaAndProjectionComparisonAreStrict)
     EXPECT_FALSE(erf_sbm::compare_projection(1.0, 1.0 + 1.e-4, 1.0, 8));
 }
 
+TEST(SBMP2, RestartSchemaRoundTripRejectsDistinctFinitePropertySupport)
+{
+    const auto bounded_a = make_layout(4, MomentMode::TwoMoment, true,
+                                       Real(1.0000001));
+    const auto bounded_b = make_layout(4, MomentMode::TwoMoment, true,
+                                       Real(1.0000002));
+    const auto schema_a = erf_sbm::make_checkpoint_schema(
+        bounded_a, erf_sbm::SBM_CONSTRAINT_POLICY_ID,
+        erf_sbm::SBM_TRANSPORT_POLICY_ID, "gamma-k-v2",
+        erf_sbm::SBM_BOUNDARY_POLICY_ID);
+    const auto schema_b = erf_sbm::make_checkpoint_schema(
+        bounded_b, erf_sbm::SBM_CONSTRAINT_POLICY_ID,
+        erf_sbm::SBM_TRANSPORT_POLICY_ID, "gamma-k-v2",
+        erf_sbm::SBM_BOUNDARY_POLICY_ID);
+    const auto path = std::filesystem::temp_directory_path() /
+        "erf_sbm_p2_checkpoint_schema_roundtrip.txt";
+    erf_sbm::write_checkpoint_schema(path.string(), schema_a);
+    const auto roundtrip = erf_sbm::read_checkpoint_schema(path.string());
+    EXPECT_TRUE(erf_sbm::compare_checkpoint_schema(schema_a, roundtrip).empty());
+    const auto mismatch = erf_sbm::compare_checkpoint_schema(schema_b, roundtrip);
+    EXPECT_NE(mismatch.find("property_identity"), std::string::npos);
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 TEST(SBMP2, AuxiliaryManagerOwnsAMRCreateProlongAverageDownRemakeAndDestroy)
 {
     const auto layout = make_layout(2, MomentMode::OneMoment);
@@ -2468,6 +2493,52 @@ TEST(SBMP2, CompleteConstraintValidationCoversAttachedProperties)
     state.setVal(1.0, population.number_offset, 1);
     state.setVal(-1.0, layout.property_offset(0), 1);
     EXPECT_THROW(erf_sbm::validate_admissible_state(manager, layout, 0), std::exception);
+}
+
+TEST(SBMP2, AttachedPropertyTransactionValidationRejectsOrphansAfterRemake)
+{
+    const auto layout = make_layout(2, MomentMode::TwoMoment, true,
+                                    std::numeric_limits<Real>::quiet_NaN());
+    erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
+    const Box domain(IntVect(0, 0, 0), IntVect(1, 0, 0));
+    BoxArray boxes(domain);
+    const DistributionMapping dm(boxes);
+    const amrex::RealBox real_box({AMREX_D_DECL(0.0, 0.0, 0.0)},
+                                  {AMREX_D_DECL(2.0, 1.0, 1.0)});
+    const std::array<int, AMREX_SPACEDIM> periodicity{AMREX_D_DECL(1, 1, 1)};
+    const Geometry geometry(domain, &real_box, amrex::CoordSys::cartesian,
+                            periodicity.data());
+    manager.define_level(0, boxes, dm, 2);
+    auto& state = manager.output(0);
+    state.setVal(0.0);
+    const auto& population = layout.populations().front();
+    state.setVal(1.0, population.mass_offset, 1);
+    state.setVal(1.0, population.number_offset, 1);
+    state.setVal(0.25, layout.property_offset(0), 1);
+    erf_sbm::validate_admissible_state(manager, layout, 0);
+
+    // Recreate the accepted-state transaction with a different BoxArray, then
+    // inject an orphan into the authoritative output.  The universal support
+    // contract must reject it without clipping or repairing it.
+    boxes.maxSize(1);
+    manager.remake_level(0, boxes, DistributionMapping(boxes), 2,
+                         geometry.periodicity());
+    auto& remade = manager.output(0);
+    remade.setVal(0.0);
+    remade.setVal(1.0, population.mass_offset, 1);
+    remade.setVal(1.0, population.number_offset, 1);
+    remade.setVal(0.25, layout.property_offset(0), 1);
+    erf_sbm::validate_admissible_state(manager, layout, 0);
+    remade.setVal(0.0, population.number_offset, 1);
+
+    std::string diagnostic;
+    try {
+        erf_sbm::validate_admissible_state(manager, layout, 0);
+    } catch (const std::exception& error) {
+        diagnostic = error.what();
+    }
+    EXPECT_NE(diagnostic.find("universal attached-property carrier/support contract"),
+              std::string::npos);
 }
 
 TEST(SBMP2, DonorSupportEnvelopeHandlesOneTwoMomentAndZeroCarrierCases)

@@ -182,6 +182,7 @@ ERF::ErrorEst (int levc, TagBoxArray& tags, Real time, int /*ngrow*/)
     // RemakeLevel path exercises changed BoxArray/DistributionMapping and a
     // subsequent production SBM transport step.  It is opt-in, SBM-only,
     // and has no effect on ordinary ERF refinement indicators.
+#ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
     if (solverChoice.moisture_type == MoistureType::SBM &&
         solverChoice.sbm_test_dynamic_regrid && levc == 0 && max_level > 0) {
         const Box domain = geom[levc].Domain();
@@ -213,6 +214,7 @@ ERF::ErrorEst (int levc, TagBoxArray& tags, Real time, int /*ngrow*/)
                        << " time=" << time << " target=" << target << std::endl;
         return;
     }
+#endif
 
     //
     // Make sure the ghost cells of the level we are tagging at are filled

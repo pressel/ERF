@@ -129,6 +129,14 @@ function(build_erf_lib erf_lib_name)
 
   target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_MOISTURE)
 
+  # Qualification mutations and counterexample selectors are compiled only
+  # into test builds.  In particular, a production build with both test
+  # options disabled has no operative ParmParse surface for fault injection.
+  if(ERF_ENABLE_TESTS OR ERF_ENABLE_UNIT_TESTS)
+    target_compile_definitions(${erf_lib_name} PRIVATE
+      ERF_SBM_QUALIFICATION_TEST_HOOKS=1)
+  endif()
+
   # WDM6 literal precision. The Fortran parameters in ERF_module_mp_wdm6.F90
   # are written without kind suffixes, so as compiled today they carry float32
   # rounding. ON reproduces that in the native path; OFF uses true doubles and

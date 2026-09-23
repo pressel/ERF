@@ -74,6 +74,38 @@ function(run_dynamic_case mode nranks output_prefix)
         if("${_rate0}" STREQUAL "${_rate1}" AND "${_rate1}" STREQUAL "${_rate2}")
             message(FATAL_ERROR "SBM dynamic compressible carrier demand did not change across RK stages")
         endif()
+
+        string(REGEX MATCHALL
+            "SBM F01 variable-density views level=[0-9]+ stage=[0-9]+ predictor_target_max=([0-9eE+.-]+) predictor_eval_max=([0-9eE+.-]+) target_eval_max=([0-9eE+.-]+) predictor_density_min=[0-9eE+.-]+ predictor_density_max=[0-9eE+.-]+ target_density_min=[0-9eE+.-]+ target_density_max=[0-9eE+.-]+ eval_density_min=[0-9eE+.-]+ eval_density_max=[0-9eE+.-]+ ratio_residual=([0-9eE+.-]+) actual_carrier_max=([0-9eE+.-]+) actual_carrier_demand=([0-9eE+.-]+)"
+            _view_matches "${_text}")
+        list(LENGTH _view_matches _view_count)
+        if(NOT _view_count EQUAL _expected_stages)
+            message(FATAL_ERROR
+                "SBM dynamic compressible run reported ${_view_count} F01 density-view diagnostics, expected ${_expected_stages}")
+        endif()
+        set(_material_density_view FALSE)
+        set(_nonzero_carrier FALSE)
+        foreach(_view IN LISTS _view_matches)
+            string(REGEX MATCH
+                "predictor_target_max=([0-9eE+.-]+).*actual_carrier_max=([0-9eE+.-]+)"
+                _view_match "${_view}")
+            if(_view_match)
+                if(CMAKE_MATCH_1 GREATER 1.0e-10)
+                    set(_material_density_view TRUE)
+                endif()
+                if(CMAKE_MATCH_2 GREATER 1.0e-10)
+                    set(_nonzero_carrier TRUE)
+                endif()
+            endif()
+        endforeach()
+        if(NOT _material_density_view)
+            message(FATAL_ERROR
+                "SBM dynamic compressible run never produced materially distinct predictor/target density views")
+        endif()
+        if(NOT _nonzero_carrier)
+            message(FATAL_ERROR
+                "SBM dynamic compressible run never handed a nonzero ERF carrier to SBM")
+        endif()
     endif()
 
     set(${output_prefix}_${nranks}_count "${_count}" PARENT_SCOPE)
@@ -85,6 +117,29 @@ run_dynamic_case(0 1 compressible)
 run_dynamic_case(0 2 compressible)
 run_dynamic_case(1 1 anelastic)
 run_dynamic_case(1 2 anelastic)
+
+# Test-only semantic mutant: the callback uses the fast state-evaluation
+# density for the accepted spectrum.  It must fail on the variable-density
+# ratio contract, rather than pass or fail through an unrelated CFL path.
+set(_wrong_dir "${WORKING_DIRECTORY}/wrong_density_1r")
+file(MAKE_DIRECTORY "${_wrong_dir}")
+set(_wrong_log "${_wrong_dir}/simulation.log")
+set(_wrong_command ${_mpi_command} 1 ${TEST_EXE} ${INPUT}
+    erf.anelastic=0 erf.sbm_test_use_state_eval_density=true)
+execute_process(
+    COMMAND ${_wrong_command}
+    WORKING_DIRECTORY "${_wrong_dir}"
+    OUTPUT_FILE "${_wrong_log}"
+    ERROR_FILE "${_wrong_log}"
+    RESULT_VARIABLE _wrong_result)
+if(_wrong_result EQUAL 0)
+    message(FATAL_ERROR "SBM F01 state-evaluation-density mutant unexpectedly passed")
+endif()
+file(READ "${_wrong_log}" _wrong_text)
+if(NOT _wrong_text MATCHES "SBM variable-density stage ratio contract failed")
+    message(FATAL_ERROR
+        "SBM F01 mutant failed without the required variable-density ratio diagnostic")
+endif()
 
 if(NOT "${compressible_1_actual_rates}" STREQUAL "${compressible_2_actual_rates}")
     message(FATAL_ERROR "SBM dynamic compressible actual-rate vectors differ between 1 and 2 ranks")
@@ -112,4 +167,6 @@ file(WRITE "${LOG}"
     "dynamic_anelastic_2rank_count=${anelastic_2_count}\n"
     "dynamic_anelastic_2rank_actual_rates=${anelastic_2_actual_rates}\n"
     "dynamic_anelastic_2rank_tau_rates=${anelastic_2_tau_rates}\n"
-    "dynamic_no_acoustic_real_carrier=verified\n")
+    "dynamic_no_acoustic_real_carrier=verified\n"
+    "dynamic_f01_density_view=verified\n"
+    "dynamic_f01_negative_ratio_mutant=verified\n")
