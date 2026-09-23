@@ -46,7 +46,7 @@ Acoustic matrix:         4/4 passed in single-config and Ninja Multi-Config Debu
 GPU runtime:            NOT RUN
 GPU memory safety:      NOT RUN
 Full repository:        NOT RUN in this pass
-Remote CI:              source implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: Style, codespell, draft-PDF, and DocHTML passed; substantive workflows were in progress when inspected, with no completed branch-specific failure observed. Documentation-only SHA `da3ee92f1` then launched a fresh CI set, still in progress at final inspection
+Remote CI:              source implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: Style, codespell, draft-PDF, and DocHTML passed; substantive workflows were in progress when inspected, with no completed branch-specific failure observed. Subsequent documentation-only follow-ups launched fresh CI sets, still in progress at final inspection
 ```
 
 ## Claim disposition
@@ -125,7 +125,7 @@ selected configuration directory without a Windows-specific path rule.
 | `cmake --build /private/tmp/ERF_sbm_no_tests --target erf_exec --parallel 8` | Passed; production flags and binary contain no qualification hook or `sbm_test_*` strings |
 | `ctest --test-dir BuildTestsDevelopmentMerge -R '^(IsentropicVortexAdvecting|DensityCurrent|ScalarAdvectionUniformU)$' --output-on-failure` | 3/3 ordinary ERF regressions passed |
 | `git diff --check` | Passed before implementation commit and before docs commit |
-| `gh run list --repo pressel/ERF --branch sbm-p2-final-closeout` | Source implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: ancillary checks passed and substantive workflows were in progress when inspected, with no completed branch-specific failure observed; documentation-only SHA `da3ee92f1` launched a fresh set that remained in progress at final inspection |
+| `gh run list --repo pressel/ERF --branch sbm-p2-final-closeout` | Source implementation/docs SHA `5a168c5572b75d73ca9e8445c0ebfbb20383e802`: ancillary checks passed and substantive workflows were in progress when inspected, with no completed branch-specific failure observed; subsequent documentation-only follow-ups launched fresh sets that remained in progress at final inspection |
 
 The final dynamic-RK summary is:
 
