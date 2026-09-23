@@ -1217,6 +1217,10 @@ private:
     std::unique_ptr<::erf_auxiliary::AuxiliaryStateManager> sbm_auxiliary;
     amrex::Vector<std::unique_ptr<::erf_auxiliary::AuxiliaryFaceTransfer>> sbm_accepted_bulk_face_transfer;
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> sbm_initial_bulk_state;
+    // Host-owned density paired with the manager's evaluation/predictor view.
+    // S_data in the MRI callback is a post-fast-update view and is not a
+    // reliable semantic match for that auxiliary spectrum.
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> sbm_evaluation_density;
     int sbm_step_count{0};
     std::unique_ptr<::erf_sbm::OwnershipRegistry> sbm_ownership;
     std::unique_ptr<::erf_sbm::SBMLayout> sbm_layout;

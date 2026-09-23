@@ -2,10 +2,20 @@
 
 This document records the source-level contract used to close out
 `sbm-p2-final-qualification` and `sbm-p2-final-closeout`. The current
-implementation is on `sbm-p2-final-closeout` at
-`c3eed779c36c2d24f95c317c371ad75a01a3549c`, starting from the required
-`d006aef20410703e40bb7c19d6de1804588551a5`. The design authority is
+implementation is an uncommitted working tree on `sbm-p2-final-closeout`,
+starting at HEAD `d42970517c612f69a525987ece232488940381ca`. The checked
+`origin/development` revision is `b4eda429ed3c47804666c75c79fae18c94d22c0d`,
+already at the merge base. The AMReX submodule is
+`53fb957f5e136ed8317d584b75edd321c142d1c7`. The design authority is
 `/Users/pres026/Research/ERF_SBM_Public/ERF_SBM_Warm_Aerosol_Design_and_Implementation_Specification_v1.0.md`.
+
+The pinned CPU qualification toolchain is Spack `mpicc`/`mpicxx` and
+`mpiexec` under `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin`.
+The current evidence is summarized in `P2_QUALIFICATION_REPORT.md`; its
+final disposition is `BLOCKED_BEFORE_PR` because GPU runtime and memory-safety
+qualification were not available locally and the full repository matrix has
+one unrelated MYNNEDMF `SIGILL` failure. No commit, push, or design-baseline
+edit was performed.
 
 This trace separates the current-state host estimate from the actual ERF
 carrier and identifies the exact no-acoustic production path. It is a P2
@@ -250,15 +260,15 @@ The closeout test registration is in `Tests/CTestList.cmake`.
 * `ERF_GTestSBMP0P1.cpp` and `ERF_GTestSBMP2.cpp` contain the direct unit
   and negative controls.
 
-The local dynamic-RK evidence recorded by that script is:
+The final local dynamic-RK evidence recorded by that script is:
 
 ```text
 compressible_rk3 actual_rate (1r, 2r):
-  302.73955166118299;302.93466123274578;302.90599276820632
+  0.14510956332980915;0.1632482587460353;0.18138695416226144
 compressible_rk3 tau_actual_rate (1r, 2r):
-  0.100913183887061;0.15146733061637288;0.30290599276820634
-anelastic_heun actual_rate (1r, 2r): 1;1
-anelastic_heun tau_actual_rate (1r, 2r): 0.0001;0.0001
+  4.8369854443269716e-05;8.1624129373017646e-05;0.00018138695416226145
+anelastic_heun actual_rate (1r, 2r): 1.1608765066384732;1.3059860699682824
+anelastic_heun tau_actual_rate (1r, 2r): 0.00011608765066384732;0.00013059860699682823
 no_acoustic_real_carrier=verified
 ```
 

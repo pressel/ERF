@@ -1208,6 +1208,35 @@ function(add_test_sbm_p2_dynamic_rk TEST_NAME)
         ATTACHED_FILES_ON_FAIL "${_test_dir}/${TEST_NAME}.log;${_test_dir}/compressible_1r;${_test_dir}/compressible_2r;${_test_dir}/anelastic_1r;${_test_dir}/anelastic_2r")
 endfunction(add_test_sbm_p2_dynamic_rk)
 
+# Qualification-only mutations exercise the actual compact qc/qr handoff.
+# Each mutant must terminate before SBM projection can erase the forbidden
+# native write; a successful run is therefore a test failure.
+function(add_test_sbm_p2_ownership_faults TEST_NAME)
+    set(_source_input
+        "${PROJECT_SOURCE_DIR}/Tests/Unit/Microphysics/SBM/inputs_sbm_p2_dynamic_rk")
+    set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
+    file(MAKE_DIRECTORY "${_test_dir}")
+    file(COPY "${_source_input}" DESTINATION "${_test_dir}")
+    resolve_test_exe("" "erf_exec" TEST_EXE)
+    add_test(${TEST_NAME} ${CMAKE_COMMAND}
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}
+        -DTEST_EXE=${TEST_EXE}
+        -DINPUT=${_test_dir}/inputs_sbm_p2_dynamic_rk
+        -DWORKING_DIRECTORY=${_test_dir}
+        -DLOG=${_test_dir}/${TEST_NAME}.log
+        -P ${PROJECT_SOURCE_DIR}/Tests/RunSBMP2OwnershipFault.cmake)
+    set_tests_properties(${TEST_NAME}
+        PROPERTIES
+        TIMEOUT 600
+        PROCESSORS 1
+        WORKING_DIRECTORY "${_test_dir}/"
+        LABELS "regression;sbm;sbm-p2;ownership;negative-control"
+        ATTACHED_FILES_ON_FAIL
+            "${_test_dir}/${TEST_NAME}.log;${_test_dir}/qc_advection.log;${_test_dir}/qr_diffusion.log;${_test_dir}/bulk_clip.log")
+endfunction(add_test_sbm_p2_ownership_faults)
+
 function(add_test_sbm_p2_acoustic_rejection TEST_NAME METHOD MOMENT)
     set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
     file(MAKE_DIRECTORY "${_test_dir}")
@@ -1253,6 +1282,7 @@ if(ERF_ENABLE_TESTS AND ERF_ENABLE_MPI)
     add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_1 1)
     add_test_sbm_p2_variable_host_cfl(SBM_P2_HOST_CFL_VARIABLE_RHO_2 2)
     add_test_sbm_p2_dynamic_rk(SBM_P2_DYNAMIC_REAL_CARRIERS)
+    add_test_sbm_p2_ownership_faults(SBM_P2_OWNERSHIP_FAULTS)
 
     # The checker is a small AMReX PlotFileData consumer and is built only
     # when regression tests are enabled.  All SHOC cases use explicit

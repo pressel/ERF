@@ -736,6 +736,9 @@ struct SolverChoice {
             pp.queryAdd("sbm_composite_diagnostic_file", sbm_composite_diagnostic_file);
             pp.queryAdd("sbm_test_dynamic_regrid", sbm_test_dynamic_regrid);
             pp.queryAdd("sbm_test_active_limiter", sbm_test_active_limiter);
+            // Qualification-only mutation hook.  It is inert unless a test
+            // explicitly selects one of the documented fault names.
+            pp.queryAdd("sbm_test_fault_injection", sbm_test_fault_injection);
             pp.queryAdd("sbm_transport_method", sbm_transport_method);
             if (sbm_transport_method != "DonorCell" && sbm_transport_method != "GroupedFCT_WENOZ3") {
                 amrex::Error("SBM sbm_transport_method must be DonorCell or GroupedFCT_WENOZ3");
@@ -2456,6 +2459,7 @@ struct SolverChoice {
     std::string sbm_composite_diagnostic_file;
     bool sbm_test_dynamic_regrid{false};
     bool sbm_test_active_limiter{false};
+    std::string sbm_test_fault_injection;
     amrex::Vector<amrex::Real> sbm_edges;
     amrex::Vector<amrex::Real> sbm_pivots;
 

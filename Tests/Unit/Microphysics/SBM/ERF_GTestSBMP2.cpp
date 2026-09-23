@@ -190,7 +190,7 @@ ProductionChunkRun run_production_chunk_case(const int nbins, const MomentMode m
     stage_flux.define(boxes, dm, layout.ncomp(), 0);
     const Real dt = Real(0.5) / Real(16.0);
     const auto context = erf_auxiliary::make_compressible_stage(
-        2, 0.0, 0.0, dt, dt, nullptr, nullptr);
+        2, 0.0, dt / 2.0, dt, dt, nullptr, nullptr);
     erf_sbm::advance_stage(manager, layout, context, rho, core,
                            xflux, yflux, zflux, geometry, stage_flux,
                            erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
@@ -1244,7 +1244,7 @@ void sbm_test_ProductionVariableDensityHostCFLBypassFailsClosed()
     erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
     stage_flux.define(boxes, dm, layout.ncomp(), 0);
     const auto unsafe_context = erf_auxiliary::make_compressible_stage(
-        2, 0.0, 0.0, Real(0.25), Real(0.25), nullptr, nullptr);
+        2, 0.0, Real(0.125), Real(0.25), Real(0.25), nullptr, nullptr);
     std::string diagnostic;
     try {
         erf_sbm::advance_stage(manager, layout, unsafe_context, rho, core,
@@ -1267,8 +1267,9 @@ void sbm_test_ProductionVariableDensityHostCFLBypassFailsClosed()
     // host step, but the reported host cap is sufficient when used to rerun
     // the same otherwise-unchanged stage.
     const auto safe_context = erf_auxiliary::make_compressible_stage(
-        2, 0.0, 0.0, Real(0.9) * recommended_dt,
-        Real(0.9) * recommended_dt, nullptr, nullptr);
+        2, 0.0, Real(0.45) * recommended_dt, Real(0.9) * recommended_dt,
+        Real(0.9) * recommended_dt,
+        nullptr, nullptr);
     EXPECT_NO_THROW(erf_sbm::advance_stage(
         manager, layout, safe_context, rho, core, xflux, yflux, zflux,
         geometry, stage_flux, erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
@@ -1349,7 +1350,7 @@ void sbm_test_ProductionCombinedDemandUsesPreStageBaselineForAllStageContracts()
         const auto context = anelastic ?
             erf_auxiliary::make_anelastic_stage(stage, 0.0, stage == 0 ? 0.0 : 1.0,
                                                 1.0, 1.0, nullptr, nullptr) :
-            erf_auxiliary::make_compressible_stage(2, 0.0, 0.0, 1.0, 1.0, nullptr, nullptr);
+            erf_auxiliary::make_compressible_stage(2, 0.0, 0.5, 1.0, 1.0, nullptr, nullptr);
         std::string diagnostic;
         try {
             erf_sbm::advance_stage(manager, layout, context, rho, core,
@@ -1506,7 +1507,9 @@ void sbm_test_ProductionTargetDensityPreservesConstantRatioForBothTemporalContra
         const auto context = anelastic ?
             erf_auxiliary::make_anelastic_stage(stage, 0.0, stage > 0 ? full_step : 0.0,
                                                 full_step, full_step, nullptr, nullptr) :
-            erf_auxiliary::make_compressible_stage(stage, 0.0, stage == 0 ? 0.0 : dt,
+            erf_auxiliary::make_compressible_stage(stage, 0.0,
+                                                   stage == 0 ? 0.0 :
+                                                   (stage == 1 ? full_step / Real(3.0) : full_step / Real(2.0)),
                                                    dt, full_step, nullptr, nullptr);
         erf_sbm::advance_stage(manager, layout, context, rho_anchor, rho_input, rho_target,
                                core, carrier_x, carrier_y, carrier_z, geometry, stage_flux,
@@ -2118,8 +2121,11 @@ void sbm_test_AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary()
         });
     }
     manager.begin_step(1, 0.0);
+    // This is a compressible stage-2 call, so the production transport path
+    // consumes the evaluation/predictor view.  Prepare that matching view;
+    // filling only Old would exercise the pre-F01 temporal pairing instead.
     manager.fill_stage_from_coarse(0, 1, 0.0, coarse_geometry, fine_geometry,
-                                   ref_ratio, erf_auxiliary::AuxiliaryTimeView::Old,
+                                   ref_ratio, erf_auxiliary::AuxiliaryTimeView::Evaluation,
                                    &rho_old, &rho_output, &rho_target);
 
     amrex::MultiFab xflux(amrex::convert(fine_boxes, IntVect(1,0,0)), fine_dm, 1, 0);
@@ -2140,7 +2146,7 @@ void sbm_test_AttachedPropertySupportUsesFineDonorAcrossInternalFABBoundary()
     erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
     stage_flux.define(fine_boxes, fine_dm, layout.ncomp(), 0);
     const auto context = erf_auxiliary::make_compressible_stage(
-        2, 0.0, 0.0, Real(0.01), Real(0.01), nullptr, nullptr);
+        2, 0.0, Real(0.005), Real(0.01), Real(0.01), nullptr, nullptr);
     erf_sbm::advance_stage(manager, layout, context, rho_target, rho_target,
                            rho_target, core, xflux, yflux, zflux, fine_geometry,
                            stage_flux, erf_sbm::TransportMethod::GroupedFCT_WENOZ3,
@@ -2223,8 +2229,11 @@ void sbm_test_DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors()
     rho_old.FillBoundary(coarse_geometry.periodicity());
     rho_output.FillBoundary(coarse_geometry.periodicity());
     rho_target.FillBoundary(fine_geometry.periodicity());
+    // This is a compressible stage-2 call, so the production transport path
+    // consumes the evaluation/predictor view.  Prepare that matching view;
+    // filling only Old would exercise the pre-F01 temporal pairing instead.
     manager.fill_stage_from_coarse(0, 1, 0.0, coarse_geometry, fine_geometry,
-                                   ref_ratio, erf_auxiliary::AuxiliaryTimeView::Old,
+                                   ref_ratio, erf_auxiliary::AuxiliaryTimeView::Evaluation,
                                    &rho_old, &rho_output, &rho_target);
 
     amrex::MultiFab xflux(amrex::convert(fine_boxes, IntVect(1,0,0)), fine_dm, 1, 0);
@@ -2246,7 +2255,7 @@ void sbm_test_DonorCellTwoMomentUsesPreparedCoarseFineEndpointDonors()
     erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
     stage_flux.define(fine_boxes, fine_dm, layout.ncomp(), 0);
     const auto context = erf_auxiliary::make_compressible_stage(
-        2, 0.0, 0.0, Real(0.1), Real(0.1), nullptr, nullptr);
+        2, 0.0, Real(0.05), Real(0.1), Real(0.1), nullptr, nullptr);
     erf_sbm::advance_stage(manager, layout, context, rho_target, rho_target,
                            rho_target, core, xflux, yflux, zflux, fine_geometry,
                            stage_flux, erf_sbm::TransportMethod::DonorCell,
@@ -2433,7 +2442,8 @@ TEST(SBMP2, CoarseFineWENOInterfaceOracleUsesBothUpwindSigns)
 
 TEST(SBMP2, CompleteConstraintValidationCoversAttachedProperties)
 {
-    const auto layout = make_layout(2, MomentMode::TwoMoment, true);
+    const auto layout = make_layout(2, MomentMode::TwoMoment, true,
+                                    std::numeric_limits<Real>::quiet_NaN());
     erf_auxiliary::AuxiliaryStateManager manager(layout.auxiliary_layout());
     const Box domain(IntVect(0, 0, 0), IntVect(0, 0, 0));
     const BoxArray boxes(domain);
@@ -2448,6 +2458,14 @@ TEST(SBMP2, CompleteConstraintValidationCoversAttachedProperties)
         state.setVal(0.25, layout.property_offset(0) + b, 1);
     }
     erf_sbm::validate_admissible_state(manager, layout, 0);
+    // Universal validation must reject an orphan attached amount even when
+    // the descriptor has no finite hard support_max.
+    state.setVal(0.0, population.mass_offset, 1);
+    state.setVal(0.0, population.number_offset, 1);
+    state.setVal(0.25, layout.property_offset(0), 1);
+    EXPECT_THROW(erf_sbm::validate_admissible_state(manager, layout, 0), std::exception);
+    state.setVal(1.0, population.mass_offset, 1);
+    state.setVal(1.0, population.number_offset, 1);
     state.setVal(-1.0, layout.property_offset(0), 1);
     EXPECT_THROW(erf_sbm::validate_admissible_state(manager, layout, 0), std::exception);
 }
@@ -2770,7 +2788,7 @@ void sbm_test_FullGroupedTransportHasSmoothManufacturedConvergence()
         erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
         stage_flux.define(boxes, dm, layout.ncomp(), 0);
         const auto context = erf_auxiliary::make_compressible_stage(
-            2, 0.0, 0.0, dt, dt, nullptr, nullptr);
+            2, 0.0, dt / 2.0, dt, dt, nullptr, nullptr);
         Real minimum_limiter = Real(0.0);
         erf_sbm::advance_stage(manager, layout, context, rho, core,
                                xflux, yflux, zflux, geometry, stage_flux,
@@ -2909,7 +2927,7 @@ void sbm_test_VariableDensityWENOReconstructionHasBoundedConvergence()
         erf_auxiliary::AuxiliaryFaceTransfer stage_flux;
         stage_flux.define(boxes, dm, layout.ncomp(), 0);
         const auto context = erf_auxiliary::make_compressible_stage(
-            2, 0.0, 0.0, Real(0.25) * h, Real(0.25) * h, nullptr, nullptr);
+            2, 0.0, Real(0.125) * h, Real(0.25) * h, Real(0.25) * h, nullptr, nullptr);
         erf_sbm::advance_stage(manager, layout, context, rho, core,
                                xflux, yflux, zflux, geometry, stage_flux,
                                erf_sbm::TransportMethod::GroupedFCT_WENOZ3,

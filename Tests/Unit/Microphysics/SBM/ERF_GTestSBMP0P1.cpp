@@ -7,6 +7,7 @@
 #include <AMReX_RealBox.H>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -66,13 +67,22 @@ erf_sbm::SpectralPopulationSpec make_population (
 }
 
 erf_sbm::SBMLayout make_layout (const int nbins,
-                                const erf_sbm::MomentMode mode = erf_sbm::MomentMode::OneMoment)
+                                const erf_sbm::MomentMode mode = erf_sbm::MomentMode::OneMoment,
+                                const bool with_property = false,
+                                const Real support_max = std::numeric_limits<Real>::quiet_NaN())
 {
     erf_sbm::SBMLayoutSpec spec;
     auto population = make_population(nbins);
     population.moment_mode = mode;
     spec.populations.push_back(std::move(population));
     spec.liquid_projection = {0, nbins / 2};
+    if (with_property) {
+        spec.attached_properties.push_back({"property", "property", "1", 0,
+            erf_sbm::PropertyKind::NumberCarried,
+            erf_sbm::SupportRequirement::None,
+            erf_sbm::PropertyRemapPolicy::CarrierBinConservative,
+            true, false, 0.0, support_max});
+    }
     return erf_sbm::SBMLayout(std::move(spec));
 }
 
@@ -96,6 +106,31 @@ TEST (SBMP0, SpectralGridValidationAndRuntimeSizes)
     auto repeated = make_grid(4);
     repeated.edges[2] = repeated.edges[1];
     EXPECT_FALSE(erf_sbm::SpectralGrid::validate(repeated).valid);
+
+    auto tiny_valid = make_grid(1);
+    const Real tiny_width = Real(4.0) * std::numeric_limits<Real>::epsilon();
+    tiny_valid.edges = {Real(0.0), tiny_width};
+    tiny_valid.pivots = {tiny_width / Real(2.0)};
+    EXPECT_TRUE(erf_sbm::SpectralGrid::validate(tiny_valid).valid);
+
+    auto indistinguishable = make_grid(1);
+    indistinguishable.edges = {Real(1.0), std::nextafter(Real(1.0),
+                                                         std::numeric_limits<Real>::max())};
+    indistinguishable.pivots = {Real(1.0)};
+    EXPECT_FALSE(erf_sbm::SpectralGrid::validate(indistinguishable).valid);
+
+    auto below_conditioning = make_grid(1);
+    below_conditioning.edges = {Real(1.0), Real(1.0) +
+                                Real(500.0) * std::numeric_limits<Real>::epsilon()};
+    below_conditioning.pivots = {Real(1.0)};
+    EXPECT_FALSE(erf_sbm::SpectralGrid::validate(below_conditioning).valid);
+
+    auto above_conditioning = make_grid(1);
+    above_conditioning.edges = {Real(1.0), Real(1.0) +
+                                Real(2000.0) * std::numeric_limits<Real>::epsilon()};
+    above_conditioning.pivots = {Real(1.0) +
+                                 Real(1000.0) * std::numeric_limits<Real>::epsilon()};
+    EXPECT_TRUE(erf_sbm::SpectralGrid::validate(above_conditioning).valid);
 
     auto nonfinite = make_grid(4);
     nonfinite.edges[2] = std::numeric_limits<Real>::quiet_NaN();
@@ -125,6 +160,58 @@ TEST (SBMP0, SpectralGridValidationAndRuntimeSizes)
         EXPECT_NE(one_moment.schema_identity(), two_moment.schema_identity());
         EXPECT_EQ(make_layout(nbins).schema_identity(), one_moment.schema_identity());
     }
+
+    const auto bounded_a = make_layout(4, erf_sbm::MomentMode::OneMoment, true,
+                                       Real(1.0000001));
+    const auto bounded_b = make_layout(4, erf_sbm::MomentMode::OneMoment, true,
+                                       Real(1.0000002));
+    EXPECT_NE(bounded_a.schema_identity(), bounded_b.schema_identity());
+    const auto unbounded_a = make_layout(4, erf_sbm::MomentMode::OneMoment, true,
+                                         std::numeric_limits<Real>::quiet_NaN());
+    const auto unbounded_b = make_layout(4, erf_sbm::MomentMode::OneMoment, true,
+                                         std::numeric_limits<Real>::quiet_NaN());
+    EXPECT_EQ(unbounded_a.schema_identity(), unbounded_b.schema_identity());
+    EXPECT_NE(unbounded_a.schema_identity().find("support_max=unbounded"), std::string::npos);
+}
+
+TEST (SBMP1, StageIntervalsAreTimeOriginInvariantAndFinite)
+{
+    const Real h = Real(0.1);
+    const std::array<double, 4> origins{{0.0, 1000.0, 3600.0, 86400.0}};
+    const auto reference = erf_auxiliary::make_compressible_stage(
+        2, origins[0], origins[0] + h/2.0, origins[0] + h, h, nullptr, nullptr);
+    const auto reference_heun = erf_auxiliary::make_anelastic_stage(
+        1, origins[0], origins[0] + h, origins[0] + h, h, nullptr, nullptr);
+    for (const double origin : origins) {
+        const auto rk0 = erf_auxiliary::make_compressible_stage(
+            0, origin, origin, origin + h/3.0, h, nullptr, nullptr);
+        const auto rk1 = erf_auxiliary::make_compressible_stage(
+            1, origin, origin + h/3.0, origin + h/2.0, h, nullptr, nullptr);
+        const auto rk2 = erf_auxiliary::make_compressible_stage(
+            2, origin, origin + h/2.0, origin + h, h, nullptr, nullptr);
+        EXPECT_DOUBLE_EQ(rk0.rhs_interval(), Real(h/3.0));
+        EXPECT_DOUBLE_EQ(rk1.rhs_interval(), Real(h/2.0));
+        EXPECT_DOUBLE_EQ(rk2.rhs_interval(), h);
+        EXPECT_EQ(rk2.accepted_ledger_weight(), reference.accepted_ledger_weight());
+
+        const auto heun0 = erf_auxiliary::make_anelastic_stage(
+            0, origin, origin, origin + h, h, nullptr, nullptr);
+        const auto heun1 = erf_auxiliary::make_anelastic_stage(
+            1, origin, origin + h, origin + h, h, nullptr, nullptr);
+        EXPECT_DOUBLE_EQ(heun0.rhs_interval(), h);
+        EXPECT_DOUBLE_EQ(heun1.rhs_interval(), h);
+        EXPECT_EQ(heun1.accepted_ledger_weight(), reference_heun.accepted_ledger_weight());
+    }
+
+    EXPECT_THROW((void)erf_auxiliary::make_compressible_stage(
+                     2, 3600.0, 3600.05, 3600.11, h, nullptr, nullptr),
+                 std::invalid_argument);
+    EXPECT_THROW((void)erf_auxiliary::make_compressible_stage(
+                     0, std::numeric_limits<double>::quiet_NaN(), 0.0, h/3.0,
+                     h, nullptr, nullptr), std::invalid_argument);
+    EXPECT_THROW((void)erf_auxiliary::make_anelastic_stage(
+                     0, 0.0, 0.0, 1.0, std::numeric_limits<double>::infinity(),
+                     nullptr, nullptr), std::invalid_argument);
 }
 
 TEST (SBMP0, TwoMomentEndpointAlgebraAndDistinctSemantics)
@@ -321,8 +408,8 @@ TEST (SBMP1, ExactReducedRecurrencesAndNegativeControls)
     const std::vector<Real> predictor{Real(12.0), Real(24.0)};
     const std::vector<Real> rhs{Real(3.0), Real(-4.0)};
     const auto comp0 = erf_auxiliary::make_compressible_stage(0, 0.0, 0.0, 1.0/3.0, 1.0, nullptr, nullptr);
-    const auto comp1 = erf_auxiliary::make_compressible_stage(1, 0.0, 0.0, 0.5, 1.0, nullptr, nullptr);
-    const auto comp2 = erf_auxiliary::make_compressible_stage(2, 0.0, 0.0, 1.0, 1.0, nullptr, nullptr);
+    const auto comp1 = erf_auxiliary::make_compressible_stage(1, 0.0, 1.0/3.0, 0.5, 1.0, nullptr, nullptr);
+    const auto comp2 = erf_auxiliary::make_compressible_stage(2, 0.0, 0.5, 1.0, 1.0, nullptr, nullptr);
     std::vector<Real> output;
     erf_sbm::update_stage(comp0, old, old, rhs, output);
     EXPECT_DOUBLE_EQ(output[0], 11.0);

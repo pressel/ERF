@@ -7,7 +7,7 @@ erf.sbm_moment_mode = 2
 erf.sbm_cloud_rain_split = 2
 erf.sbm_manufactured_initialization = true
 erf.sbm_manufactured_velocity = 0.125
-erf.sbm_manufactured_variable_density = false
+erf.sbm_manufactured_variable_density = true
 erf.sbm_manufactured_host_cfl_counterexample = false
 erf.sbm_transport_method = GroupedFCT_WENOZ3
 erf.sbm_diffusion_coeff = 0.0
@@ -19,6 +19,7 @@ erf.fixed_dt = 1.0e-4
 erf.molec_diff_type = None
 erf.les_type = None
 erf.coupling_type = TwoWay
+erf.fixed_density = 1
 max_step = 1
 
 amr.max_level = 0

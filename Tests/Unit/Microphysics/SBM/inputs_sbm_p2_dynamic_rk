@@ -1,6 +1,6 @@
 # Real no-acoustic RK/Heun carrier qualification using ERF's Taylor-Green
 # dynamics.  No SBM manufactured carrier override is enabled here.
-erf.prob_name = "Advecting Isentropic Vortex"
+erf.prob_name = "SBM P2 dynamic variable-density"
 erf.init_type = Uniform
 erf.moisture_model = SBM
 erf.sbm_nbins = 4
@@ -8,7 +8,7 @@ erf.sbm_moment_mode = 2
 erf.sbm_cloud_rain_split = 2
 erf.sbm_manufactured_initialization = true
 erf.sbm_manufactured_velocity = 0.0
-erf.sbm_manufactured_variable_density = false
+erf.sbm_manufactured_variable_density = true
 erf.sbm_manufactured_host_cfl_counterexample = false
 erf.sbm_transport_method = GroupedFCT_WENOZ3
 erf.sbm_diffusion_coeff = 0.0

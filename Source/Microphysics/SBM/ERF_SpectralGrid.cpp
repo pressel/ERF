@@ -1,4 +1,5 @@
 #include "ERF_SpectralGrid.H"
+#include "ERF_SBMCanonicalIdentity.H"
 
 #include <algorithm>
 #include <cmath>
@@ -16,7 +17,18 @@ GridValidation SpectralGrid::validate(const SpectralGridSpec& spec)
     for (std::size_t i = 0; i < spec.edges.size(); ++i) {
         const auto edge = spec.edges[i];
         if (!std::isfinite(edge) || edge < amrex::Real(0.0)) return {false, "edges must be finite and nonnegative"};
-        if (i > 0 && !(spec.edges[i-1] < edge)) return {false, "edges must be strictly increasing"};
+        if (i > 0) {
+            const auto lower = spec.edges[i-1];
+            if (!(lower < edge)) return {false, "edges must be strictly increasing"};
+            const auto width = edge - lower;
+            const auto scale = std::max(std::abs(lower), std::abs(edge));
+            // This is a relative conditioning rule.  There is deliberately
+            // no absolute floor: [0, small] remains a valid scientific bin.
+            if (scale > amrex::Real(0.0) &&
+                width < amrex::Real(1000.0) * std::numeric_limits<amrex::Real>::epsilon() * scale) {
+                return {false, "spectral bin edge separation is below the relative conditioning threshold"};
+            }
+        }
     }
     if (spec.pivots.size() != spec.edges.size() - 1) return {false, "one positive pivot is required per bin"};
     for (std::size_t i = 0; i < spec.pivots.size(); ++i) {
@@ -36,11 +48,11 @@ SpectralGrid::SpectralGrid(SpectralGridSpec spec) : m_spec(std::move(spec))
 std::string SpectralGrid::identity() const
 {
     std::ostringstream out;
-    out << "spectral-grid-v3|kind=" << static_cast<int>(m_spec.coordinate_kind)
-        << "|coordinate_units=" << m_spec.coordinate_units << "|edges=" << std::setprecision(17);
-    for (const auto x : m_spec.edges) out << x << ',';
+    out << "spectral-grid-v4|kind=" << static_cast<int>(m_spec.coordinate_kind)
+        << "|coordinate_units=" << m_spec.coordinate_units << "|edges=";
+    for (const auto x : m_spec.edges) out << canonical_real(x) << ',';
     out << "|pivots=";
-    for (const auto x : m_spec.pivots) out << x << ',';
+    for (const auto x : m_spec.pivots) out << canonical_real(x) << ',';
     return out.str();
 }
 

@@ -3,6 +3,7 @@
 
 #include <AMReX_MultiFab.H>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -48,17 +49,25 @@ inline StageContext make_compressible_stage(const int stage,
                                             const amrex::MultiFab* baseline,
                                             const amrex::MultiFab* evaluation)
 {
-    if (stage < 0 || stage > 2 || full_step < 0.0) {
+    if (stage < 0 || stage > 2 || !std::isfinite(full_step) || full_step < 0.0 ||
+        !std::isfinite(old_time) || !std::isfinite(evaluation_time) ||
+        !std::isfinite(output_time)) {
         throw std::invalid_argument("invalid compressible auxiliary stage");
     }
-    const double expected[] = {full_step / 3.0, full_step / 2.0, full_step};
-    const double interval = output_time - old_time;
-    const double scale = 1.0 + std::abs(expected[stage]);
-    if (std::abs(interval - expected[stage]) > 64.0 * std::numeric_limits<double>::epsilon() * scale) {
+    const double expected_interval[] = {full_step / 3.0, full_step / 2.0, full_step};
+    const double expected_evaluation_offset[] = {0.0, full_step / 3.0, full_step / 2.0};
+    const double expected_output_offset[] = {full_step / 3.0, full_step / 2.0, full_step};
+    const auto timestamp_matches = [](const double actual, const double expected) {
+        const double scale = 1.0 + std::max(std::abs(actual), std::abs(expected));
+        return std::abs(actual - expected) <=
+            128.0 * std::numeric_limits<double>::epsilon() * scale;
+    };
+    if (!timestamp_matches(evaluation_time, old_time + expected_evaluation_offset[stage]) ||
+        !timestamp_matches(output_time, old_time + expected_output_offset[stage])) {
         throw std::invalid_argument("compressible auxiliary stage interval does not match ERF RK3");
     }
     return {IntegrationMethod::CompressibleRK3, stage, old_time, evaluation_time,
-            output_time, interval, full_step, stage == 2, baseline, evaluation};
+            output_time, expected_interval[stage], full_step, stage == 2, baseline, evaluation};
 }
 
 inline StageContext make_anelastic_stage(const int stage,
@@ -69,16 +78,23 @@ inline StageContext make_anelastic_stage(const int stage,
                                          const amrex::MultiFab* baseline,
                                          const amrex::MultiFab* evaluation)
 {
-    if (stage < 0 || stage > 1 || full_step < 0.0) {
+    if (stage < 0 || stage > 1 || !std::isfinite(full_step) || full_step < 0.0 ||
+        !std::isfinite(old_time) || !std::isfinite(evaluation_time) ||
+        !std::isfinite(output_time)) {
         throw std::invalid_argument("invalid anelastic auxiliary stage");
     }
-    const double interval = output_time - old_time;
-    const double scale = 1.0 + std::abs(full_step);
-    if (std::abs(interval - full_step) > 64.0 * std::numeric_limits<double>::epsilon() * scale) {
+    const double expected_evaluation_offset[] = {0.0, full_step};
+    const auto timestamp_matches = [](const double actual, const double expected) {
+        const double scale = 1.0 + std::max(std::abs(actual), std::abs(expected));
+        return std::abs(actual - expected) <=
+            128.0 * std::numeric_limits<double>::epsilon() * scale;
+    };
+    if (!timestamp_matches(evaluation_time, old_time + expected_evaluation_offset[stage]) ||
+        !timestamp_matches(output_time, old_time + full_step)) {
         throw std::invalid_argument("anelastic auxiliary stage interval does not match ERF Heun");
     }
     return {IntegrationMethod::AnelasticHeun, stage, old_time, evaluation_time,
-            output_time, interval, full_step, stage == 1, baseline, evaluation};
+            output_time, full_step, full_step, stage == 1, baseline, evaluation};
 }
 
 } // namespace erf_auxiliary

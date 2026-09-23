@@ -706,32 +706,32 @@ void advance_stage_grouped_chunked(
         for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
             const auto& face = transfer.direction(dir);
             const Real scale = dt * anelastic_weight * geometry.InvCellSize(dir);
-            for (amrex::MFIter mfi(face); mfi.isValid(); ++mfi) {
+            // Gather from the two canonical faces incident on each valid
+            // cell.  The former face-FAB deposit used atomics followed by
+            // SumBoundary; that can count a shared physical face twice when
+            // the face has multiple valid storage representations.  A
+            // cell-centered gather has one writer per cell/constraint and no
+            // overlap repair step, so its ownership is decomposition stable.
+            for (amrex::MFIter mfi(budget); mfi.isValid(); ++mfi) {
                 const amrex::Box box = mfi.validbox();
                 const auto flux = face.const_array(mfi);
                 const auto cell_budget = budget.array(mfi);
                 for (int descriptor_index = 0; descriptor_index < nconstraints; ++descriptor_index) {
                     const auto descriptor = descriptor_data[descriptor_index];
                     ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                        const int li = dir == 0 ? i-1 : i;
-                        const int lj = dir == 1 ? j-1 : j;
-                        const int lk = dir == 2 ? k-1 : k;
-                        const Real form = descriptor_face_form(descriptor, flux, i, j, k);
-                        const Real left_demand = scale * form;
-                        const Real right_demand = -scale * form;
-                        if (left_demand > Real(0.0)) {
-                            amrex::Gpu::Atomic::Add(&cell_budget(li,lj,lk,descriptor_index), left_demand);
-                        }
-                        if (right_demand > Real(0.0)) {
-                            amrex::Gpu::Atomic::Add(&cell_budget(i,j,k,descriptor_index), right_demand);
-                        }
+                        const int hi_i = i + (dir == 0 ? 1 : 0);
+                        const int hi_j = j + (dir == 1 ? 1 : 0);
+                        const int hi_k = k + (dir == 2 ? 1 : 0);
+                        const Real low_form = descriptor_face_form(descriptor, flux, i, j, k);
+                        const Real high_form = descriptor_face_form(descriptor, flux, hi_i, hi_j, hi_k);
+                        cell_budget(i,j,k,descriptor_index) +=
+                            amrex::max(Real(0.0), -scale * low_form) +
+                            amrex::max(Real(0.0), scale * high_form);
                     });
                 }
             }
         }
         amrex::Gpu::synchronize();
-        budget.SumBoundary(geometry.periodicity(), true);
-        budget.FillBoundary(geometry.periodicity());
     };
 
     // Rebuild each chunk's local low-order candidates, validate the combined
@@ -1153,9 +1153,14 @@ void advance_stage_grouped_chunked(
         constraint_budget.setVal(Real(0.0));
         for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
             const auto& low_face = low_adv.direction(dir);
-            auto& high_face = high.direction(dir);
+            const auto& high_face = high.direction(dir);
             const Real scale = dt * anelastic_weight * geometry.InvCellSize(dir);
-            for (amrex::MFIter mfi(high_face); mfi.isValid(); ++mfi) {
+            // Gather the antidiffusive demand from the two canonical faces
+            // incident on each valid cell.  This is the same unique physical
+            // face ownership rule used by the low-order demand pass; the
+            // former face-FAB atomic deposit plus SumBoundary could count a
+            // shared or periodic face more than once.
+            for (amrex::MFIter mfi(constraint_budget); mfi.isValid(); ++mfi) {
                 const amrex::Box box = mfi.validbox();
                 const auto low_arr = low_face.const_array(mfi);
                 const auto high_arr = high_face.const_array(mfi);
@@ -1163,25 +1168,21 @@ void advance_stage_grouped_chunked(
                 for (int descriptor_index = 0; descriptor_index < nconstraints; ++descriptor_index) {
                     const auto descriptor = local_descriptor_data[descriptor_index];
                     ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                        const int li = dir == 0 ? i-1 : i;
-                        const int lj = dir == 1 ? j-1 : j;
-                        const int lk = dir == 2 ? k-1 : k;
-                        const Real form = descriptor_face_form(descriptor, high_arr, i, j, k) -
+                        const int hi_i = i + (dir == 0 ? 1 : 0);
+                        const int hi_j = j + (dir == 1 ? 1 : 0);
+                        const int hi_k = k + (dir == 2 ? 1 : 0);
+                        const Real low_form = descriptor_face_form(descriptor, high_arr, i, j, k) -
                             descriptor_face_form(descriptor, low_arr, i, j, k);
-                        const Real left_demand = scale * form;
-                        const Real right_demand = -scale * form;
-                        if (left_demand > Real(0.0)) {
-                            amrex::Gpu::Atomic::Add(&budget(li,lj,lk,descriptor_index), left_demand);
-                        }
-                        if (right_demand > Real(0.0)) {
-                            amrex::Gpu::Atomic::Add(&budget(i,j,k,descriptor_index), right_demand);
-                        }
+                        const Real high_form = descriptor_face_form(descriptor, high_arr, hi_i, hi_j, hi_k) -
+                            descriptor_face_form(descriptor, low_arr, hi_i, hi_j, hi_k);
+                        budget(i,j,k,descriptor_index) +=
+                            amrex::max(Real(0.0), -scale * low_form) +
+                            amrex::max(Real(0.0), scale * high_form);
                     });
                 }
             }
         }
         amrex::Gpu::synchronize();
-        constraint_budget.SumBoundary(geometry.periodicity(), true);
         constraint_budget.FillBoundary(geometry.periodicity());
         if (nsupport > 0) {
             support_budget = std::make_unique<amrex::MultiFab>(
@@ -1192,7 +1193,11 @@ void advance_stage_grouped_chunked(
                 const auto& low_face = low_adv.direction(dir);
                 const auto& high_face = high.direction(dir);
                 const Real scale = dt * anelastic_weight * geometry.InvCellSize(dir);
-                for (amrex::MFIter mfi(high_face); mfi.isValid(); ++mfi) {
+                // Attached-property support demand follows the same gather:
+                // the low face is the cell's right face and the high face is
+                // its left face.  Each cell therefore writes each support
+                // budget once, independent of FAB decomposition.
+                for (amrex::MFIter mfi(*support_budget); mfi.isValid(); ++mfi) {
                     const amrex::Box box = mfi.validbox();
                     const auto low_arr = low_face.const_array(mfi);
                     const auto high_arr = high_face.const_array(mfi);
@@ -1201,49 +1206,42 @@ void advance_stage_grouped_chunked(
                     for (int s = 0; s < nsupport; ++s) {
                         const auto descriptor = support_data[s];
                         ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                            const int li = dir == 0 ? i-1 : i;
-                            const int lj = dir == 1 ? j-1 : j;
-                            const int lk = dir == 2 ? k-1 : k;
-                            const Real delta_property =
+                            const int hi_i = i + (dir == 0 ? 1 : 0);
+                            const int hi_j = j + (dir == 1 ? 1 : 0);
+                            const int hi_k = k + (dir == 2 ? 1 : 0);
+                            const Real low_delta_property =
                                 high_arr(i,j,k,descriptor.property_component) -
                                 low_arr(i,j,k,descriptor.property_component);
-                            const Real delta_carrier =
+                            const Real low_delta_carrier =
                                 high_arr(i,j,k,descriptor.carrier_component) -
                                 low_arr(i,j,k,descriptor.carrier_component);
-                            const Real left_lower_form = delta_property -
-                                bounds(li,lj,lk,2*s) * delta_carrier;
-                            const Real right_lower_form = -delta_property +
-                                bounds(i,j,k,2*s) * delta_carrier;
-                            const Real left_upper_form = bounds(li,lj,lk,2*s+1) *
-                                delta_carrier - delta_property;
-                            const Real right_upper_form = -bounds(i,j,k,2*s+1) *
-                                delta_carrier + delta_property;
-                            const Real left_lower_demand = scale * left_lower_form;
-                            const Real right_lower_demand = scale * right_lower_form;
-                            const Real left_upper_demand = scale * left_upper_form;
-                            const Real right_upper_demand = scale * right_upper_form;
-                            if (left_lower_demand > Real(0.0)) {
-                                amrex::Gpu::Atomic::Add(
-                                    &budget(li,lj,lk,2*s), left_lower_demand);
-                            }
-                            if (right_lower_demand > Real(0.0)) {
-                                amrex::Gpu::Atomic::Add(
-                                    &budget(i,j,k,2*s), right_lower_demand);
-                            }
-                            if (left_upper_demand > Real(0.0)) {
-                                amrex::Gpu::Atomic::Add(
-                                    &budget(li,lj,lk,2*s+1), left_upper_demand);
-                            }
-                            if (right_upper_demand > Real(0.0)) {
-                                amrex::Gpu::Atomic::Add(
-                                    &budget(i,j,k,2*s+1), right_upper_demand);
-                            }
+                            const Real high_delta_property =
+                                high_arr(hi_i,hi_j,hi_k,descriptor.property_component) -
+                                low_arr(hi_i,hi_j,hi_k,descriptor.property_component);
+                            const Real high_delta_carrier =
+                                high_arr(hi_i,hi_j,hi_k,descriptor.carrier_component) -
+                                low_arr(hi_i,hi_j,hi_k,descriptor.carrier_component);
+                            const Real lower = bounds(i,j,k,2*s);
+                            const Real upper = bounds(i,j,k,2*s+1);
+                            const Real right_lower_form = -low_delta_property +
+                                lower * low_delta_carrier;
+                            const Real left_lower_form = high_delta_property -
+                                lower * high_delta_carrier;
+                            const Real right_upper_form = -upper * low_delta_carrier +
+                                low_delta_property;
+                            const Real left_upper_form = upper * high_delta_carrier -
+                                high_delta_property;
+                            budget(i,j,k,2*s) +=
+                                amrex::max(Real(0.0), scale * right_lower_form) +
+                                amrex::max(Real(0.0), scale * left_lower_form);
+                            budget(i,j,k,2*s+1) +=
+                                amrex::max(Real(0.0), scale * right_upper_form) +
+                                amrex::max(Real(0.0), scale * left_upper_form);
                         });
                     }
                 }
             }
             amrex::Gpu::synchronize();
-            support_budget->SumBoundary(geometry.periodicity(), true);
             support_budget->FillBoundary(geometry.periodicity());
         }
         const auto* global_descriptor_data = global_chunk_descriptors.data();
@@ -1940,7 +1938,25 @@ void validate_nonnegative_state(const amrex::MultiFab& state, const int ncomp,
     amrex::ParallelDescriptor::ReduceRealMin(minimum);
     amrex::ParallelDescriptor::ReduceRealMax(maximum_absolute);
     if (has_nonfinite != 0) {
-        throw std::runtime_error(std::string(context) + " contains NaN or infinite values");
+        int first_bad_component = -1;
+        for (int comp = 0; comp < ncomp; ++comp) {
+            const auto component_local = amrex::ParReduce(
+                amrex::TypeList<amrex::ReduceOpLogicalOr>{},
+                amrex::TypeList<int>{}, state, amrex::IntVect(0), 1,
+                [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int) {
+                    const amrex::Real value = arrays[box_no](i,j,k,comp);
+                    return (amrex::isnan(value) || amrex::isinf(value)) ? 1 : 0;
+                });
+            int component_bad = component_local;
+            amrex::ParallelDescriptor::ReduceIntMax(component_bad);
+            if (first_bad_component < 0 && component_bad != 0) {
+                first_bad_component = comp;
+            }
+        }
+        std::ostringstream message;
+        message << context << " contains NaN or infinite values"
+                << ": first_bad_component=" << first_bad_component;
+        throw std::runtime_error(message.str());
     }
 
     // Scale only with the global maximum magnitude.  There is deliberately
@@ -1954,6 +1970,51 @@ void validate_nonnegative_state(const amrex::MultiFab& state, const int ncomp,
                 << ", global_max_abs=" << maximum_absolute
                 << ", tolerance=" << tolerance;
         throw std::runtime_error(message.str());
+    }
+}
+
+void validate_universal_property_support(const amrex::MultiFab& state,
+                                        const SBMLayout& layout,
+                                        const char* context)
+{
+    const auto descriptors = make_attached_property_support_descriptors(layout);
+    if (descriptors.empty()) return;
+    amrex::Gpu::ManagedVector<AttachedPropertySupportDescriptor> device_descriptors;
+    for (const auto& descriptor : descriptors) device_descriptors.push_back(descriptor);
+    const auto* descriptor_data = device_descriptors.data();
+    const auto arrays = state.const_arrays();
+    const int nsupport = static_cast<int>(descriptors.size());
+    const auto local = amrex::ParReduce(
+        amrex::TypeList<amrex::ReduceOpLogicalOr>{},
+        amrex::TypeList<int>{}, state, amrex::IntVect(0), 1,
+        [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int) {
+            for (int s = 0; s < nsupport; ++s) {
+                const auto descriptor = descriptor_data[s];
+                const Real property = arrays[box_no](i,j,k,descriptor.property_component);
+                const Real carrier = arrays[box_no](i,j,k,descriptor.carrier_component);
+                const Real lower = descriptor.has_hard_min ? descriptor.hard_min : Real(0.0);
+                const Real upper = descriptor.hard_max;
+                const Real scale = amrex::Math::abs(property) +
+                    amrex::Math::abs(carrier) + amrex::Math::abs(lower * carrier) +
+                    (descriptor.has_hard_max ? amrex::Math::abs(upper * carrier) : Real(0.0));
+                const Real tolerance = Real(128.0) *
+                    std::numeric_limits<Real>::epsilon() * scale;
+                if (amrex::isnan(property) || amrex::isinf(property) ||
+                    amrex::isnan(carrier) || amrex::isinf(carrier) ||
+                    carrier < Real(0.0) || property < -tolerance ||
+                    (carrier == Real(0.0) && amrex::Math::abs(property) > tolerance) ||
+                    (descriptor.has_hard_min && property < lower * carrier - tolerance) ||
+                    (descriptor.has_hard_max && property > upper * carrier + tolerance)) {
+                    return 1;
+                }
+            }
+            return 0;
+        });
+    int invalid = local;
+    amrex::ParallelDescriptor::ReduceIntMax(invalid);
+    if (invalid != 0) {
+        throw std::domain_error(std::string(context) +
+                                " violates the universal attached-property carrier/support contract");
     }
 }
 
@@ -1984,6 +2045,12 @@ void validate_admissible_state(::erf_auxiliary::AuxiliaryStateManager& manager,
     if (!manager.has_level(level)) throw std::invalid_argument("SBM admissibility check references an undefined level");
     const auto& source = manager.output(level);
     validate_nonnegative_state(source, layout.ncomp(), "SBM post-reflux physical state");
+    // This is the state-local part of the support contract.  Donor-derived
+    // envelopes are transport-local and are checked while their donors exist;
+    // the zero-carrier/orphan rule and configured hard bounds remain valid at
+    // every accepted-state boundary, including restart and regrid.
+    validate_universal_property_support(source, layout,
+                                        "SBM post-reflux physical state");
 
     const auto groups = make_constraint_groups(layout);
     const auto descriptors = make_constraint_descriptors(layout);
@@ -2113,9 +2180,15 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
         context.stage_index == 0;
     const auto& old = manager.old(level);
     const auto& predictor = manager.evaluation(level);
+    const bool uses_predictor_view = context.stage_index > 0;
     const bool heun_corrector =
-        context.method == ::erf_auxiliary::IntegrationMethod::AnelasticHeun && context.stage_index > 0;
-    const auto& evaluation = heun_corrector ? predictor : old;
+        context.method == ::erf_auxiliary::IntegrationMethod::AnelasticHeun && uses_predictor_view;
+    // The auxiliary predictor is the stage-local spectral state for every
+    // nonzero stage, for both compressible RK3 and anelastic Heun.  Its
+    // density must travel with that same view: pairing RK stage 1/2 spectra
+    // with the step-anchor density silently changes q = rho_q/rho at the
+    // production handoff and breaks variable-density stage consistency.
+    const auto& evaluation = uses_predictor_view ? predictor : old;
     auto& output = manager.output(level);
     // Make the two density views explicit, aligned with the auxiliary boxes,
     // and periodicity-complete before any donor or WENO stencil is evaluated.
@@ -2168,7 +2241,7 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     validate_outflow_carrier(carrier_x, geometry, 0, boundary_kinds[0], boundary_kinds[1]);
     validate_outflow_carrier(carrier_y, geometry, 1, boundary_kinds[2], boundary_kinds[3]);
     validate_outflow_carrier(carrier_z, geometry, 2, boundary_kinds[4], boundary_kinds[5]);
-    const auto& transport_density = heun_corrector ? rho_input_prepared : rho_anchor_prepared;
+    const auto& transport_density = uses_predictor_view ? rho_input_prepared : rho_anchor_prepared;
     const amrex::Real dt = static_cast<amrex::Real>(context.stage_interval);
     const amrex::Real dxi = static_cast<amrex::Real>(geometry.InvCellSize(0));
     const amrex::Real dyi = static_cast<amrex::Real>(geometry.InvCellSize(1));

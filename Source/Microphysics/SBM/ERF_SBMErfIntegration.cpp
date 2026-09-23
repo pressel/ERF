@@ -736,6 +736,9 @@ void ERF::synchronize_sbm_level_companions(const int lev,
     if (static_cast<int>(sbm_initial_bulk_state.size()) <= lev) {
         sbm_initial_bulk_state.resize(static_cast<std::size_t>(lev + 1));
     }
+    if (static_cast<int>(sbm_evaluation_density.size()) <= lev) {
+        sbm_evaluation_density.resize(static_cast<std::size_t>(lev + 1));
+    }
 
     auto& accepted = sbm_accepted_bulk_face_transfer[static_cast<std::size_t>(lev)];
     if (!accepted || !accepted->compatible_with(ba, dm, 2)) {
@@ -756,6 +759,20 @@ void ERF::synchronize_sbm_level_companions(const int lev,
                                       amrex::IntVect(0), amrex::Periodicity::NonPeriodic());
         }
         initial = std::move(replacement);
+    }
+
+    auto& evaluation_density = sbm_evaluation_density[static_cast<std::size_t>(lev)];
+    const bool density_compatible = evaluation_density &&
+        evaluation_density->boxArray() == ba && evaluation_density->DistributionMap() == dm &&
+        evaluation_density->nComp() == 1 && evaluation_density->nGrow() >= 2;
+    if (!density_compatible) {
+        auto replacement = std::make_unique<amrex::MultiFab>(ba, dm, 1, 2);
+        replacement->setVal(Real(0.0));
+        if (preserve_overlap && evaluation_density) {
+            replacement->ParallelCopy(*evaluation_density, 0, 0, 1, amrex::IntVect(0),
+                                      amrex::IntVect(0), amrex::Periodicity::NonPeriodic());
+        }
+        evaluation_density = std::move(replacement);
     }
 }
 
@@ -832,10 +849,16 @@ void ERF::initialize_sbm_auxiliary(const int lev)
                     ((i % 2 == 0) ? Real(0.37) : Real(1.20)) :
                     Real(1.0) + Real(0.15) *
                     std::sin(Real(6.2831853071795864769) * (x - xlo) / xlen);
+                // Keep the manufactured variable-density field pressure
+                // equilibrated.  RhoTheta is rho*theta, so setting it to
+                // rho*300 would introduce a large pressure gradient and
+                // make the host evolve density for a reason unrelated to
+                // the SBM stage-density contract.
+                const Real rhotheta = Real(300.0);
                 state(i,j,k,Rho_comp) = rho;
                 old_state(i,j,k,Rho_comp) = rho;
-                state(i,j,k,RhoTheta_comp) = rho * Real(300.0);
-                old_state(i,j,k,RhoTheta_comp) = rho * Real(300.0);
+                state(i,j,k,RhoTheta_comp) = rhotheta;
+                old_state(i,j,k,RhoTheta_comp) = rhotheta;
             });
         }
         core.FillBoundary(geom[lev].periodicity());
@@ -983,6 +1006,14 @@ void ERF::begin_sbm_step(const int lev, const amrex::MultiFab& core_old, const d
                               RhoQ2_comp, 0, 1, 0);
         amrex::MultiFab::Copy(*sbm_initial_bulk_state[static_cast<std::size_t>(lev)], core_old,
                               RhoQ3_comp, 1, 1, 0);
+        auto& evaluation_density = *sbm_evaluation_density[static_cast<std::size_t>(lev)];
+        // Preserve the host-prepared coarse/fine stencil, not only the valid
+        // cells.  The evaluation spectrum is consumed by later WENO stages;
+        // leaving its second ghost layer at the companion's initialization
+        // value (zero) creates a false zero-density donor at fine interfaces.
+        amrex::MultiFab::Copy(evaluation_density, core_old, Rho_comp, 0, 1,
+                              evaluation_density.nGrowVect());
+        evaluation_density.FillBoundary(geom[lev].periodicity());
         if (lev == 0) ++sbm_step_count;
     }
 }
@@ -1094,19 +1125,73 @@ void ERF::advance_sbm_stage(const int lev,
         // uniform mass flux is divergence-free on the periodic fixture, so
         // the host target density remains the same variable field while the
         // provider exercises its density-weighted transfer.
-        avg_xmom[lev].setVal(solverChoice.sbm_manufactured_velocity);
+        // This qualification carrier is intentionally independent of host
+        // velocity: keeping the manufactured variable-density field
+        // stationary isolates the stage-density pairing while the actual
+        // avg_*mom handoff remains nonzero and changes by stage.
+        const Real base_carrier = solverChoice.sbm_manufactured_variable_density &&
+            solverChoice.sbm_manufactured_velocity == Real(0.0) ? Real(0.125) :
+            solverChoice.sbm_manufactured_velocity;
+        const Real stage_carrier = solverChoice.sbm_manufactured_variable_density ?
+            base_carrier * (Real(1.0) + Real(0.125) * Real(stage)) : base_carrier;
+        avg_xmom[lev].setVal(stage_carrier);
         avg_ymom[lev].setVal(Real(0.0));
         avg_zmom[lev].setVal(Real(0.0));
     }
     Real stage_minimum_limiter = Real(1.0);
     const auto boundary_policy =
         ::erf_sbm::make_erf_transport_boundary_policy(geom[lev], phys_bc_type);
-    MultiFab rho_anchor(state_old[IntVars::cons], make_alias, Rho_comp, 1);
-    MultiFab rho_input(state_eval[IntVars::cons], make_alias, Rho_comp, 1);
-    MultiFab rho_target(state_new[IntVars::cons], make_alias, Rho_comp, 1);
+    // Grouped WENO and the coarse/fine donor preparation require the same
+    // two-cell stencil depth as the provider state.  Capping these aliases at
+    // one ghost cell leaves the second fine-level interface layer at the
+    // prepared-view sentinel (zero), which turns the density-normalized donor
+    // ratio into NaN at a coarse/fine boundary.
+    MultiFab rho_anchor(state_old[IntVars::cons], make_alias, Rho_comp, 2);
+    // The auxiliary predictor is the output accepted by the preceding SBM
+    // stage.  Its matching dry density is captured from that same host stage
+    // (rho_target below), whereas state_eval is S_sum after ERF's fast update.
+    // Reusing state_eval here silently pairs two different temporal views.
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        static_cast<Long>(lev) < sbm_evaluation_density.size() &&
+        sbm_evaluation_density[static_cast<std::size_t>(lev)] != nullptr,
+        "SBM predictor density snapshot is not initialized");
+    const MultiFab& predictor_density =
+        *sbm_evaluation_density[static_cast<std::size_t>(lev)];
+    MultiFab rho_target(state_new[IntVars::cons], make_alias, Rho_comp, 2);
+
+    // Detect forbidden native qc/qr mutations before the provider projection
+    // can overwrite their evidence.  At this point manager.output is the
+    // accepted provider state that owns the compact fields currently present
+    // in S_new.  The check is deliberately independent of the projection
+    // performed by advance_stage itself.
+    if (sbm_ownership->owns(RhoQ2_comp, ::erf_sbm::NativeWritePath::Advection)) {
+        if (solverChoice.sbm_test_fault_injection == "qc_advection") {
+            state_new[IntVars::cons].plus(Real(1.0e-7), RhoQ2_comp, 1, 0);
+        } else if (solverChoice.sbm_test_fault_injection == "qr_diffusion") {
+            state_new[IntVars::cons].plus(Real(1.0e-7), RhoQ3_comp, 1, 0);
+        } else if (solverChoice.sbm_test_fault_injection == "bulk_clip") {
+            state_new[IntVars::cons].setVal(Real(0.0), RhoQ2_comp, 1, 0);
+        }
+        const Real pre_projection_error = sbm_max_projection_error(
+            *sbm_layout, sbm_auxiliary->output(lev), state_new[IntVars::cons]);
+        const Real pre_projection_scale = amrex::max(
+            sbm_auxiliary->output(lev).norm0(0),
+            amrex::max(state_new[IntVars::cons].norm0(RhoQ2_comp),
+                       state_new[IntVars::cons].norm0(RhoQ3_comp)));
+        const Real pre_projection_tolerance = Real(4096.0) *
+            std::numeric_limits<Real>::epsilon() * pre_projection_scale;
+        if (pre_projection_error > pre_projection_tolerance) {
+            std::ostringstream message;
+            message << "SBM native qc/qr ownership invariant failed before projection:"
+                    << " level=" << lev << " stage=" << stage
+                    << " error=" << pre_projection_error
+                    << " tolerance=" << pre_projection_tolerance;
+            amrex::Error(message.str());
+        }
+    }
     ::erf_sbm::ActualStageDemand actual_stage_demand;
     ::erf_sbm::advance_stage(*sbm_auxiliary, *sbm_layout, context,
-                            rho_anchor, rho_input, rho_target, state_new[IntVars::cons],
+                            rho_anchor, predictor_density, rho_target, state_new[IntVars::cons],
                             avg_xmom[lev], avg_ymom[lev], avg_zmom[lev], geom[lev],
                             sbm_auxiliary->face_transfer_ledger(lev).stage(),
                             solverChoice.sbm_transport_method == "GroupedFCT_WENOZ3" ?
@@ -1115,6 +1200,34 @@ void ERF::advance_sbm_stage(const int lev,
                             solverChoice.sbm_diffusion_coeff, solverChoice.sbm_chunk_size,
                             solverChoice.sbm_composite_diagnostic_file.empty() ? nullptr : &stage_minimum_limiter,
                             boundary_policy, &actual_stage_demand);
+    // The output spectrum just accepted by the manager is now paired with the
+    // host dry density at this stage target.  Preserve only that scalar view
+    // for the next callback; do not retain a full conserved-state duplicate.
+    auto& next_predictor_density =
+        *sbm_evaluation_density[static_cast<std::size_t>(lev)];
+    amrex::MultiFab::Copy(next_predictor_density, state_new[IntVars::cons],
+                          Rho_comp, 0, 1, next_predictor_density.nGrowVect());
+    next_predictor_density.FillBoundary(geom[lev].periodicity());
+    if (solverChoice.sbm_manufactured_variable_density) {
+        const Real stage_ratio_error = sbm_max_manufactured_ratio_error(
+            *sbm_layout, sbm_auxiliary->output(lev), state_new[IntVars::cons]);
+        const Real stage_ratio_tolerance = Real(4096.0) *
+            std::numeric_limits<Real>::epsilon() * Real(1.0e-6);
+        if (ParallelDescriptor::IOProcessor()) {
+            Print() << std::setprecision(17)
+                    << "SBM variable-density stage ratio level=" << lev
+                    << " stage=" << stage
+                    << " error=" << stage_ratio_error
+                    << " tolerance=" << stage_ratio_tolerance << '\n';
+        }
+        if (stage_ratio_error > stage_ratio_tolerance) {
+            std::ostringstream message;
+            message << "SBM variable-density stage ratio contract failed: level=" << lev
+                    << " stage=" << stage << " error=" << stage_ratio_error
+                    << " tolerance=" << stage_ratio_tolerance;
+            amrex::Error(message.str());
+        }
+    }
     if (verbose > 1 && ParallelDescriptor::IOProcessor()) {
         const char* temporal_mode = anelastic ? "anelastic_heun" : "compressible_rk3";
         Print() << std::setprecision(17)

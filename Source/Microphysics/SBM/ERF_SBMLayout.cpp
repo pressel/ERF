@@ -1,4 +1,5 @@
 #include "ERF_SBMLayout.H"
+#include "ERF_SBMCanonicalIdentity.H"
 
 #include <algorithm>
 #include <cmath>
@@ -119,7 +120,7 @@ SBMLayout::SBMLayout(SBMLayoutSpec spec)
     }
 
     std::ostringstream schema;
-    schema << "sbm-layout-v2|ncomp=" << m_ncomp << '|';
+    schema << "sbm-layout-v3|ncomp=" << m_ncomp << '|';
     for (const auto& p : m_populations) {
         schema << "population=" << p.population_id << ':' << p.semantic_id
                << ":phase=" << static_cast<int>(p.phase) << ':' << p.grid.identity()
@@ -133,8 +134,11 @@ SBMLayout::SBMLayout(SBMLayoutSpec spec)
         schema << "property=" << p.name << ':' << p.semantic_id << ':' << p.units
                << ':' << p.carrier_population << ':' << static_cast<int>(p.kind)
                << ":remap=" << static_cast<int>(p.remap_policy)
-               << ":support_min=" << p.support_min
-               << ":support_max=" << p.support_max
+               << ":support=" << static_cast<int>(p.support)
+               << ":transported=" << (p.transported ? 1 : 0)
+               << ":may_overlap_mass=" << (p.may_overlap_mass ? 1 : 0)
+               << ":support_min=" << canonical_real(p.support_min)
+               << ":support_max=" << canonical_real(p.support_max, true)
                << ":offset=" << m_property_offsets[i] << '|';
     }
     m_schema_identity = schema.str();
