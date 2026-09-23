@@ -2181,8 +2181,6 @@ void advance_stage(::erf_auxiliary::AuxiliaryStateManager& manager,
     const auto& old = manager.old(level);
     const auto& predictor = manager.evaluation(level);
     const bool uses_predictor_view = context.stage_index > 0;
-    const bool heun_corrector =
-        context.method == ::erf_auxiliary::IntegrationMethod::AnelasticHeun && uses_predictor_view;
     // The auxiliary predictor is the stage-local spectral state for every
     // nonzero stage, for both compressible RK3 and anelastic Heun.  Its
     // density must travel with that same view: pairing RK stage 1/2 spectra

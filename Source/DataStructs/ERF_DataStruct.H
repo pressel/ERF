@@ -737,6 +737,7 @@ struct SolverChoice {
 #ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
             pp.queryAdd("sbm_test_dynamic_regrid", sbm_test_dynamic_regrid);
             pp.queryAdd("sbm_test_active_limiter", sbm_test_active_limiter);
+            pp.queryAdd("sbm_test_active_limiter_periodic_seam", sbm_test_active_limiter_periodic_seam);
             pp.queryAdd("sbm_test_manufactured_carrier_override", sbm_test_manufactured_carrier_override);
             pp.queryAdd("sbm_test_preserve_host_density", sbm_test_preserve_host_density);
             pp.queryAdd("sbm_test_use_state_eval_density", sbm_test_use_state_eval_density);
@@ -2464,6 +2465,7 @@ struct SolverChoice {
     std::string sbm_composite_diagnostic_file;
     bool sbm_test_dynamic_regrid{false};
     bool sbm_test_active_limiter{false};
+    bool sbm_test_active_limiter_periodic_seam{false};
     bool sbm_test_manufactured_carrier_override{false};
     bool sbm_test_preserve_host_density{false};
     bool sbm_test_use_state_eval_density{false};

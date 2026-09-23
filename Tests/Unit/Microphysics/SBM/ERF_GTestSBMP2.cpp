@@ -1753,7 +1753,9 @@ TEST(SBMP2, RestartSchemaRoundTripRejectsDistinctFinitePropertySupport)
         erf_sbm::SBM_TRANSPORT_POLICY_ID, "gamma-k-v2",
         erf_sbm::SBM_BOUNDARY_POLICY_ID);
     const auto path = std::filesystem::temp_directory_path() /
-        "erf_sbm_p2_checkpoint_schema_roundtrip.txt";
+        ("erf_sbm_p2_checkpoint_schema_roundtrip_np" +
+         std::to_string(amrex::ParallelDescriptor::NProcs()) + "_rank" +
+         std::to_string(amrex::ParallelDescriptor::MyProc()) + ".txt");
     erf_sbm::write_checkpoint_schema(path.string(), schema_a);
     const auto roundtrip = erf_sbm::read_checkpoint_schema(path.string());
     EXPECT_TRUE(erf_sbm::compare_checkpoint_schema(schema_a, roundtrip).empty());

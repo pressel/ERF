@@ -1240,8 +1240,8 @@ endfunction(add_test_sbm_p2_ownership_faults)
 function(add_test_sbm_p2_acoustic_rejection TEST_NAME METHOD MOMENT)
     set(_test_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME}")
     file(MAKE_DIRECTORY "${_test_dir}")
-    add_test(${TEST_NAME} ${CMAKE_COMMAND}
-        -DCHECKER=${SBM_ACOUSTIC_SUBSTEPPING_CHECKER}
+    add_test(NAME ${TEST_NAME} COMMAND ${CMAKE_COMMAND}
+        "-DCHECKER=$<TARGET_FILE:erf_sbm_acoustic_substepping_check>"
         -DWORKING_DIRECTORY=${_test_dir}
         -DMETHOD=${METHOD}
         -DMOMENT=${MOMENT}

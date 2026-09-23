@@ -133,7 +133,7 @@ function(build_erf_lib erf_lib_name)
   # into test builds.  In particular, a production build with both test
   # options disabled has no operative ParmParse surface for fault injection.
   if(ERF_ENABLE_TESTS OR ERF_ENABLE_UNIT_TESTS)
-    target_compile_definitions(${erf_lib_name} PRIVATE
+    target_compile_definitions(${erf_lib_name} PUBLIC
       ERF_SBM_QUALIFICATION_TEST_HOOKS=1)
   endif()
 

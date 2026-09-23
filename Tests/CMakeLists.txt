@@ -128,9 +128,6 @@ if(ERF_ENABLE_TESTS)
     ${PROJECT_SOURCE_DIR}/Source/AuxiliaryState
     ${PROJECT_SOURCE_DIR}/Source/Microphysics/SBM)
   target_compile_features(erf_sbm_acoustic_substepping_check PRIVATE cxx_std_17)
-  set(SBM_ACOUSTIC_SUBSTEPPING_CHECKER
-      "${CMAKE_CURRENT_BINARY_DIR}/erf_sbm_acoustic_substepping_check${CMAKE_EXECUTABLE_SUFFIX}")
-
   if(ERF_ENABLE_CUDA)
     foreach(_erf_test_tool IN ITEMS
         erf_shoc_plotfile_check

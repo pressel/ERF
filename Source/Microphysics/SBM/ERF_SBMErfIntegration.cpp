@@ -980,13 +980,17 @@ void ERF::initialize_sbm_auxiliary(const int lev)
         const bool manufactured = solverChoice.sbm_manufactured_initialization;
 #ifdef ERF_SBM_QUALIFICATION_TEST_HOOKS
         const bool active_limiter = solverChoice.sbm_test_active_limiter;
+        const bool active_limiter_periodic_seam =
+            solverChoice.sbm_test_active_limiter_periodic_seam;
 #else
         const bool active_limiter = false;
+        const bool active_limiter_periodic_seam = false;
 #endif
         const bool variable_density = solverChoice.sbm_manufactured_variable_density;
         const Real xlo = geom[lev].ProbLo(0);
         const Real xlen = geom[lev].ProbHi(0) - xlo;
         const Real dx = geom[lev].CellSize(0);
+        const int domain_xhi = geom[lev].Domain().bigEnd(0);
         const int number_offset = population.number_offset;
         for (int b = 0; b < nbins; ++b) {
                 const Real lower = number_offset >= 0 ?
@@ -1002,7 +1006,8 @@ void ERF::initialize_sbm_auxiliary(const int lev)
                 // left face, so the high-order outflow correction is genuinely
                 // constrained instead of being hidden by a large inflow.
                 const bool active_cell = active_limiter &&
-                    (i % 16 == 7);
+                    (active_limiter_periodic_seam ?
+                        i == domain_xhi : i % 16 == 7);
                 const Real variation = (variable_density ||
                     host_cfl_counterexample) ? Real(1.0) :
                     active_limiter ?
@@ -1180,13 +1185,16 @@ void ERF::advance_sbm_stage(const int lev,
         const ERF_BC xhi_bc = phys_bc_type[Orientation(0, Orientation::high)];
         const bool xhi_outflow = xhi_bc == ERF_BC::outflow ||
             xhi_bc == ERF_BC::ho_outflow || xhi_bc == ERF_BC::open;
+        const bool periodic_seam = solverChoice.sbm_test_active_limiter_periodic_seam;
         for (MFIter mfi(avg_xmom[lev]); mfi.isValid(); ++mfi) {
             const Box box = mfi.validbox();
             const auto flux = avg_xmom[lev].array(mfi);
             const Real velocity = solverChoice.sbm_manufactured_velocity;
             ParallelFor(box, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                flux(i,j,k) = (i >= 8 && (i < face_hi || (xhi_outflow && i == face_hi))) ?
-                    velocity : Real(0.0);
+                flux(i,j,k) = periodic_seam ?
+                    ((i == 0 || i == face_hi) ? velocity : Real(0.0)) :
+                    ((i >= 8 && (i < face_hi || (xhi_outflow && i == face_hi))) ?
+                        velocity : Real(0.0));
             });
         }
     }
