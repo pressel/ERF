@@ -1,9 +1,10 @@
 # ERF SBM P2 archaeology-driven source trace
 
 This document records the source-level contract used to close out
-`sbm-p2-final-qualification` and `sbm-p2-final-closeout`. The current
-implementation is an uncommitted working tree on `sbm-p2-final-closeout`,
-starting at HEAD `d42970517c612f69a525987ece232488940381ca`. The checked
+`sbm-p2-final-qualification` and `sbm-p2-final-closeout`. The corrective-pass
+implementation is committed on `sbm-p2-final-closeout` at
+`54feca77060b100bd842d3142ce627a14c92ba8e`, starting from
+`8aea39e633932909453c504e1763fa291192bec0`. The checked
 `origin/development` revision is `b4eda429ed3c47804666c75c79fae18c94d22c0d`,
 already at the merge base. The AMReX submodule is
 `53fb957f5e136ed8317d584b75edd321c142d1c7`. The design authority is
@@ -11,10 +12,9 @@ already at the merge base. The AMReX submodule is
 
 The pinned CPU qualification toolchain is Spack `mpicc`/`mpicxx` and
 `mpiexec` under `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin`.
-The current evidence is summarized in `P2_QUALIFICATION_REPORT.md`; its
-final disposition is `BLOCKED_BEFORE_PR` because GPU runtime and memory-safety
-qualification were not available locally and the full repository matrix has
-one unrelated MYNNEDMF `SIGILL` failure. No commit, push, or design-baseline
+The current evidence is summarized in `P2_QUALIFICATION_REPORT.md`. Local CPU
+SBM qualification is complete; GPU runtime/memory evidence and a full
+repository run remain explicitly `NOT RUN` on this host. No design-baseline
 edit was performed.
 
 This trace separates the current-state host estimate from the actual ERF
@@ -221,6 +221,13 @@ intermediate carrier is bounded by the current-state host estimate. The
 qualification envelope closes this gap operationally by rejecting acoustic
 substepping and unsupported configurations.
 
+The corrective F01 positive fixture uses ERF's `Advecting Isentropic Vortex`
+problem with its native nonuniform density and no per-stage SBM carrier
+overwrite. The provider receives the predictor density captured from the same
+ERF temporal view as the accepted predictor spectrum. A test-build-only
+state-evaluation-density selector is used as the negative control and must
+fail the variable-density ratio contract.
+
 ## 7. Capability gates and rejected configurations
 
 `ERF_SBMContracts.cpp` rejects active ERF acoustic substepping with the stable
@@ -256,7 +263,13 @@ The closeout test registration is in `Tests/CTestList.cmake`.
 * `RunSBMP2DynamicRK.cmake` runs real compressible RK3 and anelastic Heun
   carriers at one and two ranks and checks stage count, stage intervals,
   separate `actual_rate` and `tau*rate` vectors, and rank-equivalent evidence.
+* `RunSBMP2ActiveMPI.cmake` runs one-FAB, split-FAB, and two-rank split-FAB
+  active-limiter layouts at zero and positive diffusion. Its diagnostics
+  canonicalize duplicated face-centered interface storage so per-component
+  transfer norms and sums are decomposition-independent.
 * `RunSBMP2AcousticSubsteppingRejection.cmake` covers the explicit rejection.
+* `RunSBMP2OwnershipFault.cmake` covers the three retained compact-state
+  ownership mutations.
 * `ERF_GTestSBMP0P1.cpp` and `ERF_GTestSBMP2.cpp` contain the direct unit
   and negative controls.
 
@@ -264,13 +277,20 @@ The final local dynamic-RK evidence recorded by that script is:
 
 ```text
 compressible_rk3 actual_rate (1r, 2r):
-  0.14510956332980915;0.1632482587460353;0.18138695416226144
+  63.56478522503771;63.152441507123655;62.871602268658961
 compressible_rk3 tau_actual_rate (1r, 2r):
-  4.8369854443269716e-05;8.1624129373017646e-05;0.00018138695416226145
+  0.16666666666666669;0.2483782541054208;0.49454742941453605
 anelastic_heun actual_rate (1r, 2r): 1.1608765066384732;1.3059860699682824
 anelastic_heun tau_actual_rate (1r, 2r): 0.00011608765066384732;0.00013059860699682823
 no_acoustic_real_carrier=verified
+f01_density_view=verified
+f01_negative_ratio_mutant=verified
 ```
+
+The active-limiter qualification reports all six layout/diffusion cases as
+verified. The direct unit matrix contains 53 passing `SBMP2.*` tests,
+including the post-remake attached-property transaction and the actual schema
+file round trip with distinct finite property support maxima.
 
 The final numerical disposition and CI ledger are maintained in
 `P2_QUALIFICATION_REPORT.md`. No P3 work is authorized by this trace.
