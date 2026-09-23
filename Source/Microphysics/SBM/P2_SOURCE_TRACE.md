@@ -17,8 +17,10 @@ The pinned CPU qualification toolchain is Spack `mpicc`/`mpicxx` and
 `mpiexec` under `/Users/pres026/Spack/var/spack/environments/erf-fresh/.spack-env/view/bin`.
 The current evidence is summarized in `P2_QUALIFICATION_REPORT.md`. Local CPU
 SBM qualification is complete; GPU runtime/memory evidence and a full
-repository run remain explicitly `NOT RUN` on this host. No design-baseline
-edit was performed.
+repository run remain explicitly `NOT RUN` on this host. Remote CI for the
+implementation/docs revision was observed: ancillary style, spelling, PDF,
+and HTML checks passed, while the substantive platform/backend workflows were
+still in progress at final inspection. No design-baseline edit was performed.
 
 This trace separates the current-state host estimate from the actual ERF
 carrier and identifies the exact no-acoustic production path. It is a P2
