@@ -1158,6 +1158,11 @@ ERF::ReadCheckpointFile ()
             }
             auto& spectrum = sbm_state_manager->state(lev);
             VisMF::Read(spectrum, spectrum_file);
+            std::string state_diagnostic;
+            if (!erf_sbm::authoritative_state_admissible(
+                    spectrum, sbm_state_manager->layout(), lev, &state_diagnostic)) {
+                Abort(state_diagnostic);
+            }
             const int qc = solverChoice.moisture_indices.qc;
             const int qr = solverChoice.moisture_indices.qr;
             const erf_sbm::SBMBulkProjection projection(sbm_state_manager->layout());

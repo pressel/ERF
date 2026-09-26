@@ -16,6 +16,11 @@ namespace erf_sbm {
 [[nodiscard]] bool restart_schema_matches(const SBMLayout& layout,
                                           const std::string& persisted);
 
+/** Validate every valid-cell value against the layout's runtime constraints. */
+[[nodiscard]] bool authoritative_state_admissible(
+    const amrex::MultiFab& spectrum, const SBMLayout& layout, int level,
+    std::string* diagnostic = nullptr);
+
 /** Compare the projected spectrum to checkpointed qc/qr without mutating core. */
 [[nodiscard]] bool restart_projection_matches(const amrex::MultiFab& spectrum,
                                                const amrex::MultiFab& persisted_core,

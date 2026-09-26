@@ -269,6 +269,12 @@ add_test(NAME erf_unit_tests_shuffle_repeat
 if(TARGET erf_exec AND ERF_DIM STREQUAL "3" AND
    ERF_PRECISION STREQUAL "DOUBLE" AND NOT AMReX_HDF5)
   add_dependencies(${erf_exe_name} erf_exec)
+  add_executable(erf_sbm_checkpoint_corruptor
+    ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/SBM/ERF_SBMCorrupter.cpp
+    ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestRuntimeStubs.cpp)
+  build_erf_exe(erf_sbm_checkpoint_corruptor NO_ERF_MAIN)
+
   add_test(NAME SBM_ZeroTransport_ERF_Smoke
     COMMAND ${CMAKE_COMMAND}
       -DERF_EXECUTABLE=$<TARGET_FILE:erf_exec>
@@ -326,6 +332,19 @@ if(TARGET erf_exec AND ERF_DIM STREQUAL "3" AND
     "-DOVERRIDE=erf.buildings_type=ImmersedForcing")
   add_sbm_expected_failure_test(SBM_Nonconstant_Mesh inputs_stretched
     "SBM zero-transport fixture requires mesh_type=ConstantDz")
+
+  add_test(NAME SBM_Inadmissible_2M_Restart
+    COMMAND ${CMAKE_COMMAND}
+      -DERF_EXECUTABLE=$<TARGET_FILE:erf_exec>
+      -DTEST_HELPER=$<TARGET_FILE:erf_sbm_checkpoint_corruptor>
+      -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/inputs_zero_transport_2m
+      -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+      "-DEXPECTED_DIAGNOSTIC=SBM authoritative restart state is inadmissible.*level=0.*population=0.*bin=0.*constraint=endpoint_low"
+      -P ${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/RunAuthoritativeRestartFailure.cmake)
+  set_tests_properties(SBM_Inadmissible_2M_Restart PROPERTIES
+    LABELS "integration;sbm;negative"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
 endif()
 set_tests_properties(erf_unit_tests_shuffle_repeat
   PROPERTIES

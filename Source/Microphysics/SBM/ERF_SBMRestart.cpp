@@ -1,11 +1,19 @@
 #include "ERF_SBMRestart.H"
 
+#include "ERF_SBMConstraintGroups.H"
+#include <AMReX_Arena.H>
+#include <AMReX_BoxIterator.H>
+#include <AMReX_FArrayBox.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFabUtil.H>
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <memory>
+#include <sstream>
 #include <stdexcept>
 
 namespace erf_sbm {
@@ -23,6 +31,103 @@ std::string restart_schema(const SBMLayout& layout)
 bool restart_schema_matches(const SBMLayout& layout, const std::string& persisted)
 {
     return restart_schema(layout) == persisted;
+}
+
+bool authoritative_state_admissible(const amrex::MultiFab& spectrum,
+                                    const SBMLayout& layout,
+                                    const int level,
+                                    std::string* diagnostic)
+{
+    auto reject = [diagnostic](std::string message) {
+        if (diagnostic) *diagnostic = std::move(message);
+        return false;
+    };
+    if (diagnostic) diagnostic->clear();
+    if (level < 0) return reject("SBM authoritative restart state has an invalid level");
+    if (spectrum.nComp() != layout.ncomp()) {
+        return reject("SBM authoritative restart state component count does not match its layout");
+    }
+
+    const auto groups = make_constraint_groups(layout);
+    std::vector<amrex::Real> state(static_cast<std::size_t>(layout.ncomp()));
+    const int precision = std::numeric_limits<amrex::Real>::max_digits10;
+
+    for (amrex::MFIter mfi(spectrum); mfi.isValid(); ++mfi) {
+        const amrex::FArrayBox& source_fab = spectrum[mfi];
+        const amrex::FArrayBox* host_source = &source_fab;
+        std::unique_ptr<amrex::FArrayBox> host_fab;
+#ifdef AMREX_USE_GPU
+        if (source_fab.arena()->isManaged() || source_fab.arena()->isDevice()) {
+            host_fab = std::make_unique<amrex::FArrayBox>(
+                source_fab.box(), source_fab.nComp(), amrex::The_Pinned_Arena());
+            amrex::Gpu::dtoh_memcpy_async(
+                host_fab->dataPtr(), source_fab.dataPtr(),
+                static_cast<std::size_t>(source_fab.size()) * sizeof(amrex::Real));
+            amrex::Gpu::streamSynchronize();
+            host_source = host_fab.get();
+        }
+#endif
+        const auto values = host_source->const_array();
+        for (amrex::BoxIterator iterator(mfi.validbox()); iterator.ok(); ++iterator) {
+            const amrex::IntVect cell = iterator();
+            for (int component = 0; component < layout.ncomp(); ++component) {
+                const amrex::Real value = values(cell, component);
+                if (!std::isfinite(value)) {
+                    std::ostringstream message;
+                    message << "SBM authoritative restart state is inadmissible"
+                            << ": level=" << level << ", cell=(";
+                    for (int direction = 0; direction < AMREX_SPACEDIM; ++direction) {
+                        if (direction != 0) message << ',';
+                        message << cell[direction];
+                    }
+                    message << "), component=" << component
+                            << ", constraint=finite, value="
+                            << std::setprecision(precision) << value;
+                    const auto group = std::find_if(groups.begin(), groups.end(),
+                        [component](const ConstraintGroup& candidate) {
+                            return candidate.contains(component);
+                        });
+                    if (group != groups.end()) {
+                        message << ", population=" << group->population_id
+                                << " (" << group->semantic_id << ")"
+                                << ", bin=" << group->bin;
+                    }
+                    return reject(message.str());
+                }
+                state[static_cast<std::size_t>(component)] = value;
+            }
+
+            for (const auto& group : groups) {
+                amrex::Real margin = amrex::Real(0.0);
+                std::string failed_constraint;
+                if (group.admissible(state, &margin, &failed_constraint)) continue;
+
+                std::ostringstream message;
+                message << "SBM authoritative restart state is inadmissible"
+                        << ": level=" << level << ", cell=(";
+                for (int direction = 0; direction < AMREX_SPACEDIM; ++direction) {
+                    if (direction != 0) message << ',';
+                    message << cell[direction];
+                }
+                message << "), population=" << group.population_id
+                        << " (" << group.semantic_id << ")"
+                        << ", bin=" << group.bin
+                        << ", constraint=" << failed_constraint
+                        << ", margin=" << std::setprecision(precision) << margin
+                        << ", components={";
+                for (std::size_t member = 0; member < group.members.size(); ++member) {
+                    if (member != 0) message << ',';
+                    const int component = group.members[member];
+                    message << component << ':'
+                            << std::setprecision(precision)
+                            << state[static_cast<std::size_t>(component)];
+                }
+                message << '}';
+                return reject(message.str());
+            }
+        }
+    }
+    return true;
 }
 
 bool restart_projection_matches(const amrex::MultiFab& spectrum,
