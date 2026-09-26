@@ -7,6 +7,14 @@ endif()
 if(NOT DEFINED TEST_ROOT)
   message(FATAL_ERROR "TEST_ROOT must name an isolated test output directory")
 endif()
+if(NOT DEFINED EXPECTED_SPECTRUM_VALUES)
+  set(EXPECTED_SPECTRUM_VALUES
+    "9.99999999999999955e-07,1.99999999999999991e-06,3.00000000000000008e-06,3.99999999999999982e-06,")
+endif()
+if(NOT DEFINED EXPECTED_CORE_VALUES)
+  set(EXPECTED_CORE_VALUES
+    "1.00000000000000000e+00,2.99999999999999886e+02,0.00000000000000000e+00,0.00000000000000000e+00,0.00000000000000000e+00,3.00000000000000008e-06,6.99999999999999989e-06,")
+endif()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _run_id)
 set(_run_dir "${TEST_ROOT}/sbm_zero_transport_${_run_id}")
@@ -42,17 +50,13 @@ function(assert_checkpoint checkpoint)
   endif()
 
   file(READ "${_checkpoint_dir}/Level_0/SBMSpectrum_H" _spectrum_header)
-  set(_spectrum_values
-    "9.99999999999999955e-07,1.99999999999999991e-06,3.00000000000000008e-06,3.99999999999999982e-06,")
-  string(FIND "${_spectrum_header}" "${_spectrum_values}" _spectrum_found)
+  string(FIND "${_spectrum_header}" "${EXPECTED_SPECTRUM_VALUES}" _spectrum_found)
   if(_spectrum_found EQUAL -1)
     message(FATAL_ERROR "SBM checkpoint spectrum differs from the manufactured state: ${_checkpoint_dir}")
   endif()
 
   file(READ "${_checkpoint_dir}/Level_0/Cell_H" _cell_header)
-  set(_projected_values
-    "1.00000000000000000e+00,2.99999999999999886e+02,0.00000000000000000e+00,0.00000000000000000e+00,0.00000000000000000e+00,3.00000000000000008e-06,6.99999999999999989e-06,")
-  string(FIND "${_cell_header}" "${_projected_values}" _projection_found)
+  string(FIND "${_cell_header}" "${EXPECTED_CORE_VALUES}" _projection_found)
   if(_projection_found EQUAL -1)
     message(FATAL_ERROR "SBM compact qc/qr checkpoint values do not match the fixed projection: ${_checkpoint_dir}")
   endif()

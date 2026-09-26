@@ -105,6 +105,16 @@ Real max_component_norm(const MultiFab& mf, const int ncomp)
     return result;
 }
 
+Real first_valid_value(const MultiFab& mf, const int component)
+{
+    for (amrex::MFIter mfi(mf); mfi.isValid(); ++mfi) {
+        const auto valid_box = mfi.validbox();
+        const auto lo = valid_box.smallEnd();
+        return mf.const_array(mfi)(lo[0], lo[1], lo[2], component);
+    }
+    throw std::runtime_error("test MultiFab has no valid cells");
+}
+
 TEST(SBMFoundation, RuntimeLayoutAndMomentOffsets)
 {
     const auto one_moment = make_layout(5);
@@ -180,6 +190,14 @@ TEST(SBMFoundation, FixedBulkProjectionIsLinearAndNonMutating)
     EXPECT_NEAR(lhs.qr, a*px.qr + b*py.qr, Real(8.0)*std::numeric_limits<Real>::epsilon());
     EXPECT_DOUBLE_EQ(projection.apply(std::vector<Real>(4, Real(0.0))).qc, Real(0.0));
     EXPECT_DOUBLE_EQ(projection.apply(std::vector<Real>(4, Real(0.0))).qr, Real(0.0));
+
+    const auto two_moment_layout = make_layout(4, erf_sbm::MomentMode::TwoMoment, 2);
+    const erf_sbm::SBMBulkProjection two_moment_projection(two_moment_layout);
+    const std::vector<Real> two_moment_state{
+        Real(1.5), Real(6.0), Real(18.0), Real(48.0),
+        Real(1.0e12), Real(2.0e12), Real(3.0e12), Real(4.0e12)};
+    EXPECT_DOUBLE_EQ(two_moment_projection.apply(two_moment_state).qc, Real(7.5));
+    EXPECT_DOUBLE_EQ(two_moment_projection.apply(two_moment_state).qr, Real(66.0));
 }
 
 TEST(SBMFoundation, OwnershipKeepsVaporHostOwnedAndDeniesCompactLiquidWrites)
@@ -197,7 +215,53 @@ TEST(SBMFoundation, OwnershipKeepsVaporHostOwnedAndDeniesCompactLiquidWrites)
         EXPECT_FALSE(erf_sbm::host_write_allowed(true, RhoQ3_comp))
             << erf_sbm::host_write_path_name(path);
         EXPECT_TRUE(erf_sbm::host_write_allowed(true, RhoQ1_comp));
+        EXPECT_TRUE(erf_sbm::host_write_range_allowed(false, RhoQ1_comp, 3));
+        EXPECT_TRUE(erf_sbm::host_write_range_allowed(true, RhoQ1_comp, 1));
+        EXPECT_FALSE(erf_sbm::host_write_range_allowed(true, RhoQ1_comp, 2));
+        EXPECT_FALSE(erf_sbm::host_write_range_allowed(true, RhoQ2_comp, 1));
+        EXPECT_FALSE(erf_sbm::host_write_range_allowed(true, RhoQ3_comp, 1));
+        EXPECT_FALSE(erf_sbm::host_write_range_allowed(true, RhoQ3_comp - 1, 2));
     }
+    EXPECT_FALSE(erf_sbm::host_write_range_allowed(false, -1, 1));
+    EXPECT_FALSE(erf_sbm::host_write_range_allowed(false, RhoQ1_comp, 0));
+    EXPECT_FALSE(erf_sbm::host_write_range_allowed(false,
+        std::numeric_limits<int>::max(), 1));
+}
+
+TEST(SBMFoundation, TwoMomentFixtureStatesUseRuntimeConstraintSemantics)
+{
+    const auto layout = make_layout(4, erf_sbm::MomentMode::TwoMoment, 2);
+    const auto groups = erf_sbm::make_constraint_groups(layout);
+    ASSERT_EQ(groups.size(), 4u);
+
+    std::vector<Real> state(static_cast<std::size_t>(layout.ncomp()), Real(0.0));
+    const std::vector<Real> masses{Real(1.5), Real(2.5), Real(3.5), Real(4.5)};
+    const std::vector<Real> numbers(4, Real(1.0));
+    std::copy(masses.begin(), masses.end(), state.begin());
+    std::copy(numbers.begin(), numbers.end(), state.begin() + 4);
+    for (const auto& group : groups) EXPECT_TRUE(group.admissible(state));
+
+    const std::vector<Real> zero(static_cast<std::size_t>(layout.ncomp()), Real(0.0));
+    for (const auto& group : groups) EXPECT_TRUE(group.admissible(zero));
+
+    auto edge_state = state;
+    edge_state[0] = Real(1.0); // lower edge: M = a*C
+    edge_state[1] = Real(3.0); // upper edge: M = b*C
+    EXPECT_TRUE(groups[0].admissible(edge_state));
+    EXPECT_TRUE(groups[1].admissible(edge_state));
+
+    auto upper_violation = state;
+    upper_violation[0] = Real(2.1);
+    EXPECT_FALSE(groups[0].admissible(upper_violation));
+    auto lower_violation = state;
+    lower_violation[0] = Real(0.9);
+    EXPECT_FALSE(groups[0].admissible(lower_violation));
+    auto zero_count = state;
+    zero_count[4] = Real(0.0);
+    EXPECT_FALSE(groups[0].admissible(zero_count));
+    auto nonfinite = state;
+    nonfinite[0] = std::numeric_limits<Real>::quiet_NaN();
+    EXPECT_FALSE(groups[0].admissible(nonfinite));
 }
 
 TEST(SBMFoundation, ZeroAndNonzeroFixtureStatesRemainIdentityAndProject)
@@ -330,10 +394,61 @@ TEST(SBMFoundation, CorruptCompactRestartIsRejectedBeforeProjectionCanRepairIt)
         manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
 
     core.setVal(Real(99.0), RhoQ2_comp, 1, 0);
-    const Real corrupted_value = core.norm0(RhoQ2_comp);
     EXPECT_FALSE(erf_sbm::restart_projection_matches(
         manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
-    EXPECT_DOUBLE_EQ(core.norm0(RhoQ2_comp), corrupted_value);
+    EXPECT_DOUBLE_EQ(first_valid_value(core, RhoQ2_comp), Real(99.0));
+
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    core.setVal(std::numeric_limits<Real>::infinity(), RhoQ2_comp, 1, 0);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
+    EXPECT_TRUE(std::isinf(first_valid_value(core, RhoQ2_comp)));
+
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    core.setVal(-std::numeric_limits<Real>::infinity(), RhoQ3_comp, 1, 0);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
+    EXPECT_TRUE(std::isinf(first_valid_value(core, RhoQ3_comp)));
+    EXPECT_LT(first_valid_value(core, RhoQ3_comp), Real(0.0));
+
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    core.setVal(std::numeric_limits<Real>::quiet_NaN(), RhoQ2_comp, 1, 0);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
+    EXPECT_TRUE(std::isnan(first_valid_value(core, RhoQ2_comp)));
+
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    core.setVal(std::numeric_limits<Real>::quiet_NaN(), RhoQ3_comp, 1, 0);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
+    EXPECT_TRUE(std::isnan(first_valid_value(core, RhoQ3_comp)));
+
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp,
+        std::numeric_limits<Real>::infinity()));
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp,
+        std::numeric_limits<Real>::quiet_NaN()));
+
+    manager.state(0).setVal(std::numeric_limits<Real>::infinity(), 0, 1, 0);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
+    EXPECT_DOUBLE_EQ(first_valid_value(core, RhoQ2_comp), Real(3.0));
+    EXPECT_DOUBLE_EQ(first_valid_value(core, RhoQ3_comp), Real(7.0));
+
+    const Real largest = std::numeric_limits<Real>::max();
+    manager.state(0).setVal(Real(0.0));
+    manager.state(0).setVal(largest / Real(2.0), 0, 1, 0);
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp, largest));
+
+    manager.state(0).setVal(largest, 0, 1, 0);
+    manager.project_to_core(0, core, RhoQ2_comp, RhoQ3_comp);
+    core.setVal(-largest, RhoQ2_comp, 1, 0);
+    EXPECT_FALSE(erf_sbm::restart_projection_matches(
+        manager.state(0), core, projection, RhoQ2_comp, RhoQ3_comp));
 }
 
 } // namespace

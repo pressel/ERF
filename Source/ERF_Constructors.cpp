@@ -9,7 +9,12 @@
 #include "ERF.H"
 #include "ERF_Constants.H"
 #include "AMReX_buildInfo.H"
+#include "ERF_SBMConstraintGroups.H"
 #include "ERF_SBMStateManager.H"
+
+#include <algorithm>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -41,10 +46,25 @@ void validate_sbm_zero_transport_fixture(const SolverChoice& choice,
     if (choice.moisture_type != MoistureType::SBM) return;
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.sbm_zero_transport_fixture,
         "moisture_model=SBM requires the explicit zero-transport fixture option");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(AMREX_SPACEDIM == 3,
+        "SBM zero-transport fixture requires three-dimensional triply periodic geometry");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(max_level == 0,
         "SBM M1 zero-transport fixture supports one AMR level only");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.mesh_type == MeshType::ConstantDz,
+        "SBM zero-transport fixture requires mesh_type=ConstantDz");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.terrain_type == TerrainType::None,
         "SBM zero-transport fixture requires static Cartesian geometry without terrain or EB");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.buildings_type == BuildingsType::None,
+        "SBM zero-transport fixture requires buildings_type=None");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.substepping_type.size() == 1 &&
+                                     choice.substepping_type[0] == SubsteppingType::None,
+        "SBM zero-transport fixture requires acoustic substepping_type=None");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!choice.sbm_test_native_qc_write_fault ||
+                                     choice.sbm_zero_transport_fixture,
+        "erf.sbm_test_native_qc_write_fault is valid only for the SBM zero-transport fixture");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!choice.sbm_test_carrier_momentum_fault ||
+                                     choice.sbm_zero_transport_fixture,
+        "erf.sbm_test_carrier_momentum_fault is valid only for the SBM zero-transport fixture");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.diffChoice.molec_diff_type == MolecDiffType::None,
         "SBM zero-transport fixture does not support scalar diffusion");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!choice.turbChoice[0].use_kturb &&
@@ -188,8 +208,30 @@ ERF::ERF_shared ()
     ReadParameters();
     validate_sbm_zero_transport_fixture(solverChoice, max_level);
     if (solverChoice.moisture_type == MoistureType::SBM) {
+        auto layout = make_sbm_layout(solverChoice);
+        std::vector<amrex::Real> candidate(static_cast<std::size_t>(layout.ncomp()),
+                                           amrex::Real(0.0));
+        if (!solverChoice.sbm_fixture_initial_state.empty()) {
+            std::copy(solverChoice.sbm_fixture_initial_state.begin(),
+                      solverChoice.sbm_fixture_initial_state.end(), candidate.begin());
+        }
+        for (const auto& group : erf_sbm::make_constraint_groups(layout)) {
+            amrex::Real margin = amrex::Real(0.0);
+            std::string failed_constraint;
+            if (!group.admissible(candidate, &margin, &failed_constraint)) {
+                std::string values;
+                for (const int component : group.members) {
+                    values += (values.empty() ? "" : ",") + std::to_string(component) + "=" +
+                              std::to_string(candidate[static_cast<std::size_t>(component)]);
+                }
+                amrex::Error("SBM fixture initial state is unrealizable: population=" +
+                    std::to_string(group.population_id) + " bin=" + std::to_string(group.bin) +
+                    " semantic=" + group.semantic_id + " failed_constraint=" + failed_constraint +
+                    " margin=" + std::to_string(margin) + " members={" + values + "}");
+            }
+        }
         sbm_state_manager = std::make_unique<erf_sbm::SBMStateManager>(
-            make_sbm_layout(solverChoice), max_level + 1);
+            std::move(layout), max_level + 1);
     }
     // Create one invocation identity after inputs are available and before
     // InitData can read restart metadata or write an output on restart.

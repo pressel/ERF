@@ -271,6 +271,10 @@ void erf_slow_rhs_post (int level, int finest_level,
         MultiFab::Copy(avg_zmom, S_data[IntVars::zmom], 0, 0, 1, 0);
     }
 
+    if (sbm_active && solverChoice.sbm_test_carrier_momentum_fault) {
+        // Deliberate test-only mutation at the actual carrier guard seam.
+        avg_xmom.setVal(Real(1.0));
+    }
     if (sbm_active && (avg_xmom.norm0() != Real(0.0) ||
                        avg_ymom.norm0() != Real(0.0) ||
                        avg_zmom.norm0() != Real(0.0))) {
@@ -491,8 +495,6 @@ void erf_slow_rhs_post (int level, int finest_level,
                         // ERF's normal path and leave the projected liquid lanes
                         // exclusively to the auxiliary spectrum.
                         num_comp = 1;
-                        erf_sbm::require_host_write_allowed(
-                            true, start_comp, erf_sbm::HostWritePath::Advection);
                     }
 
                 } else {
@@ -515,6 +517,10 @@ void erf_slow_rhs_post (int level, int finest_level,
                     ((ivar == RhoKE_comp) && l_advect_KE))
                 {
                     if (!l_eb_terrain_cc){
+                        if (sbm_active && ivar == RhoQ1_comp) {
+                            erf_sbm::require_host_write_range_allowed(
+                                true, start_comp, num_comp, erf_sbm::HostWritePath::Advection);
+                        }
                         AdvectionSrcForScalars(tbx, start_comp, num_comp,
                                                avg_xmom_arr, avg_ymom_arr, avg_zmom_arr,
                                                cur_prim, cell_rhs,
@@ -523,6 +529,10 @@ void erf_slow_rhs_post (int level, int finest_level,
                                                horiz_upw_frac, vert_upw_frac,
                                                flx_arr, domain, bc_ptr_h);
                     } else {
+                        if (sbm_active && ivar == RhoQ1_comp) {
+                            erf_sbm::require_host_write_range_allowed(
+                                true, start_comp, num_comp, erf_sbm::HostWritePath::Advection);
+                        }
                         EBAdvectionSrcForScalars(tbx, start_comp, num_comp,
                                                  avg_xmom_arr, avg_ymom_arr, avg_zmom_arr,
                                                  cur_prim, cell_rhs,
@@ -559,6 +569,9 @@ void erf_slow_rhs_post (int level, int finest_level,
                             RhoQ1_comp + qstate : start_comp;
                         const int diffusion_start = state_comp;
                         const int diffusion_num = componentwise_moisture ? 1 : num_comp;
+                        erf_sbm::require_host_write_range_allowed(
+                            sbm_active, diffusion_start, diffusion_num,
+                            erf_sbm::HostWritePath::Diffusion);
                         const int flux_comp = componentwise_moisture ? qstate : 0;
                         AMREX_ALWAYS_ASSERT(state_comp >= 0 && state_comp < nvars);
                         AMREX_ALWAYS_ASSERT(flux_comp < dflux_x->nComp());
@@ -657,9 +670,7 @@ void erf_slow_rhs_post (int level, int finest_level,
                         // clipping.  Keep both projected liquid lanes out of
                         // that write path; they are refreshed from the spectrum
                         // after the no-op microphysics handoff.
-                        num_comp = 1;
-                        erf_sbm::require_host_write_allowed(
-                            true, start_comp, erf_sbm::HostWritePath::Positivity);
+                        num_comp = solverChoice.sbm_test_native_qc_write_fault ? 2 : 1;
                     }
                 } else if (ivar == RhoScalar_comp) {
                     num_comp = NSCALARS;
@@ -667,6 +678,8 @@ void erf_slow_rhs_post (int level, int finest_level,
 
                if (l_moving_terrain)
                {
+                    erf_sbm::require_host_write_range_allowed(
+                        sbm_active, start_comp, num_comp, erf_sbm::HostWritePath::Positivity);
                     ParallelFor(tbx, num_comp,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k, int nn) noexcept {
                         const int n = start_comp + nn;
@@ -684,6 +697,8 @@ void erf_slow_rhs_post (int level, int finest_level,
 
                 } else if (l_anelastic && l_anelastic_rk2 && (nrk == 1)) { // not moving and ( (anelastic) and second RK stage) )
 
+                    erf_sbm::require_host_write_range_allowed(
+                        sbm_active, start_comp, num_comp, erf_sbm::HostWritePath::Positivity);
                     ParallelFor(tbx, num_comp,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k, int nn) noexcept {
                         const int n = start_comp + nn;
@@ -709,6 +724,8 @@ void erf_slow_rhs_post (int level, int finest_level,
 
                 } else { // not moving and ( (not anelastic) or (first RK stage) )
 
+                    erf_sbm::require_host_write_range_allowed(
+                        sbm_active, start_comp, num_comp, erf_sbm::HostWritePath::Positivity);
                     ParallelFor(tbx, num_comp,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k, int nn) noexcept {
                         const int n = start_comp + nn;

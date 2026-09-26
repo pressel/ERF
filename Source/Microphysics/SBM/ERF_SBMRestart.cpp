@@ -4,6 +4,7 @@
 #include <AMReX_MultiFabUtil.H>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -34,7 +35,10 @@ bool restart_projection_matches(const amrex::MultiFab& spectrum,
         spectrum.DistributionMap() != persisted_core.DistributionMap() ||
         qc_component < 0 || qr_component < 0 ||
         qc_component >= persisted_core.nComp() || qr_component >= persisted_core.nComp() ||
-        !(tolerance_scale >= amrex::Real(0.0))) {
+        !std::isfinite(tolerance_scale) || !(tolerance_scale >= amrex::Real(0.0)) ||
+        !spectrum.is_finite(0, spectrum.nComp(), 0) ||
+        !persisted_core.is_finite(qc_component, 1, 0) ||
+        !persisted_core.is_finite(qr_component, 1, 0)) {
         return false;
     }
 
@@ -45,17 +49,21 @@ bool restart_projection_matches(const amrex::MultiFab& spectrum,
         projection.apply_to_core(mfi.validbox(), spectrum.const_array(mfi),
                                  expected.array(mfi), 0, 1);
     }
+    if (!expected.is_finite(0, 2, 0)) return false;
     amrex::MultiFab::Copy(stored, persisted_core, qc_component, 0, 1, 0);
     amrex::MultiFab::Copy(stored, persisted_core, qr_component, 1, 1, 0);
+    if (!stored.is_finite(0, 2, 0)) return false;
 
     const amrex::Real scale = std::max({expected.norm0(0), expected.norm0(1),
                                         stored.norm0(0), stored.norm0(1)});
     amrex::MultiFab::Subtract(expected, stored, 0, 0, 2, 0);
+    if (!expected.is_finite(0, 2, 0)) return false;
     const amrex::Real difference = std::max(expected.norm0(0), expected.norm0(1));
     const amrex::Real tolerance = tolerance_scale *
         std::numeric_limits<amrex::Real>::epsilon() *
         std::max(scale, std::numeric_limits<amrex::Real>::min());
-    return difference <= tolerance;
+    return std::isfinite(scale) && std::isfinite(difference) &&
+           std::isfinite(tolerance) && difference <= tolerance;
 }
 
 } // namespace erf_sbm

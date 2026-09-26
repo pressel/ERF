@@ -709,6 +709,15 @@ struct SolverChoice {
 
         pp.query_enum_case_insensitive("moisture_model",moisture_type);
 
+        // Test-only M1 failure injections. They remain disabled unless an
+        // integration test explicitly enables the corresponding option.
+        pp.queryAdd("sbm_test_native_qc_write_fault", sbm_test_native_qc_write_fault);
+        pp.queryAdd("sbm_test_carrier_momentum_fault", sbm_test_carrier_momentum_fault);
+        if (moisture_type != MoistureType::SBM &&
+            (sbm_test_native_qc_write_fault || sbm_test_carrier_momentum_fault)) {
+            amrex::Error("SBM test fault-injection options require moisture_model=SBM");
+        }
+
         // Register the moisture data this scheme carries: conserved-state
         // components and qmoist diagnostic slots alike.  MoistureComponentIndices
         // is the one place that mapping lives, and every consumer -- source terms,
@@ -2308,6 +2317,8 @@ struct SolverChoice {
     int sbm_moment_mode{1};
     int sbm_cloud_rain_split{-1};
     bool sbm_zero_transport_fixture{false};
+    bool sbm_test_native_qc_write_fault{false};
+    bool sbm_test_carrier_momentum_fault{false};
     amrex::Vector<amrex::Real> sbm_edges;
     amrex::Vector<amrex::Real> sbm_pivots;
     amrex::Vector<amrex::Real> sbm_fixture_initial_state;

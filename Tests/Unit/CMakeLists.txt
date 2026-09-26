@@ -279,6 +279,53 @@ if(TARGET erf_exec AND ERF_DIM STREQUAL "3" AND
     LABELS "integration;sbm"
     RUN_SERIAL TRUE
     TIMEOUT 120)
+
+  add_test(NAME SBM_ZeroTransport_2M_ERF_Smoke
+    COMMAND ${CMAKE_COMMAND}
+      -DERF_EXECUTABLE=$<TARGET_FILE:erf_exec>
+      -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/inputs_zero_transport_2m
+      -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+      -DEXPECTED_SPECTRUM_VALUES=1.50000000000000004e-06,6.00000000000000015e-06,1.80000000000000005e-05,4.80000000000000012e-05,1.00000000000000000e+12,2.00000000000000000e+12,3.00000000000000000e+12,4.00000000000000000e+12,
+      -DEXPECTED_CORE_VALUES=1.00000000000000000e+00,2.99999999999999886e+02,0.00000000000000000e+00,0.00000000000000000e+00,0.00000000000000000e+00,7.50000000000000019e-06,6.60000000000000051e-05,
+      -P ${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/RunZeroTransportSmoke.cmake)
+  set_tests_properties(SBM_ZeroTransport_2M_ERF_Smoke PROPERTIES
+    LABELS "integration;sbm"
+    RUN_SERIAL TRUE
+    TIMEOUT 120)
+
+  function(add_sbm_expected_failure_test test_name input_file diagnostic)
+    add_test(NAME ${test_name}
+      COMMAND ${CMAKE_COMMAND}
+        -DERF_EXECUTABLE=$<TARGET_FILE:erf_exec>
+        -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/${input_file}
+        -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+        "-DEXPECTED_DIAGNOSTIC=${diagnostic}"
+        ${ARGN}
+        -P ${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/RunExpectedFailure.cmake)
+    set_tests_properties(${test_name} PROPERTIES
+      LABELS "integration;sbm;negative"
+      RUN_SERIAL TRUE
+      TIMEOUT 120)
+  endfunction()
+
+  add_sbm_expected_failure_test(SBM_Unrealizable_2M_Init inputs_unrealizable_2m
+    "SBM fixture initial state is unrealizable.*failed_constraint=endpoint_low")
+  add_sbm_expected_failure_test(SBM_Nonzero_Carrier inputs_zero_transport
+    "SBM zero-transport fixture requires exactly zero carrier momentum"
+    "-DOVERRIDE=erf.sbm_test_carrier_momentum_fault=true")
+  add_sbm_expected_failure_test(SBM_Native_QC_Write_Fault inputs_zero_transport
+    "SBM owns compact qc/qr; native positivity write denied for component range"
+    "-DOVERRIDE=erf.sbm_test_native_qc_write_fault=true")
+  add_sbm_expected_failure_test(SBM_Implicit_Substepping inputs_zero_transport
+    "SBM zero-transport fixture requires acoustic substepping_type=None"
+    "-DOVERRIDE=erf.substepping_type=Implicit")
+  add_sbm_expected_failure_test(SBM_Nonperiodic_Geometry inputs_nonperiodic
+    "SBM zero-transport fixture requires triply periodic geometry")
+  add_sbm_expected_failure_test(SBM_Immersed_Buildings inputs_zero_transport
+    "SBM zero-transport fixture requires buildings_type=None"
+    "-DOVERRIDE=erf.buildings_type=ImmersedForcing")
+  add_sbm_expected_failure_test(SBM_Nonconstant_Mesh inputs_stretched
+    "SBM zero-transport fixture requires mesh_type=ConstantDz")
 endif()
 set_tests_properties(erf_unit_tests_shuffle_repeat
   PROPERTIES
