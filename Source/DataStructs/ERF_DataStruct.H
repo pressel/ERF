@@ -764,7 +764,7 @@ struct SolverChoice {
                     }
                 }
             }
-            if (sbm_pivots.size() != static_cast<std::size_t>(sbm_nbins)) {
+            if (sbm_pivots.size() != static_cast<amrex::Long>(sbm_nbins)) {
                 amrex::Error("sbm_pivots must contain one value per SBM bin");
             }
             if (sbm_cloud_rain_split < 0) sbm_cloud_rain_split = sbm_nbins / 2;
@@ -773,7 +773,7 @@ struct SolverChoice {
             }
             const int expected_sbm_components = sbm_nbins * (sbm_moment_mode == 2 ? 2 : 1);
             if (!sbm_fixture_initial_state.empty() &&
-                sbm_fixture_initial_state.size() != static_cast<std::size_t>(expected_sbm_components)) {
+                sbm_fixture_initial_state.size() != static_cast<amrex::Long>(expected_sbm_components)) {
                 amrex::Error("sbm_fixture_initial_state must match the full runtime SBM component count");
             }
             for (const amrex::Real value : sbm_fixture_initial_state) {
