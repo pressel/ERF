@@ -6,6 +6,7 @@
 #include <ERF_EBRedistribute.H>
 #include "Diffusion/ERF_CloudChamberWallFlux.H"
 #include "Prob/ERF_CloudChamberBudget.H"
+#include "ERF_SBMOwnership.H"
 
 using namespace amrex;
 
@@ -103,6 +104,8 @@ void erf_slow_rhs_post (int level, int finest_level,
     BL_PROFILE_REGION("erf_slow_rhs_post()");
 
     Real dt = static_cast<Real>(dt_d);
+
+    const bool sbm_active = solverChoice.moisture_type == MoistureType::SBM;
 
     const BCRec* bc_ptr_d = domain_bcs_type_d.data();
     const BCRec* bc_ptr_h = domain_bcs_type_h.data();
@@ -266,6 +269,12 @@ void erf_slow_rhs_post (int level, int finest_level,
         MultiFab::Copy(avg_xmom, S_data[IntVars::xmom], 0, 0, 1, 0);
         MultiFab::Copy(avg_ymom, S_data[IntVars::ymom], 0, 0, 1, 0);
         MultiFab::Copy(avg_zmom, S_data[IntVars::zmom], 0, 0, 1, 0);
+    }
+
+    if (sbm_active && (avg_xmom.norm0() != Real(0.0) ||
+                       avg_ymom.norm0() != Real(0.0) ||
+                       avg_zmom.norm0() != Real(0.0))) {
+        amrex::Abort("SBM zero-transport fixture requires exactly zero carrier momentum before scalar advection");
     }
 
     // *************************************************************************
@@ -477,6 +486,14 @@ void erf_slow_rhs_post (int level, int finest_level,
                     // Computing residuals for only the first n_qstate would leave the
                     // rest to be updated with a residual nothing ever wrote.
                     num_comp = n_qstate_total;
+                    if (sbm_active) {
+                        // The fixture has no spectral transport. Keep vapor on
+                        // ERF's normal path and leave the projected liquid lanes
+                        // exclusively to the auxiliary spectrum.
+                        num_comp = 1;
+                        erf_sbm::require_host_write_allowed(
+                            true, start_comp, erf_sbm::HostWritePath::Advection);
+                    }
 
                 } else {
                     horiz_adv_type = ac.dryscal_horiz_adv_type;
@@ -635,6 +652,15 @@ void erf_slow_rhs_post (int level, int finest_level,
                 num_comp = 1;
                 if (ivar == RhoQ1_comp) {
                     num_comp = n_qstate_total;
+                    if (sbm_active) {
+                        // The host update applies source terms and positivity
+                        // clipping.  Keep both projected liquid lanes out of
+                        // that write path; they are refreshed from the spectrum
+                        // after the no-op microphysics handoff.
+                        num_comp = 1;
+                        erf_sbm::require_host_write_allowed(
+                            true, start_comp, erf_sbm::HostWritePath::Positivity);
+                    }
                 } else if (ivar == RhoScalar_comp) {
                     num_comp = NSCALARS;
                 }

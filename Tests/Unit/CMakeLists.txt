@@ -200,6 +200,7 @@ target_sources(${erf_exe_name}
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/ERF_GTestKesslerKernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Kessler/ERF_GTestKesslerPhysicalProperties.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/Morrison/ERF_GTestMorrisonPhysicalProperties.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Microphysics/SBM/ERF_GTestSBMFoundation.cpp
 )
 if(ERF_ENABLE_NETCDF)
   target_sources(${erf_exe_name} PRIVATE
@@ -260,6 +261,25 @@ add_test(NAME erf_unit_tests_shuffle_repeat
     --gtest_repeat=3
     --gtest_output=xml:${ERF_GTEST_REPORT_ROOT}/${erf_exe_name}/shuffle-repeat.xml
 )
+
+# Exercise the bounded zero-transport fixture through ERF's native level,
+# advance, checkpoint, and exact-schema restart paths.  Header min/max values
+# make the manufactured uniform spectrum and projected qc/qr independently
+# observable without adding test-only diagnostics to the application.
+if(TARGET erf_exec AND ERF_DIM STREQUAL "3" AND
+   ERF_PRECISION STREQUAL "DOUBLE" AND NOT AMReX_HDF5)
+  add_dependencies(${erf_exe_name} erf_exec)
+  add_test(NAME SBM_ZeroTransport_ERF_Smoke
+    COMMAND ${CMAKE_COMMAND}
+      -DERF_EXECUTABLE=$<TARGET_FILE:erf_exec>
+      -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/inputs_zero_transport
+      -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+      -P ${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/RunZeroTransportSmoke.cmake)
+  set_tests_properties(SBM_ZeroTransport_ERF_Smoke PROPERTIES
+    LABELS "integration;sbm"
+    RUN_SERIAL TRUE
+    TIMEOUT 120)
+endif()
 set_tests_properties(erf_unit_tests_shuffle_repeat
   PROPERTIES
     LABELS "stress"
