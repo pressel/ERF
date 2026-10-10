@@ -6,9 +6,11 @@
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_MultiFabUtil.H>
+#include <AMReX_YAFluxRegister.H>
 
 #include "ERF_AdvectionSrcForScalars.H"
 #include "ERF_SBMAdvectionBoundary.H"
+#include "ERF_SBMAMRFluxRegister.H"
 #include "ERF_IndexDefines.H"
 #include "ERF_SBMRemapping.H"
 #include "ERF_SBMConstraintGroups.H"
@@ -109,6 +111,7 @@ struct RunOptions
     bool mapped_geometry{false};
     bool advance_all_rk3_stages{false};
     bool verify_spectral_ledger_identity{false};
+    bool verify_direct_register_reference{false};
     int completed_steps{1};
     bool amplify_corrector_input{false};
     bool distinct_density_roles{false};
@@ -529,9 +532,36 @@ run_transport (const RunOptions& options)
     erf_sbm::SBMStateManager state_manager(layout, 1);
     state_manager.define(0, ba, dm, 0.0);
     erf_sbm::SBMTransport transport(state_manager.layout(),
-                                    options.verify_spectral_ledger_identity ? 2 : 1,
+                                    (options.verify_spectral_ledger_identity ||
+                                     options.verify_direct_register_reference) ? 2 : 1,
                                     options.max_groups_per_chunk);
     transport.define(0, ba, dm);
+
+    std::unique_ptr<erf_sbm::SBMAMRFluxRegister> direct_register;
+    BoxArray fine_interface_ba;
+    DistributionMapping fine_interface_dm;
+    std::unique_ptr<Geometry> fine_interface_geom;
+    const IntVect interface_ratio(2);
+    if (options.verify_direct_register_reference) {
+        const Box fine_domain = amrex::refine(domain, interface_ratio);
+        const Box covered_coarse(
+            IntVect(nx / 4, 0, 0), IntVect(3 * nx / 4 - 1, ny - 1, nz - 1));
+        fine_interface_ba = BoxArray(amrex::refine(covered_coarse,
+                                                   interface_ratio));
+        fine_interface_dm = DistributionMapping(fine_interface_ba);
+        const amrex::RealBox fine_physical({0.0, 0.0, 0.0},
+                                           {1.0, 1.0, 1.0});
+        const int fine_periodic[AMREX_SPACEDIM] = {1, 1, 1};
+        fine_interface_geom = std::make_unique<Geometry>(
+            fine_domain, &fine_physical, amrex::CoordSys::cartesian,
+            fine_periodic);
+        direct_register =
+            std::make_unique<erf_sbm::SBMAMRFluxRegister>();
+        direct_register->define(fine_interface_ba, ba, fine_interface_dm, dm,
+                                *fine_interface_geom, geom, interface_ratio,
+                                1, layout.ncomp());
+        transport.set_amr_flux_registers(0, direct_register.get(), nullptr);
+    }
 
     MultiFab detj(ba, dm, 1, 0);
     const auto map_ba = project_to_xy(ba);
@@ -845,6 +875,18 @@ run_transport (const RunOptions& options)
             layout, initial, conserved_input, avg_xmom, avg_ymom, avg_zmom,
             transport.static_measure(0), geom, dt);
     }
+    if (direct_register) {
+        if (options.completed_steps != 1 ||
+            (!options.advance_all_rk3_stages && !options.anelastic_heun)) {
+            ADD_FAILURE() << "direct YA reference check requires one complete RK3 or Heun step";
+            return {};
+        }
+        if (!direct_register->begin_interval(0.0, dt, 2, diagnostic) ||
+            !transport.begin_physical_step(0, 0.0, dt, diagnostic)) {
+            ADD_FAILURE() << diagnostic;
+            return {};
+        }
+    }
     if (!state_manager.begin_step(0, 0.0, diagnostic)) {
         ADD_FAILURE() << diagnostic;
         return {};
@@ -1097,6 +1139,110 @@ run_transport (const RunOptions& options)
                     << "component=" << component << " step=" << step;
             }
         }
+    }
+
+    if (direct_register) {
+        if (!transport.accept_physical_step(0, 0.0, dt, diagnostic)) {
+            ADD_FAILURE() << "coarse transport step rejected by direct YA owner: "
+                          << diagnostic;
+            return {};
+        }
+
+        // This fixture supplies real coarse-side rates from the FCT
+        // transport. Complete the interface with two zero fine substeps so
+        // the owner can form a reflux candidate without inventing any fine
+        // transfer. The reference below uses the full accepted integral
+        // ledger produced by the same transport stages.
+        erf_auxiliary::MappedFaceFluxRate zero_fine_rate;
+        zero_fine_rate.define(fine_interface_ba, fine_interface_dm,
+                              layout.ncomp(), 0);
+        zero_fine_rate.setVal(Real(0.0));
+        std::vector<int> global_components(
+            static_cast<std::size_t>(layout.ncomp()));
+        for (int component = 0; component < layout.ncomp(); ++component) {
+            global_components[static_cast<std::size_t>(component)] = component;
+        }
+        const auto method = options.anelastic_heun
+            ? erf_auxiliary::HostIntegrator::AnelasticHeun
+            : erf_auxiliary::HostIntegrator::CompressibleRK3;
+        const int stages = options.anelastic_heun ? 2 : 3;
+        for (int substep = 0; substep < 2; ++substep) {
+            const double fine_begin = dt * static_cast<double>(substep) / 2.0;
+            const double fine_end = dt * static_cast<double>(substep + 1) / 2.0;
+            const double fine_dt = fine_end - fine_begin;
+            if (!direct_register->begin_level_step(false, fine_begin, fine_end,
+                                                   diagnostic)) {
+                ADD_FAILURE() << diagnostic;
+                return {};
+            }
+            for (int stage = 0; stage < stages; ++stage) {
+                if (!direct_register->begin_stage(false, method, stage,
+                                                  fine_begin, diagnostic)) {
+                    ADD_FAILURE() << diagnostic;
+                    return {};
+                }
+                const double ledger_time = options.anelastic_heun
+                    ? 0.5 * fine_dt : (stage == 2 ? fine_dt : 0.0);
+                if (!direct_register->add_stage_rates(
+                        false, zero_fine_rate, global_components, ledger_time,
+                        diagnostic) ||
+                    !direct_register->finish_stage(false, diagnostic)) {
+                    ADD_FAILURE() << diagnostic;
+                    return {};
+                }
+            }
+            if (!direct_register->accept_level_step(false, fine_begin, fine_end,
+                                                    diagnostic)) {
+                ADD_FAILURE() << diagnostic;
+                return {};
+            }
+        }
+
+        amrex::YAFluxRegister reference_register(
+            fine_interface_ba, ba, fine_interface_dm, dm,
+            *fine_interface_geom, geom, interface_ratio, 1, layout.ncomp());
+        const auto& integrated =
+            transport.completed_spectral_ledger(0).integrated_flux();
+        MultiFab no_allocation_cells(
+            ba, dm, 1, 0, amrex::MFInfo().SetAlloc(false));
+        const auto dx = geom.CellSizeArray();
+        const amrex::RunOn run_on = amrex::Gpu::inLaunchRegion()
+            ? amrex::RunOn::Gpu : amrex::RunOn::Host;
+        for (amrex::MFIter mfi(no_allocation_cells,
+                               amrex::TilingIfNotGPU());
+             mfi.isValid(); ++mfi) {
+            std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> faces{};
+            for (int direction = 0; direction < AMREX_SPACEDIM; ++direction) {
+                faces[static_cast<std::size_t>(direction)] =
+                    &integrated.dir(direction)[mfi];
+            }
+            reference_register.CrseAdd(
+                mfi, faces, dx.data(), Real(1.0), 0, 0, layout.ncomp(),
+                run_on);
+        }
+        MultiFab direct_candidate(ba, dm, layout.ncomp(), 0);
+        MultiFab reference_candidate(ba, dm, layout.ncomp(), 0);
+        direct_candidate.setVal(Real(0.0));
+        reference_candidate.setVal(Real(0.0));
+        if (!direct_register->reflux(direct_candidate, diagnostic)) {
+            ADD_FAILURE() << diagnostic;
+            return {};
+        }
+        reference_register.Reflux(reference_candidate, 0, 0, layout.ncomp());
+        amrex::Gpu::streamSynchronize();
+        MultiFab direct_reference_error(ba, dm, layout.ncomp(), 0);
+        MultiFab::Copy(direct_reference_error, direct_candidate, 0, 0,
+                       layout.ncomp(), 0);
+        direct_reference_error.minus(reference_candidate, 0,
+                                     layout.ncomp(), 0);
+        const Real comparison_scale = std::max(
+            {direct_candidate.norm0(), reference_candidate.norm0(), Real(1.0)});
+        EXPECT_LE(direct_reference_error.norm0(),
+                  Real(4096.0) * std::numeric_limits<Real>::epsilon() *
+                      comparison_scale)
+            << "limiter-accepted direct YA contributions differ from the "
+               "completed-integral reference";
+        EXPECT_TRUE(direct_register->accept_reflux(diagnostic)) << diagnostic;
     }
 
     const auto& current_spectrum = state_manager.new_state(0);
@@ -1992,6 +2138,8 @@ TEST(SBMTransport, LimiterActiveCompletedSpectralLedgerReconstructsAcceptedUpdat
     options.expect_limiter_active = true;
     options.compare_native_candidate = true;
     options.verify_spectral_ledger_identity = true;
+    options.verify_direct_register_reference = true;
+    options.max_groups_per_chunk = 1;
 
     const auto summary = run_transport(options);
     const auto layout = make_layout(options.mode, options.attached_property);
@@ -2184,6 +2332,7 @@ TEST(SBMTransport, HeunLimiterUsesFullDtTrialWhenActive)
     options.compare_native_candidate = true;
     options.expect_limiter_active = true;
     options.anelastic_heun = true;
+    options.verify_direct_register_reference = true;
     run_transport(options);
 }
 

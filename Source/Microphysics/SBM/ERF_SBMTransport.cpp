@@ -1,4 +1,5 @@
 #include "ERF_SBMTransport.H"
+#include "ERF_SBMAMRFluxRegister.H"
 
 #include "ERF_SBMRemapping.H"
 #include "ERF_SBMRestart.H"
@@ -251,6 +252,8 @@ struct SBMTransport::LevelStorage
     erf_auxiliary::MappedFaceFluxRate projected_rate;
     erf_auxiliary::CompletedStepFluxLedger projected_ledger;
     erf_auxiliary::CompletedStepFluxLedger spectral_ledger;
+    SBMAMRFluxRegister* interface_as_coarse{nullptr};
+    SBMAMRFluxRegister* interface_as_fine{nullptr};
     bool measure_ready{false};
 };
 
@@ -272,7 +275,8 @@ SBMTransport::~SBMTransport () = default;
 
 SBMTransport::SBMTransport (const SBMLayout& layout,
                             const int number_of_levels,
-                            const int max_groups_per_chunk)
+                            const int max_groups_per_chunk,
+                            const bool keep_spectral_ledger_reference)
     : m_layout(layout),
       m_projection(layout),
       m_groups(make_constraint_groups(layout)),
@@ -281,7 +285,8 @@ SBMTransport::SBMTransport (const SBMLayout& layout,
       m_chunks(make_constraint_closure_chunks(layout, max_groups_per_chunk)),
       m_max_constraints_per_group(m_groups.size(), 0),
       m_levels(static_cast<std::size_t>(number_of_levels)),
-      m_device_metadata(std::make_unique<DeviceMetadata>())
+      m_device_metadata(std::make_unique<DeviceMetadata>()),
+      m_keep_spectral_ledger_reference(keep_spectral_ledger_reference)
 {
     AMREX_ALWAYS_ASSERT(number_of_levels > 0);
     if (AMREX_SPACEDIM != 3) {
@@ -559,7 +564,7 @@ SBMTransport::define (const int level,
     data->face_lambda.define(cell_ba, dm, 1, 0);
     data->projected_rate.define(cell_ba, dm, 2, 0);
     data->projected_ledger.define(cell_ba, dm, 2);
-    if (m_levels.size() > 1) {
+    if (m_keep_spectral_ledger_reference && m_levels.size() > 1) {
         data->spectral_ledger.define(cell_ba, dm, ncomp);
     }
     data->anchor.setVal(Real(0.0));
@@ -567,6 +572,68 @@ SBMTransport::define (const int level,
     data->invalid.setVal(Real(0.0));
     data->projected_rate.setVal(Real(0.0));
     m_levels[static_cast<std::size_t>(level)] = std::move(data);
+}
+
+void
+SBMTransport::set_amr_flux_registers (
+    const int level, SBMAMRFluxRegister* as_coarse,
+    SBMAMRFluxRegister* as_fine)
+{
+    if (!is_defined(level)) {
+        throw std::logic_error("SBM transport level must be defined before binding AMR registers");
+    }
+    auto& data = *m_levels[static_cast<std::size_t>(level)];
+    data.interface_as_coarse = as_coarse;
+    data.interface_as_fine = as_fine;
+}
+
+bool
+SBMTransport::begin_physical_step (const int level, const double step_begin,
+                                   const double step_end,
+                                   std::string& diagnostic)
+{
+    diagnostic.clear();
+    if (!is_defined(level)) {
+        diagnostic = "SBM transport physical step requires a defined level";
+        return false;
+    }
+    auto& data = *m_levels[static_cast<std::size_t>(level)];
+    if (data.interface_as_coarse &&
+        !data.interface_as_coarse->begin_level_step(
+            true, step_begin, step_end, diagnostic)) {
+        return false;
+    }
+    if (data.interface_as_fine &&
+        !data.interface_as_fine->begin_level_step(
+            false, step_begin, step_end, diagnostic)) {
+        return false;
+    }
+    return true;
+}
+
+bool
+SBMTransport::accept_physical_step (const int level,
+                                    const double step_begin,
+                                    const double step_end,
+                                    std::string& diagnostic)
+{
+    diagnostic.clear();
+    if (!is_defined(level)) {
+        diagnostic = "SBM transport physical-step acceptance requires a defined level";
+        return false;
+    }
+    auto& data = *m_levels[static_cast<std::size_t>(level)];
+    if (data.interface_as_coarse &&
+        !data.interface_as_coarse->accept_level_step(
+            true, step_begin, step_end, diagnostic)) {
+        return false;
+    }
+    if (data.interface_as_fine &&
+        !data.interface_as_fine->accept_level_step(
+            false, step_begin, step_end, diagnostic)) {
+        return false;
+    }
+    return true;
 }
 
 bool
@@ -696,6 +763,16 @@ SBMTransport::advance_stage (const int level,
         !data.spectral_ledger.begin_stage(method, stage, step_old_time,
                                           recipe, diagnostic)) {
         amrex::Abort("SBM M4a spectral face-ledger stage sequence: " + diagnostic);
+    }
+    if (data.interface_as_coarse &&
+        !data.interface_as_coarse->begin_stage(
+            true, method, stage, step_old_time, diagnostic)) {
+        amrex::Abort("SBM YA coarse-side stage sequence: " + diagnostic);
+    }
+    if (data.interface_as_fine &&
+        !data.interface_as_fine->begin_stage(
+            false, method, stage, step_old_time, diagnostic)) {
+        amrex::Abort("SBM YA fine-side stage sequence: " + diagnostic);
     }
 
     const MultiFab& trial_state =
@@ -1272,6 +1349,22 @@ SBMTransport::advance_stage (const int level,
             }
         }
 
+        // Hand the accepted, chunk-local rates directly to the YA interface
+        // register.  The owner keeps these additions pending until the full
+        // physical step is admitted by ERF::Advance.
+        if (data.interface_as_coarse &&
+            !data.interface_as_coarse->add_stage_rates(
+                true, data.accepted_rate, chunk.components,
+                recipe.completed_ledger_time, diagnostic)) {
+            amrex::Abort("SBM YA coarse-side accepted-rate accumulation: " + diagnostic);
+        }
+        if (data.interface_as_fine &&
+            !data.interface_as_fine->add_stage_rates(
+                false, data.accepted_rate, chunk.components,
+                recipe.completed_ledger_time, diagnostic)) {
+            amrex::Abort("SBM YA fine-side accepted-rate accumulation: " + diagnostic);
+        }
+
         // Apply the ERF stage recurrence component by component while using
         // this bounded complete-group chunk's accepted face rates.
         for (std::size_t local = 0; local < chunk.components.size(); ++local) {
@@ -1404,6 +1497,14 @@ SBMTransport::advance_stage (const int level,
     if (!state_manager.accept_stage_target(level, target_time,
                                           physical_step_complete, diagnostic)) {
         amrex::Abort("SBM M4a accepted-state lifecycle commit: " + diagnostic);
+    }
+    if (data.interface_as_coarse &&
+        !data.interface_as_coarse->finish_stage(true, diagnostic)) {
+        amrex::Abort("SBM YA coarse-side stage admission: " + diagnostic);
+    }
+    if (data.interface_as_fine &&
+        !data.interface_as_fine->finish_stage(false, diagnostic)) {
+        amrex::Abort("SBM YA fine-side stage admission: " + diagnostic);
     }
     state_manager.project_to_core(level, conserved_target, qc_component,
                                   qr_component);

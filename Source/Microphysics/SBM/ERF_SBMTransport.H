@@ -14,21 +14,27 @@
 
 namespace erf_sbm {
 
+class SBMAMRFluxRegister;
+
 /**
  * Bounded mapped advection for the authoritative SBM spectrum.
  *
  * The state manager remains the owner of prognostic state. This object owns
  * per-level stage scratch, the static mapped measure, the compact projected
- * qc/qr completed-step face ledger, and an optional all-component completed
- * spectral face ledger for AMR-capable instances. Operational AMR execution
- * remains disabled by the ERF runtime guard.
+ * qc/qr completed-step face ledger, and (in reference mode) an optional
+ * all-component completed spectral face ledger. Production AMR instances add
+ * accepted chunk-local stage rates directly to their pending interface YA
+ * register and do not retain that full spectral ledger. Operational AMR
+ * execution remains disabled by the ERF runtime guard until lifecycle gates
+ * are qualified.
  */
 class SBMTransport
 {
   public:
     explicit SBMTransport (const SBMLayout& layout,
                            int number_of_levels,
-                           int max_groups_per_chunk = 16);
+                           int max_groups_per_chunk = 16,
+                           bool keep_spectral_ledger_reference = true);
     ~SBMTransport ();
     SBMTransport (const SBMTransport&) = delete;
     SBMTransport& operator= (const SBMTransport&) = delete;
@@ -41,6 +47,15 @@ class SBMTransport
                                  const amrex::MultiFab& mx,
                                  const amrex::MultiFab& my,
                                  std::string& diagnostic);
+
+    /** Bind the adjacent interface registers after final level layouts exist. */
+    void set_amr_flux_registers (int level,
+                                 SBMAMRFluxRegister* as_coarse,
+                                 SBMAMRFluxRegister* as_fine);
+    bool begin_physical_step (int level, double step_begin, double step_end,
+                              std::string& diagnostic);
+    bool accept_physical_step (int level, double step_begin, double step_end,
+                               std::string& diagnostic);
 
     /**
      * ERF slow-RHS seam. The conserved-state views are ordered as the
@@ -85,12 +100,14 @@ class SBMTransport
                         int qr_component);
 
     void destroy (int level);
+    [[nodiscard]] int nlevels () const noexcept
+    { return static_cast<int>(m_levels.size()); }
     [[nodiscard]] bool is_defined (int level) const;
     [[nodiscard]] bool measure_is_ready (int level) const;
     [[nodiscard]] const amrex::MultiFab& static_measure (int level) const;
     [[nodiscard]] const erf_auxiliary::CompletedStepFluxLedger&
     projected_ledger (int level) const;
-    /** Authoritative all-component accepted transfer, defined for AMR-capable instances only. */
+    /** Full all-component accepted-integral reference, present only when enabled. */
     [[nodiscard]] const erf_auxiliary::CompletedStepFluxLedger& completed_spectral_ledger (int level) const;
 
   private:
@@ -106,6 +123,7 @@ class SBMTransport
     std::vector<int> m_max_constraints_per_group;
     std::vector<std::unique_ptr<LevelStorage>> m_levels;
     std::unique_ptr<DeviceMetadata> m_device_metadata;
+    bool m_keep_spectral_ledger_reference{true};
 };
 
 } // namespace erf_sbm

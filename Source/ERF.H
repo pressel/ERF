@@ -105,7 +105,11 @@ class MultiBlockContainer;
 // Describes one component of a 2D plotfile; defined in
 // IO/ERF_Plotfile2DSampledLevel.H, which ERF.H does not need to include.
 namespace plotfile2d { struct Plotfile2DOutputDescriptor; }
-namespace erf_sbm { class SBMStateManager; class SBMTransport; }
+namespace erf_sbm {
+class SBMAMRFluxRegister;
+class SBMStateManager;
+class SBMTransport;
+}
 
 /**
  * Enum of possible interpolation types between coarse/fine
@@ -1056,6 +1060,7 @@ private:
     void update_diffusive_arrays (int lev, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm);
 
     void make_flux_register (int lev);
+    void bind_sbm_amr_flux_registers (int lev);
 
     void Construct_ERFFillPatchers (int lev);
 
@@ -1360,6 +1365,9 @@ private:
 
     std::unique_ptr<Microphysics> micro;
     std::unique_ptr<erf_sbm::SBMStateManager> sbm_state_manager;
+    // Declared before SBMTransport so the non-owning interface references in
+    // transport are destroyed before these register owners.
+    amrex::Vector<std::unique_ptr<erf_sbm::SBMAMRFluxRegister>> sbm_amr_flux_regs;
     // Declared after the state manager so its non-owning layout reference is
     // destroyed before the authoritative SBM owner.
     std::unique_ptr<erf_sbm::SBMTransport> sbm_transport;

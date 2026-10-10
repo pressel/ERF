@@ -22,6 +22,11 @@
 #include "ERF_Utils.H"
 #include "ERF_TerrainMetrics.H"
 #include "ERF_SrcHeaders.H"
+#include "Microphysics/SBM/ERF_SBMAMRTransfer.H"
+#include "Microphysics/SBM/ERF_SBMAMRFluxRegister.H"
+#include "Microphysics/SBM/ERF_SBMStateManager.H"
+#include "Microphysics/SBM/ERF_SBMTransport.H"
+#include "Microphysics/SBM/ERF_SBMRestart.H"
 //#include "ERF_BuoyancyUtils.H"
 
 #ifdef ERF_USE_NETCDF
@@ -30,6 +35,64 @@
 #endif
 
 using namespace amrex;
+
+namespace {
+
+bool map_sbm_candidate_in_place (MultiFab& candidate,
+                                 const MultiFab& measure,
+                                 const bool to_mapped_amount,
+                                 std::string& diagnostic)
+{
+    diagnostic.clear();
+    if (candidate.nComp() <= 0 || measure.nComp() <= 0 ||
+        !(candidate.boxArray() == measure.boxArray()) ||
+        !(candidate.DistributionMap() == measure.DistributionMap())) {
+        diagnostic = "SBM synchronization candidate and mapped measure layouts differ";
+        return false;
+    }
+    MultiFab invalid(candidate.boxArray(), candidate.DistributionMap(), 1, 0);
+    invalid.setVal(Real(0.0));
+    const int ncomp = candidate.nComp();
+    for (MFIter mfi(candidate, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box box = mfi.tilebox();
+        const auto values = candidate.array(mfi);
+        const auto omega = measure.const_array(mfi);
+        const auto bad = invalid.array(mfi);
+        ParallelFor(box, ncomp, [=] AMREX_GPU_DEVICE
+                    (int i, int j, int k, int n) noexcept {
+            const Real scale = omega(i, j, k, 0);
+            const Real input = values(i, j, k, n);
+            const Real output = to_mapped_amount ? scale * input : input / scale;
+            values(i, j, k, n) = output;
+            if (!amrex::Math::isfinite(scale) || !(scale > Real(0.0)) ||
+                !amrex::Math::isfinite(output) ||
+                (input != Real(0.0) && output == Real(0.0))) {
+                bad(i, j, k, 0) = Real(1.0);
+            }
+        });
+    }
+    int any_bad = invalid.max(0, 0, true) > Real(0.0) ? 1 : 0;
+    ParallelDescriptor::ReduceIntMax(any_bad);
+    if (any_bad != 0) {
+        diagnostic = to_mapped_amount
+            ? "mapping synchronized spectrum to H=omega*U overflowed or underflowed"
+            : "recovering synchronized spectrum U=H/omega overflowed or underflowed";
+        return false;
+    }
+    return true;
+}
+
+void discard_sbm_sync_interval (erf_sbm::SBMAMRFluxRegister& flux_register,
+                                const std::string& reason)
+{
+    std::string discard_diagnostic;
+    if (!flux_register.discard_interval(discard_diagnostic)) {
+        Abort("SBM rejected synchronization could not discard pending YA amounts: " +
+              discard_diagnostic + "; original failure: " + reason);
+    }
+}
+
+} // namespace
 
 double ERF::startCPUTime        = 0.0;
 double ERF::previousCPUTimeUsed = 0.0;
@@ -608,12 +671,6 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
     // reports by the number of completed steps, the plotfiles' numbering.
     ibseb_report(nstep + 1, time);
 
-    if (cloud_chamber_budget) {
-        cloud_chamber_budget->report(
-            nstep + 1, time, vars_new[0][Vars::cons], geom[0],
-            solverChoice.moisture_type == MoistureType::SatAdj);
-    }
-
 #ifdef ERF_USE_PARTICLES
     particleData.Redistribute(z_phys_nd);
 #endif
@@ -719,6 +776,90 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
                 if (q_crse && q_fine) { average_down(*q_fine, *q_crse, 0, 1, rr2d); }
             }
         }
+    }
+
+    // The spectral synchronization candidate is private until restriction,
+    // YA reflux, and full canonical admission all succeed. Its one full-
+    // component allocation successively holds restricted U, H, refluxed H,
+    // and final U. Direct stage-rate additions remain pending until the final
+    // candidate has been admitted and published.
+    if (sbm_state_manager && solverChoice.moisture_type == MoistureType::SBM) {
+        const auto& layout = sbm_state_manager->layout();
+        for (int lev = finest_level - 1; lev >= 0; --lev) {
+            const int interface_index = lev + 1;
+            if (interface_index >= static_cast<int>(sbm_amr_flux_regs.size()) ||
+                !sbm_amr_flux_regs[interface_index] ||
+                !sbm_transport->measure_is_ready(lev) ||
+                !sbm_transport->measure_is_ready(lev + 1)) {
+                Abort("SBM AMR synchronization is missing its interface register or static measure");
+            }
+            auto& flux_register = *sbm_amr_flux_regs[interface_index];
+            const double coarse_time = sbm_state_manager->new_time(lev);
+            const double fine_time = sbm_state_manager->new_time(lev + 1);
+            const auto& coarse_measure = sbm_transport->static_measure(lev);
+            const auto& fine_measure = sbm_transport->static_measure(lev + 1);
+            erf_sbm::SBMAMRStateView coarse_view{
+                &sbm_state_manager->new_state(lev), coarse_time,
+                &vars_new[lev][Vars::cons], Rho_comp, coarse_time,
+                &coarse_measure, 0, coarse_time};
+            erf_sbm::SBMAMRStateView fine_view{
+                &sbm_state_manager->new_state(lev + 1), fine_time,
+                &vars_new[lev + 1][Vars::cons], Rho_comp, fine_time,
+                &fine_measure, 0, fine_time};
+            MultiFab candidate(grids[lev], dmap[lev], layout.ncomp(), 0);
+            std::string diagnostic;
+            if (!erf_sbm::RestrictMappedSpectrumPrivate(
+                    layout, fine_view, coarse_view, ref_ratio[lev], lev,
+                    candidate, diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM mapped coarse restriction rejected: " + diagnostic);
+            }
+            if (!map_sbm_candidate_in_place(candidate, coarse_measure, true,
+                                            diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM mapped coarse reflux input rejected: " + diagnostic);
+            }
+            if (!flux_register.reflux(candidate, diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM YA mapped coarse reflux rejected: " + diagnostic);
+            }
+            if (!map_sbm_candidate_in_place(candidate, coarse_measure, false,
+                                            diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM mapped reflux recovery rejected: " + diagnostic);
+            }
+            if (!erf_sbm::authoritative_state_admissible(
+                    candidate, layout, lev, &diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM refluxed coarse candidate rejected before publication: " +
+                      diagnostic);
+            }
+            if (!sbm_state_manager->can_accept_synchronized_state(
+                    lev, candidate, coarse_time, diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM refluxed coarse state could not be published: " + diagnostic);
+            }
+            if (!flux_register.can_accept_reflux(diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM refluxed coarse candidate could not consume its pending amount: " +
+                      diagnostic);
+            }
+            if (!flux_register.accept_reflux(diagnostic)) {
+                discard_sbm_sync_interval(flux_register, diagnostic);
+                Abort("SBM admitted coarse candidate could not consume its pending amount: " +
+                      diagnostic);
+            }
+            sbm_state_manager->publish_synchronized_state(lev, candidate);
+            sbm_state_manager->project_to_core(
+                lev, vars_new[lev][Vars::cons], solverChoice.moisture_indices.qc,
+                solverChoice.moisture_indices.qr);
+        }
+    }
+
+    if (cloud_chamber_budget) {
+        cloud_chamber_budget->report(
+            nstep + 1, time, vars_new[0][Vars::cons], geom[0],
+            solverChoice.moisture_type == MoistureType::SatAdj);
     }
 
     if (is_it_time_for_action(nstep, time, dt_lev0, sum_interval, sum_per)) {

@@ -17,6 +17,8 @@
 #include "ERF_ProbCommon.H"
 #include "ERF_SBMStateManager.H"
 #include "ERF_SBMTransport.H"
+#include "ERF_SBMAMRFluxRegister.H"
+#include "ERF_SBMAMRTransfer.H"
 
 using namespace amrex;
 
@@ -145,6 +147,8 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba_in,
         }
         AMREX_ALWAYS_ASSERT(sbm_transport != nullptr);
         sbm_transport->define(lev, ba, dm);
+        bind_sbm_amr_flux_registers(lev);
+        if (lev > 0) { bind_sbm_amr_flux_registers(lev - 1); }
     }
 
     // define_level (inside init_stuff) filled the two-stream SEB state with the scalar
@@ -416,8 +420,6 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
 {
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!auxiliary_inert_tracer,
         "M2 auxiliary inert tracer fixture does not support coarse-to-fine initialization");
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!sbm_state_manager,
-        "SBM M3 does not support coarse-to-fine spectral initialization");
     //
     // Note that "time" here is elapsed time
     //
@@ -829,6 +831,56 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
         initRayleigh_at_level(lev);
     }
 
+    // Build the fine spectral current state only after ERF has finalized the
+    // new host density, geometry, map factors and Jacobian. The manager's
+    // existing new-state buffer is the target-time view; the private candidate
+    // is temporary and is published only after carrier-relative admission.
+    if (sbm_state_manager) {
+        AMREX_ALWAYS_ASSERT(sbm_transport != nullptr && lev > 0);
+        sbm_state_manager->define(lev, ba, dm, static_cast<double>(time));
+        sbm_transport->define(lev, ba, dm);
+        bind_sbm_amr_flux_registers(lev);
+        bind_sbm_amr_flux_registers(lev - 1);
+        AMREX_ALWAYS_ASSERT(detJ_cc[lev] != nullptr &&
+                            mapfac[lev][MapFacType::m_x] != nullptr &&
+                            mapfac[lev][MapFacType::m_y] != nullptr);
+        std::string diagnostic;
+        if (!sbm_transport->rebuild_static_measure(
+                lev, *detJ_cc[lev], *mapfac[lev][MapFacType::m_x],
+                *mapfac[lev][MapFacType::m_y], diagnostic)) {
+            Abort("SBM fine-level mapped measure: " + diagnostic);
+        }
+        AMREX_ALWAYS_ASSERT(sbm_transport->measure_is_ready(lev - 1));
+        const double coarse_time = sbm_state_manager->new_time(lev - 1);
+        const double fine_time = static_cast<double>(time);
+        const auto& coarse_measure = sbm_transport->static_measure(lev - 1);
+        const auto& fine_measure = sbm_transport->static_measure(lev);
+        const auto& coarse_spectrum = sbm_state_manager->new_state(lev - 1);
+        const auto& fine_target = sbm_state_manager->new_state(lev);
+        erf_sbm::SBMAMRStateView coarse_view{
+            &coarse_spectrum, coarse_time,
+            &vars_new[lev - 1][Vars::cons], Rho_comp, coarse_time,
+            &coarse_measure, 0, coarse_time};
+        erf_sbm::SBMAMRStateView fine_view{
+            &fine_target, fine_time,
+            &vars_new[lev][Vars::cons], Rho_comp, fine_time,
+            &fine_measure, 0, fine_time};
+        MultiFab candidate(ba, dm, sbm_state_manager->layout().ncomp(), 0);
+        if (!erf_sbm::ProlongCarrierRelativeSpectrum(
+                sbm_state_manager->layout(), coarse_view, fine_view,
+                geom[lev - 1], geom[lev], ref_ratio[lev - 1], lev,
+                candidate, diagnostic)) {
+            Abort("SBM fine-level carrier-relative initialization: " + diagnostic);
+        }
+        if (!sbm_state_manager->accept_synchronized_state(
+                lev, candidate, fine_time, diagnostic)) {
+            Abort("SBM fine-level candidate publication: " + diagnostic);
+        }
+        sbm_state_manager->project_to_core(
+            lev, vars_new[lev][Vars::cons], solverChoice.moisture_indices.qc,
+            solverChoice.moisture_indices.qr);
+    }
+
 }
 
 // Remake an existing level using provided BoxArray and DistributionMapping and
@@ -841,7 +893,7 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!auxiliary_inert_tracer,
         "M2 auxiliary inert tracer fixture does not support regrid/remake");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!sbm_state_manager,
-        "SBM M3 does not support regridding or spectral remap");
+        "SBM M3/M4b does not support regridding until conservative hierarchy remap is qualified");
     //
     // Note that "time" here is elapsed time
     //
@@ -1529,6 +1581,14 @@ ERF::ClearLevel (int lev)
     if (sbm_transport && sbm_transport->is_defined(lev)) {
         sbm_transport->destroy(lev);
     }
+    if (lev >= 0 && lev < static_cast<int>(sbm_amr_flux_regs.size())) {
+        sbm_amr_flux_regs[lev].reset();
+    }
+    if (lev + 1 >= 0 && lev + 1 < static_cast<int>(sbm_amr_flux_regs.size())) {
+        sbm_amr_flux_regs[lev + 1].reset();
+    }
+    bind_sbm_amr_flux_registers(lev - 1);
+    bind_sbm_amr_flux_registers(lev + 1);
     for (int var_idx = 0; var_idx < Vars::NumTypes; ++var_idx) {
         vars_new[lev][var_idx].clear();
         vars_old[lev][var_idx].clear();

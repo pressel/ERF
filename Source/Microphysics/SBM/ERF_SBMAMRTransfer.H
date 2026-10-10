@@ -38,6 +38,19 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
                              std::string& diagnostic);
 
 /**
+ * Private-candidate variant for coarse synchronization. The caller supplies
+ * an unpublished full-spectrum buffer; it may be overwritten on failure.
+ * The routine reuses it for the restricted mapped amount and final spectrum.
+ */
+bool RestrictMappedSpectrumPrivate (const SBMLayout& layout,
+                                    const SBMAMRStateView& fine,
+                                    const SBMAMRStateView& coarse,
+                                    const amrex::IntVect& ratio,
+                                    int coarse_level,
+                                    amrex::MultiFab& private_candidate,
+                                    std::string& diagnostic);
+
+/**
  * Form a same-time piecewise-constant carrier-relative fine candidate. On
  * success, overwrite the destination's valid cells with the complete, admitted
  * result. On failure (including a rejection on another MPI rank), leave every

@@ -14,6 +14,7 @@
 #include "ERF_SBMRemapping.H"
 #include "ERF_SBMStateManager.H"
 #include "ERF_SBMTransport.H"
+#include "ERF_SBMAMRFluxRegister.H"
 
 #include <algorithm>
 #include <string>
@@ -321,7 +322,7 @@ ERF::ERF_shared ()
         sbm_state_manager = std::make_unique<erf_sbm::SBMStateManager>(
             std::move(layout), max_level + 1);
         sbm_transport = std::make_unique<erf_sbm::SBMTransport>(
-            sbm_state_manager->layout(), max_level + 1);
+            sbm_state_manager->layout(), max_level + 1, 16, false);
     }
     // Create one invocation identity after inputs are available and before
     // InitData can read restart metadata or write an output on restart.
@@ -529,6 +530,7 @@ ERF::ERF_shared ()
     th_bc_data.resize(nlevs_max);
 
     advflux_reg.resize(nlevs_max);
+    sbm_amr_flux_regs.resize(nlevs_max);
 
     // Stresses
     Tau.resize(nlevs_max);

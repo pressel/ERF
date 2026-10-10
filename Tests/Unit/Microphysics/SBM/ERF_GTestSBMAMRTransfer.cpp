@@ -1,18 +1,26 @@
 #include <gtest/gtest.h>
 
 #include <AMReX_BoxArray.H>
+#include <AMReX_BaseFab.H>
 #include <AMReX_Geometry.H>
 #include <AMReX_Math.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_MultiFabUtil.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_YAFluxRegister.H>
 
 #include "ERF_SBMAMRTransfer.H"
+#include "ERF_SBMAMRFluxRegister.H"
 #include "ERF_SBMRestart.H"
 
 #include <cmath>
 #include <limits>
 #include <string>
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -23,8 +31,99 @@ using amrex::BoxArray;
 using amrex::DistributionMapping;
 using amrex::Geometry;
 using amrex::IntVect;
+using amrex::MFIter;
 using amrex::MultiFab;
 using amrex::Real;
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+Real ya_oracle_coarse_flux (int dir, int i, int j, int k, int n) noexcept
+{
+    return Real(1.0) + Real(3.0) * dir + Real(0.1) * i + Real(0.2) * j +
+           Real(0.3) * k + Real(0.01) * n;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+Real ya_oracle_fine_flux (int dir, int i, int j, int k, int n) noexcept
+{
+    return Real(2.0) + Real(5.0) * dir + Real(0.01) * i + Real(0.02) * j +
+           Real(0.03) * k + Real(0.001) * n;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+Real accepted_chunk_rate (int dir, int i, int j, int k, int global_component,
+                          int method, int stage, int substep) noexcept
+{
+    const Real low = Real(0.4) + Real(0.03) * dir + Real(0.001) * i +
+                     Real(0.002) * j + Real(0.003) * k +
+                     Real(0.004) * global_component;
+    const Real high = low + Real(0.8) + Real(0.01) * stage +
+                      Real(0.02) * substep;
+    const Real lambda = Real(0.35) + Real(0.01) * (global_component % 4);
+    return low + lambda * (high - low);
+}
+
+erf_auxiliary::MappedFaceFluxRate make_rate_chunk (
+    const BoxArray& cell_ba, const DistributionMapping& mapping,
+    const int first_global_component, const int ncomp,
+    const int method, const int stage, const int substep)
+{
+    erf_auxiliary::MappedFaceFluxRate rate;
+    rate.define(cell_ba, mapping, ncomp, 0);
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        auto& field = rate.dir(dir);
+        for (MFIter mfi(field, false); mfi.isValid(); ++mfi) {
+            const Box box = mfi.validbox();
+            const auto flux = field.array(mfi);
+            ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k, int local) noexcept {
+                flux(i,j,k,local) = accepted_chunk_rate(
+                    dir, i, j, k, first_global_component + local,
+                    method, stage, substep);
+            });
+        }
+    }
+    amrex::Gpu::streamSynchronize();
+    return rate;
+}
+
+void accumulate_reference_integral (
+    erf_auxiliary::IntegratedMappedFaceFlux& integral,
+    const erf_auxiliary::MappedFaceFluxRate& rate,
+    const int first_global_component, const double weight)
+{
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        for (int local = 0; local < rate.nComp(); ++local) {
+            MultiFab::Saxpy(integral.dir(dir), static_cast<Real>(weight),
+                            rate.dir(dir), local,
+                            first_global_component + local, 1, 0);
+        }
+    }
+}
+
+void add_integral_to_reference_register (
+    amrex::YAFluxRegister& flux_register,
+    const erf_auxiliary::IntegratedMappedFaceFlux& integral,
+    const BoxArray& cell_ba, const DistributionMapping& mapping,
+    const amrex::Geometry& geometry, const bool coarse_side)
+{
+    MultiFab cell_layout(cell_ba, mapping, 1, 0,
+                         amrex::MFInfo().SetAlloc(false));
+    const auto dx = geometry.CellSizeArray();
+    for (MFIter mfi(cell_layout, amrex::TilingIfNotGPU());
+         mfi.isValid(); ++mfi) {
+        std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> faces{};
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            faces[static_cast<std::size_t>(dir)] = &integral.dir(dir)[mfi];
+        }
+        if (coarse_side) {
+            flux_register.CrseAdd(mfi, faces, dx.data(), Real(1.0),
+                                  amrex::RunOn::Host);
+        } else {
+            flux_register.FineAdd(mfi, faces, dx.data(), Real(1.0),
+                                  amrex::RunOn::Host);
+        }
+    }
+}
 
 struct ComponentOffsets {
     int one_mass;
@@ -238,6 +337,24 @@ void expect_same_values (const MultiFab& actual, const MultiFab& expected)
     }
 }
 
+void expect_roundoff_equivalent (const MultiFab& actual,
+                                 const MultiFab& expected)
+{
+    ASSERT_EQ(actual.nComp(), expected.nComp());
+    MultiFab difference(actual.boxArray(), actual.DistributionMap(),
+                        actual.nComp(), 0);
+    MultiFab::Copy(difference, actual, 0, 0, actual.nComp(), 0);
+    MultiFab::Subtract(difference, expected, 0, 0, actual.nComp(), 0);
+    constexpr Real operation_reordering_bound =
+        Real(64.0) * std::numeric_limits<Real>::epsilon();
+    for (int component = 0; component < actual.nComp(); ++component) {
+        const Real scale = std::max(
+            Real(1.0), std::max(actual.norm0(component), expected.norm0(component)));
+        EXPECT_LE(difference.norm0(component), operation_reordering_bound * scale)
+            << "component=" << component;
+    }
+}
+
 Geometry make_geometry (const Box& domain)
 {
     const amrex::RealBox physical({0.0, 0.0, 0.0}, {1.0, 1.0, 1.0});
@@ -333,6 +450,23 @@ void run_restriction_averages_mapped_amount_and_preserves_uncovered_state ()
         layout, fine_view, coarse_view, ratio, 0, candidate, diagnostic)) << diagnostic;
     ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
         candidate, layout, 0, &diagnostic)) << diagnostic;
+
+    MultiFab private_candidate(coarse_ba, coarse_dm, layout.ncomp(), 0);
+    private_candidate.setVal(Real(99.0));
+    ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
+        layout, fine_view, coarse_view, ratio, 0, private_candidate,
+        diagnostic)) << diagnostic;
+    MultiFab private_difference(coarse_ba, coarse_dm, layout.ncomp(), 0);
+    MultiFab::Copy(private_difference, private_candidate, 0, 0,
+                   layout.ncomp(), 0);
+    MultiFab::Subtract(private_difference, candidate, 0, 0,
+                       layout.ncomp(), 0);
+    for (int component = 0; component < layout.ncomp(); ++component) {
+        EXPECT_LE(private_difference.norm0(component),
+                  Real(64.0) * std::numeric_limits<Real>::epsilon())
+            << "private synchronization candidate differs from the independent "
+            << "transactional restriction oracle at component " << component;
+    }
 
     // Independently evaluate every child amount from its analytic fixture
     // values.  The expected candidate includes the preexisting uncovered U.
@@ -1059,6 +1193,524 @@ run_prolongation_diagnostic_precedence ()
 TEST(SBMAMRTransfer, ProlongationPreservesDiagnosticPrecedence)
 {
     run_prolongation_diagnostic_precedence();
+}
+
+TEST(SBMAMRYA, SignedMappedCorrectionMatchesIndependentFaceAmounts)
+{
+    ASSERT_EQ(AMREX_SPACEDIM, 3);
+    const auto layout = make_transfer_layout();
+    const int ncomp = layout.ncomp();
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(7));
+    const Box fine_domain(IntVect(0), IntVect(15));
+    const Box covered_fine_box = amrex::refine(Box(IntVect(2), IntVect(5)), ratio);
+    const BoxArray coarse_ba(coarse_domain);
+    const BoxArray fine_ba(covered_fine_box);
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+
+    MultiFab coarse_cells(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab fine_cells(fine_ba, fine_dm, ncomp, 0);
+    for (int n = 0; n < ncomp; ++n) {
+        coarse_cells.setVal(Real(0.25) * (n + 1), n, 1, 0);
+    }
+
+    std::array<MultiFab, AMREX_SPACEDIM> coarse_flux;
+    std::array<MultiFab, AMREX_SPACEDIM> fine_flux;
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        BoxArray coarse_faces = coarse_ba;
+        BoxArray fine_faces = fine_ba;
+        coarse_faces.surroundingNodes(dir);
+        fine_faces.surroundingNodes(dir);
+        coarse_flux[dir].define(coarse_faces, coarse_dm, ncomp, 0);
+        fine_flux[dir].define(fine_faces, fine_dm, ncomp, 0);
+        for (MFIter mfi(coarse_flux[dir], false); mfi.isValid(); ++mfi) {
+            const Box box = mfi.validbox();
+            const auto flux = coarse_flux[dir].array(mfi);
+            ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k, int n) noexcept {
+                flux(i,j,k,n) = ya_oracle_coarse_flux(dir, i, j, k, n);
+            });
+        }
+        for (MFIter mfi(fine_flux[dir], false); mfi.isValid(); ++mfi) {
+            const Box box = mfi.validbox();
+            const auto flux = fine_flux[dir].array(mfi);
+            ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k, int n) noexcept {
+                flux(i,j,k,n) = ya_oracle_fine_flux(dir, i, j, k, n);
+            });
+        }
+    }
+    amrex::Gpu::streamSynchronize();
+
+    amrex::YAFluxRegister register_for_sbm(
+        fine_ba, coarse_ba, fine_dm, coarse_dm, fine_geom, coarse_geom,
+        ratio, 1, ncomp);
+    register_for_sbm.reset();
+    const auto coarse_dx = coarse_geom.CellSizeArray();
+    const auto fine_dx = fine_geom.CellSizeArray();
+    for (MFIter mfi(coarse_cells, false); mfi.isValid(); ++mfi) {
+        std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> fluxes{
+            &coarse_flux[0][mfi], &coarse_flux[1][mfi], &coarse_flux[2][mfi]};
+        register_for_sbm.CrseAdd(mfi, fluxes, coarse_dx.data(), Real(1.0),
+                                 amrex::RunOn::Host);
+    }
+    for (MFIter mfi(fine_cells, false); mfi.isValid(); ++mfi) {
+        std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> fluxes{
+            &fine_flux[0][mfi], &fine_flux[1][mfi], &fine_flux[2][mfi]};
+        register_for_sbm.FineAdd(mfi, fluxes, fine_dx.data(), Real(1.0),
+                                 amrex::RunOn::Host);
+    }
+    register_for_sbm.Reflux(coarse_cells, 0, 0, ncomp);
+    amrex::Gpu::streamSynchronize();
+
+    const auto coarse_dx_product =
+        coarse_dx[0] * coarse_dx[1] * coarse_dx[2];
+    const int tangential[3][2] = {{1, 2}, {0, 2}, {0, 1}};
+    for (MFIter mfi(coarse_cells, false); mfi.isValid(); ++mfi) {
+        const Box box = mfi.validbox();
+        const auto state = coarse_cells.const_array(mfi);
+        for (int k = box.smallEnd(2); k <= box.bigEnd(2); ++k) {
+            for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+                for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                    const int c[3] = {i, j, k};
+                    const bool covered = i >= 2 && i <= 5 &&
+                                         j >= 2 && j <= 5 &&
+                                         k >= 2 && k <= 5;
+                    const Real omega = Real(1.5) + Real(0.01) * i +
+                                       Real(0.02) * j + Real(0.03) * k;
+                    for (int n = 0; n < ncomp; ++n) {
+                        const Real initial = Real(0.25) * (n + 1);
+                        Real expected_delta_h = Real(0.0);
+                        Real expected_delta_q = Real(0.0);
+                        if (!covered) {
+                            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                                for (int side : {-1, 1}) {
+                                    const int neighbor = c[dir] + side;
+                                    const bool neighbor_covered = neighbor >= 2 &&
+                                        neighbor <= 5 &&
+                                        c[(dir + 1) % 3] >= 2 &&
+                                        c[(dir + 1) % 3] <= 5 &&
+                                        c[(dir + 2) % 3] >= 2 &&
+                                        c[(dir + 2) % 3] <= 5;
+                                    if (!neighbor_covered) continue;
+
+                                    const int face = c[dir] + (side > 0 ? 1 : 0);
+                                    int coarse_face[3] = {i, j, k};
+                                    coarse_face[dir] = face;
+                                    const Real coarse_integral =
+                                        ya_oracle_coarse_flux(
+                                            dir, coarse_face[0], coarse_face[1],
+                                            coarse_face[2], n);
+
+                                    int fine_face[3] = {2*i, 2*j, 2*k};
+                                    fine_face[dir] = 2 * face;
+                                    Real fine_sum = Real(0.0);
+                                    for (int a = 0; a < 2; ++a) {
+                                        for (int b = 0; b < 2; ++b) {
+                                            int subface[3] = {fine_face[0],
+                                                              fine_face[1],
+                                                              fine_face[2]};
+                                            subface[tangential[dir][0]] += a;
+                                            subface[tangential[dir][1]] += b;
+                                            fine_sum += ya_oracle_fine_flux(
+                                                dir, subface[0], subface[1],
+                                                subface[2], n);
+                                        }
+                                    }
+                                    const Real sigma = side > 0
+                                        ? Real(1.0) : Real(-1.0);
+                                    expected_delta_h += sigma / coarse_dx[dir] *
+                                        (coarse_integral - fine_sum / Real(4.0));
+
+                                    const Real coarse_area =
+                                        coarse_dx_product / coarse_dx[dir];
+                                    const Real fine_cell_volume =
+                                        coarse_dx_product / Real(8.0);
+                                    const Real fine_area =
+                                        fine_cell_volume / fine_dx[dir];
+                                    expected_delta_q += sigma *
+                                        (coarse_area * coarse_integral -
+                                         fine_area * fine_sum);
+                                }
+                            }
+                        }
+                        const Real expected = initial + expected_delta_h;
+                        EXPECT_NEAR(state(i,j,k,n), expected, Real(2.0e-11))
+                            << "cell=" << i << ',' << j << ',' << k
+                            << " component=" << n;
+                        const Real delta_u = (state(i,j,k,n) - initial) / omega;
+                        const Real mapped_amount = coarse_dx_product * omega * delta_u;
+                        EXPECT_NEAR(mapped_amount,
+                                     expected_delta_q,
+                                     Real(2.0e-11));
+                        if (covered) {
+                            EXPECT_EQ(state(i,j,k,n), initial)
+                                << "covered coarse parent changed at "
+                                << i << ',' << j << ',' << k
+                                << " component=" << n;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
+{
+    const auto layout = make_transfer_layout();
+    const int ncomp = layout.ncomp();
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(7));
+    const Box fine_domain(IntVect(0), IntVect(15));
+    const BoxArray coarse_ba(coarse_domain);
+    const BoxArray fine_ba(amrex::refine(Box(IntVect(2), IntVect(5)), ratio));
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+    const double coarse_begin = 0.0;
+    const double coarse_end = 0.3;
+    constexpr int fine_substeps = 2;
+    const double fine_dt = (coarse_end - coarse_begin) / fine_substeps;
+
+    for (const auto method : {erf_auxiliary::HostIntegrator::CompressibleRK3,
+                              erf_auxiliary::HostIntegrator::AnelasticHeun}) {
+        const int method_id = method ==
+            erf_auxiliary::HostIntegrator::CompressibleRK3 ? 0 : 1;
+        const int stages = method_id == 0 ? 3 : 2;
+        const auto stage_weight = [=] (int stage, double dt) {
+            if (method_id == 0) return stage == 2 ? dt : 0.0;
+            return 0.5 * dt;
+        };
+
+        erf_sbm::SBMAMRFluxRegister direct_register;
+        direct_register.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                               fine_geom, coarse_geom, ratio, 1, ncomp);
+        std::string diagnostic;
+        ASSERT_TRUE(direct_register.begin_interval(
+            coarse_begin, coarse_end, fine_substeps, diagnostic)) << diagnostic;
+
+        erf_auxiliary::IntegratedMappedFaceFlux coarse_integral;
+        coarse_integral.define(coarse_ba, coarse_dm, ncomp, 0);
+        coarse_integral.setVal(Real(0.0));
+        erf_auxiliary::IntegratedMappedFaceFlux fine_integral;
+        fine_integral.define(fine_ba, fine_dm, ncomp, 0);
+        fine_integral.setVal(Real(0.0));
+
+        auto advance_reference_step = [&] (
+            const bool coarse_side, const double step_begin,
+            const double step_end, const double dt, const int substep) {
+            const auto& ba = coarse_side ? coarse_ba : fine_ba;
+            const auto& dm = coarse_side ? coarse_dm : fine_dm;
+            auto& integral = coarse_side ? coarse_integral : fine_integral;
+            for (int stage = 0; stage < stages; ++stage) {
+                EXPECT_TRUE(direct_register.begin_stage(
+                    coarse_side, method, stage, step_begin, diagnostic))
+                    << diagnostic;
+                const double weight = stage_weight(stage, dt);
+                // Reverse chunk order on alternating stages/substeps.  The
+                // global component identity must be independent of traversal.
+                for (int chunk = 1; chunk >= 0; --chunk) {
+                    const int first = chunk * 5;
+                    auto accepted = make_rate_chunk(
+                        ba, dm, first, 5, method_id, stage, substep);
+                    const std::vector<int> component_map{
+                        first, first + 1, first + 2, first + 3, first + 4};
+                    ASSERT_TRUE(direct_register.add_stage_rates(
+                        coarse_side, accepted, component_map, weight,
+                        diagnostic)) << diagnostic;
+                    accumulate_reference_integral(
+                        integral, accepted, first, weight);
+                }
+                EXPECT_TRUE(direct_register.finish_stage(
+                    coarse_side, diagnostic)) << diagnostic;
+            }
+            EXPECT_TRUE(direct_register.accept_level_step(
+                coarse_side, step_begin, step_end, diagnostic)) << diagnostic;
+        };
+
+        ASSERT_TRUE(direct_register.begin_level_step(
+            true, coarse_begin, coarse_end, diagnostic)) << diagnostic;
+        advance_reference_step(true, coarse_begin, coarse_end,
+                               coarse_end - coarse_begin, 0);
+
+        MultiFab direct_state(coarse_ba, coarse_dm, ncomp, 0);
+        MultiFab reference_state(coarse_ba, coarse_dm, ncomp, 0);
+        MultiFab before_reflux(coarse_ba, coarse_dm, ncomp, 0);
+        for (int n = 0; n < ncomp; ++n) {
+            direct_state.setVal(Real(0.25) * (n + 1), n, 1, 0);
+            reference_state.setVal(Real(0.25) * (n + 1), n, 1, 0);
+        }
+
+        for (int substep = 0; substep < fine_substeps; ++substep) {
+            const double step_begin = coarse_begin + substep * fine_dt;
+            const double step_end = step_begin + fine_dt;
+            ASSERT_TRUE(direct_register.begin_level_step(
+                false, step_begin, step_end, diagnostic)) << diagnostic;
+            advance_reference_step(false, step_begin, step_end,
+                                   fine_dt, substep + 1);
+            if (substep == 0) {
+                EXPECT_FALSE(direct_register.ready_to_reflux());
+                MultiFab::Copy(before_reflux, direct_state, 0, 0, ncomp, 0);
+                EXPECT_FALSE(direct_register.reflux(direct_state, diagnostic));
+                expect_same_values(direct_state, before_reflux);
+            }
+        }
+        ASSERT_TRUE(direct_register.ready_to_reflux());
+
+        amrex::YAFluxRegister reference_register(
+            fine_ba, coarse_ba, fine_dm, coarse_dm, fine_geom, coarse_geom,
+            ratio, 1, ncomp);
+        reference_register.reset();
+        add_integral_to_reference_register(
+            reference_register, coarse_integral, coarse_ba, coarse_dm,
+            coarse_geom, true);
+        add_integral_to_reference_register(
+            reference_register, fine_integral, fine_ba, fine_dm,
+            fine_geom, false);
+        reference_register.Reflux(reference_state, 0, 0, ncomp);
+        amrex::Gpu::streamSynchronize();
+
+        ASSERT_TRUE(direct_register.reflux(direct_state, diagnostic))
+            << diagnostic;
+        expect_roundoff_equivalent(direct_state, reference_state);
+        EXPECT_TRUE(direct_register.has_outstanding_amount());
+        ASSERT_TRUE(direct_register.accept_reflux(diagnostic)) << diagnostic;
+        EXPECT_FALSE(direct_register.has_outstanding_amount());
+        MultiFab consumed_snapshot(coarse_ba, coarse_dm, ncomp, 0);
+        MultiFab::Copy(consumed_snapshot, direct_state, 0, 0, ncomp, 0);
+        EXPECT_FALSE(direct_register.reflux(direct_state, diagnostic));
+        expect_same_values(direct_state, consumed_snapshot);
+    }
+}
+
+TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
+{
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(31));
+    const Box fine_domain(IntVect(0), IntVect(63));
+    BoxArray coarse_ba(coarse_domain);
+    coarse_ba.maxSize(16);
+    BoxArray fine_ba(amrex::refine(Box(IntVect(8), IntVect(23)), ratio));
+    fine_ba.maxSize(16);
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+    constexpr int chunk_components = 16;
+
+    auto payload_bytes = [] (const MultiFab& field) {
+        std::uint64_t bytes = 0;
+        for (amrex::MFIter mfi(field); mfi.isValid(); ++mfi) {
+            const auto& fab = field[mfi];
+            bytes += static_cast<std::uint64_t>(fab.box().numPts()) *
+                     static_cast<std::uint64_t>(fab.nComp()) * sizeof(Real);
+        }
+        return bytes;
+    };
+    auto valid_payload_bytes = [] (const MultiFab& field) {
+        std::uint64_t bytes = 0;
+        for (amrex::MFIter mfi(field); mfi.isValid(); ++mfi) {
+            bytes += static_cast<std::uint64_t>(mfi.validbox().numPts()) *
+                     static_cast<std::uint64_t>(field.nComp()) * sizeof(Real);
+        }
+        return bytes;
+    };
+
+    for (const int ncomp : {32, 128, 256}) {
+        std::uint64_t local_coarse_cells = 0;
+        std::uint64_t local_fine_cells = 0;
+        for (int box = 0; box < coarse_ba.size(); ++box) {
+            if (coarse_dm[box] == amrex::ParallelDescriptor::MyProc()) {
+                local_coarse_cells +=
+                    static_cast<std::uint64_t>(coarse_ba[box].numPts());
+            }
+        }
+        for (int box = 0; box < fine_ba.size(); ++box) {
+            if (fine_dm[box] == amrex::ParallelDescriptor::MyProc()) {
+                local_fine_cells +=
+                    static_cast<std::uint64_t>(fine_ba[box].numPts());
+            }
+        }
+        const std::uint64_t dense_coarse_bytes = local_coarse_cells *
+            static_cast<std::uint64_t>(ncomp) * sizeof(Real);
+        const auto before = amrex::TotalBytesAllocatedInFabs();
+        std::uint64_t direct_allocated = 0;
+        std::uint64_t reference_extra = 0;
+        {
+            erf_sbm::SBMAMRFluxRegister owner;
+            owner.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                         fine_geom, coarse_geom, ratio, 1, ncomp);
+            erf_auxiliary::MappedFaceFluxRate low, high, accepted, lambda,
+                projected;
+            low.define(fine_ba, fine_dm, chunk_components, 0);
+            high.define(fine_ba, fine_dm, chunk_components, 0);
+            accepted.define(fine_ba, fine_dm, chunk_components, 0);
+            lambda.define(fine_ba, fine_dm, 1, 0);
+            projected.define(fine_ba, fine_dm, 2, 0);
+            low.setVal(Real(0.0));
+            high.setVal(Real(0.0));
+            accepted.setVal(Real(0.0));
+            lambda.setVal(Real(0.0));
+            projected.setVal(Real(0.0));
+            erf_auxiliary::IntegratedMappedFaceFlux projected_ledger;
+            projected_ledger.define(fine_ba, fine_dm, 2, 0);
+            projected_ledger.setVal(Real(0.0));
+            erf_auxiliary::MappedFaceFluxRate coarse_low, coarse_high,
+                coarse_accepted, coarse_lambda, coarse_projected;
+            coarse_low.define(coarse_ba, coarse_dm, chunk_components, 0);
+            coarse_high.define(coarse_ba, coarse_dm, chunk_components, 0);
+            coarse_accepted.define(coarse_ba, coarse_dm, chunk_components, 0);
+            coarse_lambda.define(coarse_ba, coarse_dm, 1, 0);
+            coarse_projected.define(coarse_ba, coarse_dm, 2, 0);
+            coarse_low.setVal(Real(0.0));
+            coarse_high.setVal(Real(0.0));
+            coarse_accepted.setVal(Real(0.0));
+            coarse_lambda.setVal(Real(0.0));
+            coarse_projected.setVal(Real(0.0));
+            erf_auxiliary::IntegratedMappedFaceFlux coarse_projected_ledger;
+            coarse_projected_ledger.define(coarse_ba, coarse_dm, 2, 0);
+            coarse_projected_ledger.setVal(Real(0.0));
+            amrex::Gpu::streamSynchronize();
+            direct_allocated = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - before);
+
+            // Count the existing M3 transport storage on both active levels:
+            // anchor/target, four full-component WENO input views with their
+            // two-cell ghost regions, and the old/new authoritative views.
+            const auto persistent_before = amrex::TotalBytesAllocatedInFabs();
+            std::vector<std::unique_ptr<MultiFab>> persistent_fields;
+            auto add_persistent_field = [&] (const BoxArray& ba,
+                                             const DistributionMapping& dm,
+                                             const int components,
+                                             const int ghosts) {
+                auto field = std::make_unique<MultiFab>(
+                    ba, dm, components, ghosts);
+                field->setVal(Real(0.0));
+                persistent_fields.push_back(std::move(field));
+            };
+            for (const auto& level : std::array{
+                     std::pair<const BoxArray*, const DistributionMapping*>{
+                         &coarse_ba, &coarse_dm},
+                     std::pair<const BoxArray*, const DistributionMapping*>{
+                         &fine_ba, &fine_dm}}) {
+                for (int state_view = 0; state_view < 2; ++state_view) {
+                    add_persistent_field(*level.first, *level.second,
+                                         ncomp, 0);
+                }
+                for (int transport_view = 0; transport_view < 2;
+                     ++transport_view) {
+                    add_persistent_field(*level.first, *level.second,
+                                         ncomp, 0);
+                }
+                for (int ghost_view = 0; ghost_view < 4; ++ghost_view) {
+                    add_persistent_field(*level.first, *level.second,
+                                         ncomp, 2);
+                }
+                add_persistent_field(*level.first, *level.second,
+                                     chunk_components, 0); // low_trial_h
+                add_persistent_field(*level.first, *level.second,
+                                     1, 1); // minimum cell_ratios storage
+                for (int scalar_view = 0; scalar_view < 3; ++scalar_view) {
+                    add_persistent_field(*level.first, *level.second, 1, 0);
+                }
+            }
+            amrex::Gpu::streamSynchronize();
+            const auto state_and_transport_bytes = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - persistent_before);
+            const auto persistent_payload = [&] () {
+                std::uint64_t bytes = 0;
+                for (const auto& field : persistent_fields) {
+                    bytes += payload_bytes(*field);
+                }
+                return bytes;
+            }();
+            std::uint64_t ghost_region_bytes = 0;
+            for (std::size_t field = 0; field < persistent_fields.size(); ++field) {
+                if (field % 13 >= 4 && field % 13 < 8) {
+                    ghost_region_bytes += payload_bytes(*persistent_fields[field]) -
+                                          valid_payload_bytes(*persistent_fields[field]);
+                }
+            }
+            EXPECT_EQ(state_and_transport_bytes, persistent_payload);
+
+            // Peak synchronization scratch: the one full coarse candidate,
+            // one fine mapped-H field, and the scalar support/coverage masks.
+            const auto sync_before = amrex::TotalBytesAllocatedInFabs();
+            MultiFab coarse_candidate(coarse_ba, coarse_dm, ncomp, 0);
+            MultiFab fine_mapped(fine_ba, fine_dm, ncomp, 0);
+            MultiFab fine_support(fine_ba, fine_dm, 1, 0);
+            MultiFab fine_coverage(fine_ba, fine_dm, 1, 0);
+            MultiFab coarse_support(coarse_ba, coarse_dm, 1, 0);
+            MultiFab coarse_coverage(coarse_ba, coarse_dm, 1, 0);
+            MultiFab lost_support(coarse_ba, coarse_dm, 1, 0);
+            MultiFab fine_invalid(fine_ba, fine_dm, 1, 0);
+            MultiFab coarse_invalid(coarse_ba, coarse_dm, 1, 0);
+            coarse_candidate.setVal(Real(0.0));
+            fine_mapped.setVal(Real(0.0));
+            fine_support.setVal(Real(0.0));
+            fine_coverage.setVal(Real(0.0));
+            coarse_support.setVal(Real(0.0));
+            coarse_coverage.setVal(Real(0.0));
+            lost_support.setVal(Real(0.0));
+            fine_invalid.setVal(Real(0.0));
+            coarse_invalid.setVal(Real(0.0));
+            amrex::Gpu::streamSynchronize();
+            const auto sync_scratch_bytes = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - sync_before);
+
+            {
+                const auto ledger_before = amrex::TotalBytesAllocatedInFabs();
+                erf_auxiliary::IntegratedMappedFaceFlux reference_ledger;
+                reference_ledger.define(fine_ba, fine_dm, ncomp, 0);
+                reference_ledger.setVal(Real(0.0));
+                erf_auxiliary::IntegratedMappedFaceFlux coarse_reference_ledger;
+                coarse_reference_ledger.define(coarse_ba, coarse_dm, ncomp, 0);
+                coarse_reference_ledger.setVal(Real(0.0));
+                amrex::Gpu::streamSynchronize();
+                reference_extra = static_cast<std::uint64_t>(
+                    amrex::TotalBytesAllocatedInFabs() - ledger_before);
+                EXPECT_EQ(payload_bytes(reference_ledger.dir(0)) +
+                              payload_bytes(reference_ledger.dir(1)) +
+                              payload_bytes(reference_ledger.dir(2)) +
+                              payload_bytes(coarse_reference_ledger.dir(0)) +
+                              payload_bytes(coarse_reference_ledger.dir(1)) +
+                              payload_bytes(coarse_reference_ledger.dir(2)),
+                          reference_extra);
+            }
+
+            const auto direct_peak_bytes = direct_allocated +
+                state_and_transport_bytes + sync_scratch_bytes;
+            for (int rank = 0;
+                 rank < amrex::ParallelDescriptor::NProcs(); ++rank) {
+                if (amrex::ParallelDescriptor::MyProc() == rank) {
+                    std::cout << "SBM_ALLOC_CENSUS ranks="
+                              << amrex::ParallelDescriptor::NProcs()
+                              << " ncomp=" << ncomp
+                              << " rank=" << amrex::ParallelDescriptor::MyProc()
+                              << " coarse_cells_local="
+                              << local_coarse_cells
+                              << " fine_cells_local=" << local_fine_cells
+                              << " YA_dense_coarse_bytes=" << dense_coarse_bytes
+                              << " YA_plus_face_chunks_bytes=" << direct_allocated
+                              << " old_new_transport_and_ghost_bytes="
+                              << state_and_transport_bytes
+                              << " ghost_region_bytes=" << ghost_region_bytes
+                              << " sync_candidate_peak_bytes=" << sync_scratch_bytes
+                              << " direct_sync_peak_total_bytes=" << direct_peak_bytes
+                              << " completed_integral_ledger_bytes=" << reference_extra
+                              << " rate_chunk_components=" << chunk_components
+                              << " cell_ratio_components_assumed=1_minimum"
+                              << std::endl;
+                }
+                amrex::ParallelDescriptor::Barrier();
+            }
+        }
+    }
 }
 
 } // namespace

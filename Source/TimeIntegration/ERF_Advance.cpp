@@ -2,6 +2,7 @@
 #include "ERF_Constants.H"
 #include <ERF_Utils.H>
 #include "Microphysics/SBM/ERF_SBMStateManager.H"
+#include "Microphysics/SBM/ERF_SBMTransport.H"
 
 #ifdef ERF_USE_WINDFARM
 #include <ERF_WindFarm.H>
@@ -30,6 +31,11 @@ ERF::Advance (int lev, double time, double dt_lev, int iteration, int /*ncycle*/
         std::string diagnostic;
         if (!sbm_state_manager->begin_step(lev, time, diagnostic)) {
             Abort("SBM state lifecycle at ERF::Advance: " + diagnostic);
+        }
+        if (!sbm_transport ||
+            !sbm_transport->begin_physical_step(lev, time, time + dt_lev,
+                                                diagnostic)) {
+            Abort("SBM AMR register step lifecycle at ERF::Advance: " + diagnostic);
         }
     }
 

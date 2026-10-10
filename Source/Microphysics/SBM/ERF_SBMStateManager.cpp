@@ -1,8 +1,12 @@
 #include "ERF_SBMStateManager.H"
+#include "AuxiliaryState/ERF_AuxiliaryMappedTransport.H"
 
 #include <AMReX_MFIter.H>
+#include <AMReX_ParallelDescriptor.H>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -185,6 +189,57 @@ bool SBMStateManager::accept_stage_target (const int lev, const double target_ti
     state.new_valid = true;
     if (physical_step_complete) state.step_active = false;
     return true;
+}
+
+bool SBMStateManager::accept_synchronized_state (
+    const int lev, const amrex::MultiFab& candidate,
+    const double semantic_time, std::string& diagnostic)
+{
+    if (!can_accept_synchronized_state(lev, candidate, semantic_time,
+                                       diagnostic)) {
+        return false;
+    }
+    publish_synchronized_state(lev, candidate);
+    return true;
+}
+
+bool SBMStateManager::can_accept_synchronized_state (
+    const int lev, const amrex::MultiFab& candidate,
+    const double semantic_time, std::string& diagnostic) const
+{
+    diagnostic.clear();
+    const auto& state = level(lev);
+    const double scale = std::max({1.0, std::abs(semantic_time),
+                                   std::abs(state.new_time)});
+    const bool time_matches = std::isfinite(semantic_time) &&
+        std::abs(semantic_time - state.new_time) <=
+            64.0 * std::numeric_limits<double>::epsilon() * scale;
+    const bool local_ok = state.new_state != nullptr && state.new_valid &&
+        !state.step_active && time_matches &&
+        candidate.nComp() == m_layout.ncomp() &&
+        erf_auxiliary::SameCellLayout(candidate, *state.new_state);
+    int vote = local_ok ? 1 : 0;
+    amrex::ParallelDescriptor::ReduceIntMin(vote);
+    if (vote == 0) {
+        diagnostic = local_ok
+            ? "SBM synchronized candidate is invalid on another MPI rank"
+            : "SBM synchronized candidate must match the accepted level layout and time";
+        return false;
+    }
+    return true;
+}
+
+void SBMStateManager::publish_synchronized_state (
+    const int lev, const amrex::MultiFab& candidate)
+{
+    auto& state = level(lev);
+    AMREX_ALWAYS_ASSERT(state.new_state != nullptr && state.new_valid &&
+                        !state.step_active &&
+                        candidate.nComp() == m_layout.ncomp() &&
+                        erf_auxiliary::SameCellLayout(candidate,
+                                                      *state.new_state));
+    amrex::MultiFab::Copy(*state.new_state, candidate, 0, 0,
+                          m_layout.ncomp(), 0);
 }
 
 bool SBMStateManager::step_active (const int lev) const

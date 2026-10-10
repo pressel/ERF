@@ -9,8 +9,10 @@
 #include <AMReX_MultiFabUtil.H>
 #include <AMReX_ParallelDescriptor.H>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -19,6 +21,13 @@ namespace {
 
 using amrex::MultiFab;
 using amrex::Real;
+
+bool semantic_time_matches (const double lhs, const double rhs) noexcept
+{
+    const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
+    return std::abs(lhs - rhs) <=
+           64.0 * std::numeric_limits<double>::epsilon() * scale;
+}
 
 bool collective_all_true (const bool local_ok,
                           const std::string& local_diagnostic,
@@ -50,8 +59,8 @@ bool validate_view_structure (const SBMAMRStateView& view,
     if (!std::isfinite(view.spectrum_time) ||
         !std::isfinite(view.density_time) ||
         !std::isfinite(view.measure_time) ||
-        view.spectrum_time != view.density_time ||
-        view.spectrum_time != view.measure_time) {
+        !semantic_time_matches(view.spectrum_time, view.density_time) ||
+        !semantic_time_matches(view.spectrum_time, view.measure_time)) {
         diagnostic = std::string(label) +
                      " spectrum, dry-air density, and mapped measure times do not match";
         return false;
@@ -146,6 +155,45 @@ bool form_mapped_state (const MultiFab& spectrum, const MultiFab& measure,
     const bool locally_valid = invalid.max(0, 0, true) <= Real(0.0);
     if (!locally_valid) {
         diagnostic = "forming mapped spectral amount H=omega*U overflowed or underflowed";
+        return false;
+    }
+    return true;
+}
+
+bool form_covered_mapped_state (const MultiFab& spectrum,
+                                const MultiFab& measure,
+                                const int measure_component,
+                                const MultiFab& covered,
+                                MultiFab& candidate,
+                                std::string& diagnostic)
+{
+    MultiFab::Copy(candidate, spectrum, 0, 0, spectrum.nComp(), 0);
+    MultiFab invalid(spectrum.boxArray(), spectrum.DistributionMap(), 1, 0);
+    invalid.setVal(Real(0.0));
+    const int ncomp = spectrum.nComp();
+    for (amrex::MFIter mfi(spectrum, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box box = mfi.tilebox();
+        const auto state = spectrum.const_array(mfi);
+        const auto omega = measure.const_array(mfi);
+        const auto mask = covered.const_array(mfi);
+        const auto output = candidate.array(mfi);
+        const auto bad = invalid.array(mfi);
+        amrex::ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE(int i, int j, int k, int n) noexcept {
+                if (mask(i, j, k, 0) > Real(0.0)) {
+                    const Real value = state(i, j, k, n);
+                    const Real amount = omega(i, j, k, measure_component) * value;
+                    output(i, j, k, n) = amount;
+                    if (!amrex::Math::isfinite(amount) ||
+                        (value != Real(0.0) && amount == Real(0.0))) {
+                        bad(i, j, k, 0) = Real(1.0);
+                    }
+                }
+            });
+    }
+    const bool local_ok = invalid.max(0, 0, true) <= Real(0.0);
+    if (!local_ok) {
+        diagnostic = "forming covered coarse mapped amount H=omega*U overflowed or underflowed";
         return false;
     }
     return true;
@@ -314,13 +362,11 @@ bool candidate_is_separate (const MultiFab& candidate,
 
 } // namespace
 
-bool RestrictMappedSpectrum (const SBMLayout& layout,
-                             const SBMAMRStateView& fine,
-                             const SBMAMRStateView& coarse,
-                             const amrex::IntVect& ratio,
-                             const int coarse_level,
-                             MultiFab& coarse_candidate,
-                             std::string& diagnostic)
+static bool restrict_mapped_spectrum_impl (
+    const SBMLayout& layout, const SBMAMRStateView& fine,
+    const SBMAMRStateView& coarse, const amrex::IntVect& ratio,
+    const int coarse_level, MultiFab& coarse_candidate,
+    const bool candidate_is_private, std::string& diagnostic)
 {
     diagnostic.clear();
     std::string ratio_diagnostic;
@@ -332,7 +378,8 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
         fine, layout, "fine", fine_structure_diagnostic);
     const bool coarse_structure_ok = validate_view_structure(
         coarse, layout, "coarse", coarse_structure_diagnostic);
-    const bool same_time = fine.spectrum_time == coarse.spectrum_time;
+    const bool same_time = semantic_time_matches(fine.spectrum_time,
+                                                  coarse.spectrum_time);
     // average_down requires complete fine children. Do not query coarsenability
     // until the ratio is positive and the fine spectrum pointer is valid.
     const bool fine_boxes_coarsenable =
@@ -401,16 +448,25 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
 
     MultiFab fine_h(fine.spectrum->boxArray(), fine.spectrum->DistributionMap(),
                     layout.ncomp(), 0);
-    MultiFab coarse_h(coarse.spectrum->boxArray(), coarse.spectrum->DistributionMap(),
-                      layout.ncomp(), 0);
-    const int coverage_component = layout.ncomp();
     const int ncomp = layout.ncomp();
     MultiFab fine_support(fine.spectrum->boxArray(),
-                          fine.spectrum->DistributionMap(), layout.ncomp() + 1,
-                          0);
+                          fine.spectrum->DistributionMap(), 1, 0);
     MultiFab coarse_support(coarse.spectrum->boxArray(),
-                            coarse.spectrum->DistributionMap(),
-                            layout.ncomp() + 1, 0);
+                            coarse.spectrum->DistributionMap(), 1, 0);
+    MultiFab fine_coverage(fine.spectrum->boxArray(),
+                           fine.spectrum->DistributionMap(), 1, 0);
+    MultiFab coarse_coverage(coarse.spectrum->boxArray(),
+                             coarse.spectrum->DistributionMap(), 1, 0);
+    MultiFab lost_positive_support(coarse.spectrum->boxArray(),
+                                   coarse.spectrum->DistributionMap(), 1, 0);
+    MultiFab owned_candidate_scratch;
+    MultiFab* work = &coarse_candidate;
+    if (!candidate_is_private) {
+        owned_candidate_scratch.define(coarse.spectrum->boxArray(),
+                                       coarse.spectrum->DistributionMap(),
+                                       layout.ncomp(), 0);
+        work = &owned_candidate_scratch;
+    }
     std::string fine_mapped_diagnostic;
     const bool fine_mapped_ok = form_mapped_state(
         *fine.spectrum, *fine.mapped_measure, fine.measure_component, fine_h,
@@ -422,59 +478,63 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
         return false;
     }
 
+    fine_coverage.setVal(Real(1.0));
+    coarse_coverage.setVal(Real(0.0));
+    amrex::average_down(fine_coverage, coarse_coverage, 0, 1, ratio);
+    std::string coarse_mapped_diagnostic;
+    const bool coarse_mapped_ok = form_covered_mapped_state(
+        *coarse.spectrum, *coarse.mapped_measure, coarse.measure_component,
+        coarse_coverage, *work, coarse_mapped_diagnostic);
+    if (!collective_all_true(
+            coarse_mapped_ok, coarse_mapped_diagnostic,
+            "SBM restriction coarse mapped-state formation failed on another MPI rank",
+            diagnostic)) {
+        return false;
+    }
+
+    // Average H directly into the private candidate's covered cells. Every
+    // uncovered coarse value remains the original accepted U and is never
+    // multiplied and divided as part of restriction.
+    amrex::average_down(fine_h, *work, 0, layout.ncomp(), ratio);
+
     fine_support.setVal(Real(0.0));
-    for (amrex::MFIter mfi(fine_h, amrex::TilingIfNotGPU()); mfi.isValid();
-         ++mfi) {
-        const amrex::Box box = mfi.tilebox();
-        const auto mapped = fine_h.const_array(mfi);
-        const auto support = fine_support.array(mfi);
-        amrex::ParallelFor(
-            box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-                for (int component = 0; component < ncomp; ++component) {
-                    support(i, j, k, component) =
-                        mapped(i, j, k, component) > Real(0.0) ? Real(1.0)
-                                                               : Real(0.0);
-                }
-                support(i, j, k, coverage_component) = Real(1.0);
-            });
-    }
-
-    // Both averages use the same fine coverage. The extra support components
-    // remember whether any child had positive mapped inventory, even if the
-    // inventory average itself rounds to zero.
-    coarse_h.setVal(Real(0.0));
-    coarse_support.setVal(Real(0.0));
-    amrex::average_down(fine_h, coarse_h, 0, layout.ncomp(), ratio);
-    amrex::average_down(fine_support, coarse_support, 0, layout.ncomp() + 1,
-                        ratio);
-
-    MultiFab lost_positive_support(coarse_h.boxArray(),
-                                   coarse_h.DistributionMap(), 1, 0);
     lost_positive_support.setVal(Real(0.0));
-    for (amrex::MFIter mfi(coarse_h, amrex::TilingIfNotGPU()); mfi.isValid();
-         ++mfi) {
-        const amrex::Box box = mfi.tilebox();
-        const auto mapped = coarse_h.const_array(mfi);
-        const auto support = coarse_support.const_array(mfi);
-        const auto bad = lost_positive_support.array(mfi);
-        amrex::ParallelFor(
-            box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-                int cell_bad = 0;
-                if (support(i, j, k, coverage_component) > Real(0.0)) {
-                    for (int component = 0; component < ncomp; ++component) {
-                        if (support(i, j, k, component) > Real(0.0) &&
-                            mapped(i, j, k, component) == Real(0.0)) {
-                            cell_bad = 1;
-                        }
-                    }
-                }
-                bad(i, j, k, 0) = static_cast<Real>(cell_bad);
+    bool local_support_preserved = true;
+    for (int component = 0; component < ncomp; ++component) {
+        for (amrex::MFIter mfi(fine_h, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            const amrex::Box box = mfi.tilebox();
+            const auto mapped = fine_h.const_array(mfi);
+            const auto support = fine_support.array(mfi);
+            amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                support(i, j, k, 0) =
+                    mapped(i, j, k, component) > Real(0.0) ? Real(1.0) : Real(0.0);
             });
+        }
+        coarse_support.setVal(Real(0.0));
+        amrex::average_down(fine_support, coarse_support, 0, 1, ratio);
+        for (amrex::MFIter mfi(*work, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            const amrex::Box box = mfi.tilebox();
+            const auto mapped = work->const_array(mfi);
+            const auto support = coarse_support.const_array(mfi);
+            const auto coverage = coarse_coverage.const_array(mfi);
+            const auto bad = lost_positive_support.array(mfi);
+            amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                if (coverage(i, j, k, 0) > Real(0.0) &&
+                    support(i, j, k, 0) > Real(0.0) &&
+                    mapped(i, j, k, component) == Real(0.0)) {
+                    bad(i, j, k, 0) = Real(1.0);
+                }
+            });
+        }
+        local_support_preserved =
+            lost_positive_support.max(0, 0, true) <= Real(0.0);
+        int any_bad = local_support_preserved ? 0 : 1;
+        amrex::ParallelDescriptor::ReduceIntMax(any_bad);
+        if (any_bad != 0) {
+            local_support_preserved = false;
+            break;
+        }
     }
-    // The nonnegative bad mask has max zero when clear; an empty rank's local
-    // MultiFab maximum is negative, so both cases satisfy this predicate.
-    const bool local_support_preserved =
-        lost_positive_support.max(0, 0, true) <= Real(0.0);
     if (!collective_all_true(local_support_preserved,
                              "restriction averaging underflow erased positive "
                              "mapped support to zero",
@@ -484,23 +544,12 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
         return false;
     }
 
-    // Build the complete candidate independently. Only cells represented by
-    // fine coverage are reconstructed, so uncovered coarse values never take
-    // an unnecessary multiply/divide round trip. The public destination is
-    // untouched until every rank has admitted this scratch result.
-    MultiFab coarse_candidate_scratch(coarse.spectrum->boxArray(),
-                                      coarse.spectrum->DistributionMap(),
-                                      layout.ncomp(), 0);
-    MultiFab::Copy(coarse_candidate_scratch, *coarse.spectrum, 0, 0,
-                   layout.ncomp(), 0);
     const bool divided_ok = divide_mapped_state(
-        coarse_h, *coarse.mapped_measure, coarse.measure_component,
-        coarse_support, coverage_component, coarse_candidate_scratch,
-        diagnostic);
+        *work, *coarse.mapped_measure, coarse.measure_component,
+        coarse_coverage, 0, *work, diagnostic);
     std::string candidate_admission_diagnostic;
     const bool candidate_admissible = authoritative_state_admissible(
-        coarse_candidate_scratch, layout, coarse_level,
-        &candidate_admission_diagnostic);
+        *work, layout, coarse_level, &candidate_admission_diagnostic);
     const bool local_candidate_admissible = divided_ok && candidate_admissible;
     const std::string candidate_diagnostic =
         !divided_ok ? diagnostic
@@ -514,9 +563,36 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
             diagnostic)) {
         return false;
     }
-    MultiFab::Copy(coarse_candidate, coarse_candidate_scratch, 0, 0,
-                   layout.ncomp(), 0);
+    if (!candidate_is_private) {
+        MultiFab::Copy(coarse_candidate, *work, 0, 0, layout.ncomp(), 0);
+    }
     return true;
+}
+
+bool RestrictMappedSpectrum (const SBMLayout& layout,
+                             const SBMAMRStateView& fine,
+                             const SBMAMRStateView& coarse,
+                             const amrex::IntVect& ratio,
+                             const int coarse_level,
+                             MultiFab& coarse_candidate,
+                             std::string& diagnostic)
+{
+    return restrict_mapped_spectrum_impl(layout, fine, coarse, ratio,
+                                         coarse_level, coarse_candidate, false,
+                                         diagnostic);
+}
+
+bool RestrictMappedSpectrumPrivate (const SBMLayout& layout,
+                                    const SBMAMRStateView& fine,
+                                    const SBMAMRStateView& coarse,
+                                    const amrex::IntVect& ratio,
+                                    const int coarse_level,
+                                    MultiFab& private_candidate,
+                                    std::string& diagnostic)
+{
+    return restrict_mapped_spectrum_impl(layout, fine, coarse, ratio,
+                                         coarse_level, private_candidate, true,
+                                         diagnostic);
 }
 
 bool ProlongCarrierRelativeSpectrum (const SBMLayout& layout,
@@ -540,7 +616,8 @@ bool ProlongCarrierRelativeSpectrum (const SBMLayout& layout,
         coarse, layout, "coarse", coarse_structure_diagnostic);
     const bool fine_structure_ok = validate_view_structure(
         fine_target, layout, "fine target", fine_structure_diagnostic);
-    const bool same_time = coarse.spectrum_time == fine_target.spectrum_time;
+    const bool same_time = semantic_time_matches(coarse.spectrum_time,
+                                                  fine_target.spectrum_time);
     const bool local_structure_ok = ratio_ok && level_ok && coarse_structure_ok &&
                                     fine_structure_ok && same_time;
     const std::string structure_diagnostic =
