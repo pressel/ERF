@@ -1,4 +1,5 @@
 #include "ERF_SBMAMRFluxRegister.H"
+#include "ERF_SBMAMRTime.H"
 
 #include <AMReX_Gpu.H>
 #include <AMReX_MFIter.H>
@@ -11,13 +12,6 @@
 
 namespace erf_sbm {
 namespace {
-
-bool semantic_time_matches (const double lhs, const double rhs) noexcept
-{
-    const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
-    return std::abs(lhs - rhs) <=
-           64.0 * std::numeric_limits<double>::epsilon() * scale;
-}
 
 } // namespace
 
@@ -50,6 +44,7 @@ SBMAMRFluxRegister::define (const amrex::BoxArray& fine_ba,
     m_ratio = ratio;
     m_fine_level = fine_level;
     m_ncomp = ncomp;
+    m_reflux_components_seen.assign(static_cast<std::size_t>(m_ncomp), 0);
     m_register = std::make_unique<amrex::YAFluxRegister>(
         m_fine_ba, m_coarse_ba, m_fine_dm, m_coarse_dm, m_fine_geom,
         m_coarse_geom, m_ratio, m_fine_level, m_ncomp);
@@ -74,9 +69,11 @@ SBMAMRFluxRegister::clear ()
     m_interval_active = false;
     m_coarse_step_accepted = false;
     m_reflux_applied = false;
+    m_reflux_components_seen.clear();
     m_consumed = true;
     m_interval_begin = 0.0;
     m_interval_end = 0.0;
+    m_min_fine_dt = 0.0;
     m_expected_fine_steps = 0;
     m_accepted_fine_steps = 0;
     m_coarse = {};
@@ -120,7 +117,10 @@ SBMAMRFluxRegister::begin_interval (const double coarse_begin,
     const bool local_ok = m_register != nullptr && !m_interval_active &&
         m_consumed && std::isfinite(coarse_begin) &&
         std::isfinite(coarse_end) && coarse_end > coarse_begin &&
-        expected_fine_steps > 0;
+        std::isfinite(coarse_end - coarse_begin) && expected_fine_steps > 0 &&
+        std::isfinite((coarse_end - coarse_begin) /
+                      static_cast<double>(expected_fine_steps)) &&
+        (coarse_end - coarse_begin) / static_cast<double>(expected_fine_steps) > 0.0;
     const std::string local_diagnostic = m_register == nullptr
         ? "SBM interface register is undefined"
         : m_interval_active || !m_consumed
@@ -135,9 +135,13 @@ SBMAMRFluxRegister::begin_interval (const double coarse_begin,
     m_interval_begin = coarse_begin;
     m_interval_end = coarse_end;
     m_expected_fine_steps = expected_fine_steps;
+    m_min_fine_dt = (coarse_end - coarse_begin) /
+                    static_cast<double>(expected_fine_steps);
     m_accepted_fine_steps = 0;
     m_coarse_step_accepted = false;
     m_reflux_applied = false;
+    std::fill(m_reflux_components_seen.begin(),
+              m_reflux_components_seen.end(), 0);
     m_interval_active = true;
     m_consumed = false;
     reset_side(m_coarse);
@@ -162,8 +166,10 @@ SBMAMRFluxRegister::begin_level_step (const bool coarse_side,
                            : "SBM interface level step has invalid times";
     if (local_ok && coarse_side) {
         local_ok = !m_coarse_step_accepted &&
-                   semantic_time_matches(step_begin, m_interval_begin) &&
-                   semantic_time_matches(step_end, m_interval_end);
+                   semantic_time_matches(step_begin, m_interval_begin,
+                                         m_min_fine_dt) &&
+                   semantic_time_matches(step_end, m_interval_end,
+                                         m_min_fine_dt);
         if (!local_ok) {
             local_diagnostic = "coarse SBM step does not match its interface interval";
         }
@@ -175,8 +181,8 @@ SBMAMRFluxRegister::begin_level_step (const bool coarse_side,
         const double expected_end = expected_begin + fine_dt;
         local_ok = m_coarse_step_accepted &&
             m_accepted_fine_steps < m_expected_fine_steps &&
-            semantic_time_matches(step_begin, expected_begin) &&
-            semantic_time_matches(step_end, expected_end);
+            semantic_time_matches(step_begin, expected_begin, m_min_fine_dt) &&
+            semantic_time_matches(step_end, expected_end, m_min_fine_dt);
         if (!local_ok) {
             local_diagnostic = "fine SBM substep is missing, duplicated, or outside the coarse interval";
         }
@@ -207,7 +213,8 @@ SBMAMRFluxRegister::begin_stage (
     const int count = stage_count(method);
     const bool local_ok = m_interval_active && side.step_active &&
         !side.stage_active && stage == side.next_stage && count > 0 &&
-        stage < count && semantic_time_matches(side.step_begin, step_begin) &&
+        stage < count && semantic_time_matches(side.step_begin, step_begin,
+                                               m_min_fine_dt) &&
         (stage == 0 || side.method == method);
     std::string local_diagnostic = !m_interval_active || !side.step_active
         ? "SBM interface stage arrived without an active physical step"
@@ -215,7 +222,8 @@ SBMAMRFluxRegister::begin_stage (
         : count == 0 ? "SBM interface does not support this host integrator"
         : stage != side.next_stage
             ? "SBM interface stage is duplicate, skipped, or out of order"
-                : !semantic_time_matches(side.step_begin, step_begin)
+                : !semantic_time_matches(side.step_begin, step_begin,
+                                         m_min_fine_dt)
                 ? "SBM interface stage changed its physical-step start time"
                 : "SBM interface host integrator changed during a step";
     if (!collective_check(local_ok, local_diagnostic,
@@ -345,16 +353,18 @@ SBMAMRFluxRegister::accept_level_step (const bool coarse_side,
     SideState& side = coarse_side ? m_coarse : m_fine;
     const bool stages_complete = side.next_stage == stage_count(side.method);
     bool local_ok = side.step_active && !side.stage_active && stages_complete &&
-        semantic_time_matches(step_begin, side.step_begin) &&
-        semantic_time_matches(step_end, side.step_end);
+        semantic_time_matches(step_begin, side.step_begin, m_min_fine_dt) &&
+        semantic_time_matches(step_end, side.step_end, m_min_fine_dt);
     std::string local_diagnostic = !side.step_active
         ? "SBM interface level-step acceptance has no active step"
         : side.stage_active ? "SBM interface level-step acceptance found an open stage"
         : !stages_complete ? "SBM interface level step omitted one or more host stages"
         : "SBM interface level-step acceptance changed its semantic times";
     if (local_ok && coarse_side) {
-        local_ok = semantic_time_matches(step_begin, m_interval_begin) &&
-                   semantic_time_matches(step_end, m_interval_end) &&
+        local_ok = semantic_time_matches(step_begin, m_interval_begin,
+                                         m_min_fine_dt) &&
+                   semantic_time_matches(step_end, m_interval_end,
+                                         m_min_fine_dt) &&
                    !m_coarse_step_accepted;
         if (!local_ok) {
             local_diagnostic = "accepted coarse SBM step does not match its interval";
@@ -365,8 +375,9 @@ SBMAMRFluxRegister::accept_level_step (const bool coarse_side,
         const double expected_begin = m_interval_begin +
             static_cast<double>(m_accepted_fine_steps) * fine_dt;
         local_ok = m_coarse_step_accepted &&
-            semantic_time_matches(step_begin, expected_begin) &&
-            semantic_time_matches(step_end, expected_begin + fine_dt) &&
+            semantic_time_matches(step_begin, expected_begin, m_min_fine_dt) &&
+            semantic_time_matches(step_end, expected_begin + fine_dt,
+                                  m_min_fine_dt) &&
             m_accepted_fine_steps < m_expected_fine_steps;
         if (!local_ok) {
             local_diagnostic = "accepted fine SBM step is missing, duplicated, or out of order";
@@ -411,11 +422,14 @@ SBMAMRFluxRegister::reflux (amrex::MultiFab& mapped_candidate,
         mapped_candidate.nComp() == m_ncomp &&
         mapped_candidate.boxArray() == m_coarse_ba &&
         mapped_candidate.DistributionMap() == m_coarse_dm;
+    const bool no_component_was_refluxed = std::none_of(
+        m_reflux_components_seen.begin(), m_reflux_components_seen.end(),
+        [] (const unsigned char seen) { return seen != 0; });
     const bool local_ok = ready_to_reflux() && !m_reflux_applied &&
-                          candidate_matches;
+                          candidate_matches && no_component_was_refluxed;
     const std::string local_diagnostic = !ready_to_reflux()
         ? "SBM YA reflux requires one accepted coarse step and every accepted fine substep"
-        : m_reflux_applied
+        : m_reflux_applied || !no_component_was_refluxed
             ? "SBM YA reflux candidate was already applied for this pending interval"
         : "SBM YA reflux candidate does not match the coarse full-component layout";
     if (!collective_check(local_ok, local_diagnostic,
@@ -425,7 +439,68 @@ SBMAMRFluxRegister::reflux (amrex::MultiFab& mapped_candidate,
     }
     m_register->Reflux(mapped_candidate, 0, 0, m_ncomp);
     amrex::Gpu::streamSynchronize();
+    std::fill(m_reflux_components_seen.begin(),
+              m_reflux_components_seen.end(), 1);
     m_reflux_applied = true;
+    return true;
+}
+
+bool SBMAMRFluxRegister::reflux_components (
+    amrex::MultiFab& mapped_correction,
+    const std::vector<int>& global_components,
+    std::string& diagnostic)
+{
+    diagnostic.clear();
+    bool mapping_ok = m_register != nullptr && !global_components.empty() &&
+        mapped_correction.nComp() >= static_cast<int>(global_components.size()) &&
+        mapped_correction.boxArray() == m_coarse_ba &&
+        mapped_correction.DistributionMap() == m_coarse_dm &&
+        m_reflux_components_seen.size() == static_cast<std::size_t>(m_ncomp);
+    std::vector<int> seen_now(static_cast<std::size_t>(m_ncomp), 0);
+    for (const int component : global_components) {
+        if (component < 0 || component >= m_ncomp ||
+            (component >= 0 && component < m_ncomp &&
+             (m_reflux_components_seen[static_cast<std::size_t>(component)] != 0 ||
+              seen_now[static_cast<std::size_t>(component)] != 0))) {
+            mapping_ok = false;
+        } else {
+            seen_now[static_cast<std::size_t>(component)] = 1;
+        }
+    }
+    const bool local_ok = ready_to_reflux() && !m_reflux_applied && mapping_ok;
+    const std::string local_diagnostic = !ready_to_reflux()
+        ? "SBM YA reflux requires one accepted coarse step and every accepted fine substep"
+        : m_reflux_applied
+            ? "SBM YA reflux candidate was already applied for this pending interval"
+        : "SBM YA correction chunk has an invalid layout or repeated component mapping";
+    if (!collective_check(local_ok, local_diagnostic,
+                          "SBM YA reflux preflight failed on another MPI rank",
+                          diagnostic)) {
+        return false;
+    }
+
+    std::size_t first = 0;
+    while (first < global_components.size()) {
+        std::size_t end = first + 1U;
+        while (end < global_components.size() &&
+               global_components[end] == global_components[end - 1U] + 1) {
+            ++end;
+        }
+        const int source_component = global_components[first];
+        const int destination_component = static_cast<int>(first);
+        const int count = static_cast<int>(end - first);
+        m_register->Reflux(mapped_correction, source_component,
+                           destination_component, count);
+        amrex::Gpu::streamSynchronize();
+        for (std::size_t index = first; index < end; ++index) {
+            m_reflux_components_seen[static_cast<std::size_t>(
+                global_components[index])] = 1;
+        }
+        first = end;
+    }
+    m_reflux_applied = std::all_of(m_reflux_components_seen.begin(),
+                                   m_reflux_components_seen.end(),
+                                   [] (const unsigned char seen) { return seen != 0; });
     return true;
 }
 
@@ -448,7 +523,10 @@ SBMAMRFluxRegister::discard_interval (std::string& diagnostic)
     m_consumed = true;
     m_reflux_applied = false;
     m_coarse_step_accepted = false;
+    m_min_fine_dt = 0.0;
     m_accepted_fine_steps = 0;
+    std::fill(m_reflux_components_seen.begin(),
+              m_reflux_components_seen.end(), 0);
     reset_side(m_coarse);
     reset_side(m_fine);
     return true;
@@ -458,7 +536,11 @@ bool
 SBMAMRFluxRegister::can_accept_reflux (std::string& diagnostic) const
 {
     diagnostic.clear();
-    const bool local_ok = ready_to_reflux() && m_reflux_applied;
+    const bool all_components_refluxed = std::all_of(
+        m_reflux_components_seen.begin(), m_reflux_components_seen.end(),
+        [] (const unsigned char seen) { return seen != 0; });
+    const bool local_ok = ready_to_reflux() && m_reflux_applied &&
+                          all_components_refluxed;
     const std::string local_diagnostic = !ready_to_reflux()
         ? "SBM YA amount cannot be consumed before all level steps are accepted"
         : "SBM YA amount cannot be consumed before a reflux candidate was formed";
@@ -475,6 +557,9 @@ SBMAMRFluxRegister::accept_reflux (std::string& diagnostic)
     m_consumed = true;
     m_interval_active = false;
     m_reflux_applied = false;
+    m_min_fine_dt = 0.0;
+    std::fill(m_reflux_components_seen.begin(),
+              m_reflux_components_seen.end(), 0);
     return true;
 }
 

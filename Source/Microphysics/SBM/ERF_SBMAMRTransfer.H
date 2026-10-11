@@ -7,8 +7,26 @@
 #include <AMReX_MultiFab.H>
 
 #include <string>
+#include <cstdint>
+#include <vector>
 
 namespace erf_sbm {
+
+class SBMStateAdmission;
+
+/** Optional per-call measurement of current AMReX FAB payload above the
+ * caller-established baseline. Samples are taken at actual operator
+ * allocation high-water points; this is local-rank FAB payload, not RSS.
+ */
+struct SBMTransferAllocationCensus {
+    std::uint64_t baseline_bytes{0};
+    std::uint64_t peak_bytes{0};
+    std::uint64_t support_loss_collective_votes{0};
+    void begin () noexcept;
+    void sample () noexcept;
+    [[nodiscard]] std::uint64_t peak_extra_bytes () const noexcept
+    { return peak_bytes > baseline_bytes ? peak_bytes - baseline_bytes : 0; }
+};
 
 /** A spectrum, carrier, and mapped measure tied to explicit semantic times. */
 struct SBMAMRStateView {
@@ -35,7 +53,11 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
                              const amrex::IntVect& ratio,
                              int coarse_level,
                              amrex::MultiFab& coarse_candidate,
-                             std::string& diagnostic);
+                             std::string& diagnostic,
+                             int max_groups_per_chunk = 16,
+                             bool reverse_chunk_order = false,
+                             const SBMStateAdmission* admission = nullptr,
+                             SBMTransferAllocationCensus* allocation_census = nullptr);
 
 /**
  * Private-candidate variant for coarse synchronization. The caller supplies
@@ -48,7 +70,11 @@ bool RestrictMappedSpectrumPrivate (const SBMLayout& layout,
                                     const amrex::IntVect& ratio,
                                     int coarse_level,
                                     amrex::MultiFab& private_candidate,
-                                    std::string& diagnostic);
+                                    std::string& diagnostic,
+                                    int max_groups_per_chunk = 16,
+                                    bool reverse_chunk_order = false,
+                                    const SBMStateAdmission* admission = nullptr,
+                                    SBMTransferAllocationCensus* allocation_census = nullptr);
 
 /**
  * Form a same-time piecewise-constant carrier-relative fine candidate. On
@@ -65,7 +91,47 @@ bool ProlongCarrierRelativeSpectrum (const SBMLayout& layout,
                                      const amrex::IntVect& ratio,
                                      int fine_level,
                                      amrex::MultiFab& fine_candidate,
-                                     std::string& diagnostic);
+                                     std::string& diagnostic,
+                                     int max_groups_per_chunk = 16,
+                                     bool reverse_chunk_order = false,
+                                     const SBMStateAdmission* admission = nullptr,
+                                     SBMTransferAllocationCensus* allocation_census = nullptr);
+
+/**
+ * Private-candidate prolongation for a new level. The caller supplies the one
+ * unpublished full fine spectrum; it may be overwritten on failure. Intensive
+ * interpolation scratch remains bounded by complete constraint-group chunks.
+ */
+bool ProlongCarrierRelativeSpectrumPrivate (
+    const SBMLayout& layout,
+    const SBMAMRStateView& coarse,
+    const SBMAMRStateView& fine_target,
+    const amrex::Geometry& coarse_geometry,
+    const amrex::Geometry& fine_geometry,
+    const amrex::IntVect& ratio,
+    int fine_level,
+    amrex::MultiFab& private_candidate,
+    std::string& diagnostic,
+    int max_groups_per_chunk = 16,
+    bool reverse_chunk_order = false,
+    const SBMStateAdmission* admission = nullptr,
+    SBMTransferAllocationCensus* allocation_census = nullptr);
+
+/** Add one bounded YA correction chunk in mapped H coordinates only where
+ * the scalar covered-parent mask proves a coarse/fine face interface. The
+ * candidate and invalid mask are private scratch; invalid is accumulated
+ * across chunks and checked collectively after the final chunk.
+ */
+[[nodiscard]] bool ApplyMappedRefluxCorrectionChunk (
+    amrex::MultiFab& private_candidate,
+    const amrex::MultiFab& mapped_correction,
+    const amrex::MultiFab& mapped_measure,
+    const amrex::MultiFab& covered_parent_mask,
+    const std::vector<int>& global_components,
+    amrex::MultiFab& invalid_mask, std::string& diagnostic);
+
+[[nodiscard]] bool MappedRefluxCorrectionMaskIsValid (
+    const amrex::MultiFab& invalid_mask, std::string& diagnostic);
 
 } // namespace erf_sbm
 

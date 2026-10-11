@@ -263,8 +263,6 @@ struct SBMTransport::DeviceMetadata
     amrex::Gpu::DeviceVector<ConstraintDescriptor> local_constraints;
     amrex::Gpu::DeviceVector<ConstraintTerm> local_terms;
     amrex::Gpu::DeviceVector<LocalPropertySupport> local_supports;
-    amrex::Gpu::DeviceVector<ConstraintDescriptor> global_constraints;
-    amrex::Gpu::DeviceVector<ConstraintTerm> global_terms;
     amrex::Gpu::DeviceVector<PopulationRemapView> populations;
     amrex::Gpu::DeviceVector<Real> edges;
     amrex::Gpu::DeviceVector<Real> pivots;
@@ -286,6 +284,7 @@ SBMTransport::SBMTransport (const SBMLayout& layout,
       m_max_constraints_per_group(m_groups.size(), 0),
       m_levels(static_cast<std::size_t>(number_of_levels)),
       m_device_metadata(std::make_unique<DeviceMetadata>()),
+      m_admission(std::make_unique<SBMStateAdmission>(layout)),
       m_keep_spectral_ledger_reference(keep_spectral_ledger_reference)
 {
     AMREX_ALWAYS_ASSERT(number_of_levels > 0);
@@ -453,20 +452,6 @@ SBMTransport::SBMTransport (const SBMLayout& layout,
         amrex::Gpu::copy(amrex::Gpu::hostToDevice, local_supports.begin(),
                          local_supports.end(), device.local_supports.begin());
     }
-    device.global_constraints.resize(m_flat_constraints.constraints.size());
-    device.global_terms.resize(m_flat_constraints.terms.size());
-    if (!m_flat_constraints.constraints.empty()) {
-        amrex::Gpu::copy(amrex::Gpu::hostToDevice,
-                         m_flat_constraints.constraints.begin(),
-                         m_flat_constraints.constraints.end(),
-                         device.global_constraints.begin());
-    }
-    if (!m_flat_constraints.terms.empty()) {
-        amrex::Gpu::copy(
-            amrex::Gpu::hostToDevice, m_flat_constraints.terms.begin(),
-            m_flat_constraints.terms.end(), device.global_terms.begin());
-    }
-
     std::vector<Real> host_edges;
     std::vector<Real> host_pivots;
     std::vector<int> host_property_components;
@@ -545,6 +530,7 @@ SBMTransport::define (const int level,
             std::max(max_chunk_ratio_components, chunk_ratio_components);
     }
     auto data = std::make_unique<LevelStorage>();
+    m_admission->define_level(level, cell_ba, dm);
     const int ncomp = m_layout.ncomp();
     data->anchor.define(cell_ba, dm, ncomp, 0);
     data->target.define(cell_ba, dm, ncomp, 0);
@@ -1403,72 +1389,10 @@ SBMTransport::advance_stage (const int level,
         }
     }
 
-    // Candidate-wide device admission combines finite-value checking, every
-    // declared linear group inequality, and strict canonical persisted-state
-    // validation.  Diagnostic host scanning occurs only after this fast gate
-    // fails.
-    const ConstraintDescriptor* global_constraints =
-        device.global_constraints.data();
-    const ConstraintTerm* global_terms = device.global_terms.data();
-    const PopulationRemapView* remap_populations = device.populations.data();
-    const int global_constraint_count =
-        static_cast<int>(m_flat_constraints.constraints.size());
-    const int remap_population_count =
-        static_cast<int>(m_layout.populations().size());
-    data.invalid.setVal(Real(0.0));
-    for (amrex::MFIter mfi(data.target, amrex::TilingIfNotGPU()); mfi.isValid();
-         ++mfi) {
-        const amrex::Box bx = mfi.tilebox();
-        const auto candidate = data.target.const_array(mfi);
-        const auto invalid = data.invalid.array(mfi);
-        const int state_components = m_layout.ncomp();
-        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j,
-                                                    int k) noexcept {
-            int bad = 0;
-            for (int component = 0; component < state_components; ++component) {
-                if (!amrex::Math::isfinite(candidate(i, j, k, component))) {
-                    bad = 1;
-                }
-            }
-            const Real roundoff =
-                Real(128.0) * std::numeric_limits<Real>::epsilon();
-            for (int ci = 0; ci < global_constraint_count; ++ci) {
-                const auto& descriptor = global_constraints[ci];
-                Real margin = Real(0.0);
-                Real scale = Real(0.0);
-                for (int t = 0; t < descriptor.term_count; ++t) {
-                    const auto& term = global_terms[descriptor.term_offset + t];
-                    const Real value = candidate(i, j, k, term.component);
-                    margin = std::fma(term.coefficient, value, margin);
-                    scale += amrex::Math::abs(term.coefficient * value);
-                }
-                if (!amrex::Math::isfinite(margin) ||
-                    margin < -roundoff * scale)
-                    bad = 1;
-            }
-            const erf_sbm::remap_detail::RemapCellStateView cell_state{
-                candidate, i, j, k};
-            for (int p = 0; p < remap_population_count; ++p) {
-                const auto& population = remap_populations[p];
-                for (int bin = 0; bin < population.nbins; ++bin) {
-                    if (!erf_sbm::remap_detail::canonical_persisted_bin_state(
-                            population, bin, cell_state, state_components)) {
-                        bad = 1;
-                    }
-                }
-            }
-            invalid(i, j, k, 0) = static_cast<Real>(bad);
-        });
-    }
-    if (data.invalid.max(0) != Real(0.0)) {
-        std::string reason;
-        const bool host_admissible = erf_sbm::authoritative_state_admissible(
-            data.target, m_layout, level, &reason);
-        amrex::ignore_unused(host_admissible);
-        if (reason.empty()) {
-            reason = "candidate failed device linear/canonical admission";
-        }
-        amrex::Abort("SBM M3 candidate rejected before commit: " + reason);
+    // Reuse the same persistent full-state gate used by AMR publication.
+    // Successful candidates are decided on device without a host FAB scan.
+    if (!m_admission->admissible(data.target, level, diagnostic)) {
+        amrex::Abort("SBM M3 candidate rejected before commit: " + diagnostic);
     }
 
     // Only fully admitted candidates may finish an authoritative spectral
@@ -1515,6 +1439,7 @@ SBMTransport::destroy (const int level)
 {
     AMREX_ALWAYS_ASSERT(level >= 0 &&
                         level < static_cast<int>(m_levels.size()));
+    m_admission->destroy_level(level);
     m_levels[static_cast<std::size_t>(level)].reset();
 }
 
@@ -1534,6 +1459,11 @@ SBMTransport::measure_is_ready (const int level) const
         return false;
     }
     return m_levels[static_cast<std::size_t>(level)]->measure_ready;
+}
+
+SBMStateAdmission& SBMTransport::admission () noexcept
+{
+    return *m_admission;
 }
 
 const MultiFab&

@@ -574,21 +574,28 @@ runtime:
   abundance without treating the change in spatial resolution as a physical
   droplet-growth, evaporation, or collision process.
 
-* **Accepted spectral face transfers.** The implementation defines and tests a completed-step
-  transport record for every spectral component,
+* **Accepted spectral face-transfer foundation.** The mapped transport
+  operator forms accepted spectral face **rates** for every prognostic mass,
+  number and attached-property component after its coupled limiter. An
+  AMR-oriented implementation can accumulate those chunk-local accepted
+  rates directly in an AMReX coarse/fine flux register, using the actual
+  host-stage time coefficient and preserving the component layout:
 
   .. math::
 
      \mathcal{I}_{a,f}
-     = \int_{t^n}^{t^{n+1}}
-       \widetilde{F}_{a,f}^{\mathrm{accepted}}(t)\,dt,
+     = \sum_{q}\sum_{k} w_{q,k}
+       \widetilde F^{\mathrm{accepted}}_{a,f,q,k}.
 
-  where :math:`\widetilde{F}_{a,f}^{\mathrm{accepted}}` is the accepted
-  mapped transport rate through face :math:`f`. The record uses the rates
-  accepted after the coupled transport limiter, not an unrestricted
-  high-order proposal or the two bulk cloud/rain sums. It provides the
-  information needed for conservative coarse/fine flux correction in a
-  subsequent AMR implementation.
+  Here :math:`q` indexes physical substeps and :math:`k` the host stages,
+  with :math:`w_{q,k}` equal to the accepted completed-ledger coefficient:
+  for compressible RK3 it is the physical substep length only at stage 2,
+  and for anelastic Heun it is one-half the physical substep length at
+  stages 0 and 1. The complete all-component face-integral ledger remains
+  available as a test/reference path; the normal production transport
+  allocation does not require that additional full-spectrum face record.
+  These numerical foundations are **not** evidence that operational
+  multilevel SBM advection has been enabled or qualified.
 
 * **Physical and numerical admissibility.** A transferred candidate spectrum
   must still satisfy the declared mass, number, attached-property, and
@@ -599,15 +606,18 @@ runtime:
 .. important::
 
    **These are tested grid-transfer foundations, not an enabled multilevel
-   SBM capability.** Although ERF supports adaptive mesh refinement for other
-   atmospheric quantities, simulations using ``erf.moisture_model = SBM``
-   still require ``amr.max_level = 0`` and periodic boundaries in all three
-   directions. Coarse/fine temporal interpolation, accepted-flux correction
-   (reflux), regridding, and multilevel spectral restart must be integrated
-   and qualified before SBM can run on refined meshes. These grid-transfer
-   foundations introduce no new user input parameters and no cloud or aerosol
-   microphysical source processes. The currently exposed spectrum represents
-   liquid water only.
+   SBM capability.** The implementation includes tested coarse/fine transfer
+   and accepted-rate flux-register foundations, but SBM still cannot run on an
+   AMR hierarchy. Its runtime remains restricted to one grid level. A
+   qualified multilevel lifecycle also requires time-matched coarse/fine
+   spectral ghost filling, conservative creation and remake/derefinement of
+   fine levels, synchronized full-state admission, exact-schema multilevel
+   restart, and end-to-end composite leaf-inventory tests. The existence of
+   an AMR flux register or a passing unit test does not remove these
+   requirements. SBM also remains restricted to periodic boundaries in all
+   three directions. These foundations introduce no new user input
+   parameters or cloud and aerosol source processes. The currently exposed
+   spectrum represents liquid water only.
 
 What is still needed for multilevel simulations
 -----------------------------------------------

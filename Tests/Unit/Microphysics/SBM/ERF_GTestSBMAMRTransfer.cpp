@@ -3,6 +3,7 @@
 #include <AMReX_BoxArray.H>
 #include <AMReX_BaseFab.H>
 #include <AMReX_Geometry.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_Math.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFab.H>
@@ -12,13 +13,18 @@
 
 #include "ERF_SBMAMRTransfer.H"
 #include "ERF_SBMAMRFluxRegister.H"
+#include "ERF_SBMConstraintGroups.H"
+#include "ERF_SBMAMRTime.H"
 #include "ERF_SBMRestart.H"
+#include "ERF_SBMStateManager.H"
+#include "ERF_SBMTransport.H"
 
 #include <cmath>
 #include <limits>
 #include <string>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <utility>
@@ -176,6 +182,46 @@ erf_sbm::SBMLayout make_transfer_layout ()
         spec.attached_properties.push_back(property);
     }
     return erf_sbm::SBMLayout(std::move(spec));
+}
+
+erf_sbm::SBMLayout make_one_moment_layout (const int ncomp)
+{
+    erf_sbm::SBMLayoutSpec spec;
+    erf_sbm::SpectralPopulationSpec population;
+    population.population_id = 0;
+    population.semantic_id = "memory_census_liquid";
+    population.phase = erf_sbm::PopulationPhase::Liquid;
+    population.moment_mode = erf_sbm::MomentMode::OneMoment;
+    population.mass_state_units = "kg m^-3";
+    population.number_state_units = "m^-3";
+    population.grid.coordinate_kind = erf_sbm::CoordinateKind::Mass;
+    population.grid.coordinate_units = "kg";
+    population.grid.edges.resize(static_cast<std::size_t>(ncomp) + 1U);
+    population.grid.pivots.resize(static_cast<std::size_t>(ncomp));
+    for (int bin = 0; bin <= ncomp; ++bin) {
+        population.grid.edges[static_cast<std::size_t>(bin)] =
+            static_cast<Real>(bin);
+        if (bin < ncomp) {
+            population.grid.pivots[static_cast<std::size_t>(bin)] =
+                static_cast<Real>(bin) + Real(0.5);
+        }
+    }
+    spec.populations.push_back(std::move(population));
+    spec.liquid_projection = {0, ncomp / 2};
+    return erf_sbm::SBMLayout(std::move(spec));
+}
+
+void fill_positive_one_moment_state (MultiFab& state)
+{
+    const int ncomp = state.nComp();
+    for (MFIter mfi(state, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box box = mfi.tilebox();
+        const auto values = state.array(mfi);
+        ParallelFor(box, ncomp, [=] AMREX_GPU_DEVICE
+                    (int i, int j, int k, int n) noexcept {
+            values(i,j,k,n) = Real(0.25) + Real(0.001) * static_cast<Real>(n);
+        });
+    }
 }
 
 ComponentOffsets offsets_for (const erf_sbm::SBMLayout& layout)
@@ -337,6 +383,22 @@ void expect_same_values (const MultiFab& actual, const MultiFab& expected)
     }
 }
 
+Real value_at (const MultiFab& field, const IntVect& cell, const int component)
+{
+    for (MFIter mfi(field); mfi.isValid(); ++mfi) {
+        const auto& fab = field[mfi];
+        if (!mfi.validbox().contains(cell)) continue;
+        Real value = Real(0.0);
+        const auto offset = fab.box().index(cell);
+        amrex::Gpu::dtoh_memcpy_async(
+            &value, fab.dataPtr(component) + offset, sizeof(Real));
+        amrex::Gpu::streamSynchronize();
+        return value;
+    }
+    ADD_FAILURE() << "cell is not owned by this rank: " << cell;
+    return Real(0.0);
+}
+
 void expect_roundoff_equivalent (const MultiFab& actual,
                                  const MultiFab& expected)
 {
@@ -455,7 +517,7 @@ void run_restriction_averages_mapped_amount_and_preserves_uncovered_state ()
     private_candidate.setVal(Real(99.0));
     ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
         layout, fine_view, coarse_view, ratio, 0, private_candidate,
-        diagnostic)) << diagnostic;
+        diagnostic, 1, true)) << diagnostic;
     MultiFab private_difference(coarse_ba, coarse_dm, layout.ncomp(), 0);
     MultiFab::Copy(private_difference, private_candidate, 0, 0,
                    layout.ncomp(), 0);
@@ -467,6 +529,11 @@ void run_restriction_averages_mapped_amount_and_preserves_uncovered_state ()
             << "private synchronization candidate differs from the independent "
             << "transactional restriction oracle at component " << component;
     }
+    MultiFab reverse_candidate(coarse_ba, coarse_dm, layout.ncomp(), 0);
+    ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
+        layout, fine_view, coarse_view, ratio, 0, reverse_candidate,
+        diagnostic, 16, true)) << diagnostic;
+    expect_roundoff_equivalent(reverse_candidate, candidate);
 
     // Independently evaluate every child amount from its analytic fixture
     // values.  The expected candidate includes the preexisting uncovered U.
@@ -587,6 +654,147 @@ void run_restriction_averages_mapped_amount_and_preserves_uncovered_state ()
 TEST(SBMAMRTransfer, RestrictionAveragesMappedAmountAndPreservesUncoveredState)
 {
     run_restriction_averages_mapped_amount_and_preserves_uncovered_state();
+}
+
+TEST(SBMAMRTime, SemanticComparisonsRejectNonfiniteAndAdjacentSubsteps)
+{
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(inf, 1.0, 0.1));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(-inf, 1.0, 0.1));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(nan, nan, 0.1));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches_exact(inf, inf));
+
+    const double large = 1.0e16;
+    const double adjacent = std::nextafter(large, inf);
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(large, adjacent, 2.0));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(large, large + 64.0, 2.0));
+
+    // Two ordinary host addition orders can round a shared semantic timestamp
+    // differently while remaining far inside the dt_min/32 cap.
+    const double first_order = (1.0e12 + 0.1) + 0.2;
+    const double second_order = 1.0e12 + (0.1 + 0.2);
+    EXPECT_NE(first_order, second_order);
+    EXPECT_TRUE(erf_sbm::semantic_time_matches(first_order, second_order, 1.0));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches_exact(first_order, second_order));
+}
+
+TEST(SBMAMRTime, FluxRegisterRejectsNonfiniteAndNeighboringCoarseTimes)
+{
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(3));
+    const Box fine_domain(IntVect(0), IntVect(7));
+    const BoxArray coarse_ba(coarse_domain);
+    const BoxArray fine_ba(amrex::refine(Box(IntVect(0), IntVect(3)), ratio));
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+    erf_sbm::SBMAMRFluxRegister flux_register;
+    flux_register.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                         fine_geom, coarse_geom, ratio, 1, 1);
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    std::string diagnostic;
+    EXPECT_FALSE(flux_register.begin_interval(inf, 1.0, 1, diagnostic));
+    EXPECT_FALSE(flux_register.begin_interval(0.0, nan, 1, diagnostic));
+
+    const double large = 1.0e16;
+    const double end = large + 64.0;
+    ASSERT_TRUE(flux_register.begin_interval(large, end, 2, diagnostic))
+        << diagnostic;
+    EXPECT_FALSE(flux_register.begin_level_step(
+        true, std::nextafter(large, inf), end, diagnostic));
+    EXPECT_NE(diagnostic.find("does not match"), std::string::npos)
+        << diagnostic;
+    ASSERT_TRUE(flux_register.begin_level_step(true, large, end, diagnostic))
+        << diagnostic;
+    ASSERT_TRUE(flux_register.discard_interval(diagnostic)) << diagnostic;
+}
+
+TEST(SBMAMRTransfer, DeviceAdmissionUsesHostOracleOnlyAfterRejection)
+{
+    const auto layout = make_transfer_layout();
+    const BoxArray grids(coarse_domain());
+    const DistributionMapping mapping(grids);
+    MultiFab density(grids, mapping, 1, 0);
+    MultiFab measure(grids, mapping, 1, 0);
+    MultiFab state(grids, mapping, layout.ncomp(), 0);
+    fill_carriers(density, measure, true);
+    fill_spectrum(state, density, layout);
+    MultiFab valid_state(grids, mapping, layout.ncomp(), 0);
+    MultiFab::Copy(valid_state, state, 0, 0, layout.ncomp(), 0);
+
+    erf_sbm::SBMStateAdmission admission(layout);
+    admission.define_level(0, grids, mapping);
+    const int one_mass = layout.populations()[0].mass_offset;
+    const int one_property = layout.property_offset(0);
+    const int two_mass = layout.populations()[1].mass_offset;
+    const int two_number = layout.populations()[1].number_offset;
+    std::string diagnostic;
+    const auto compare_case = [&] (const char* label, const bool expected,
+                                   auto&& mutate) {
+        MultiFab::Copy(state, valid_state, 0, 0, layout.ncomp(), 0);
+        mutate(state);
+        std::string host_diagnostic;
+        const bool host_ok = erf_sbm::authoritative_state_admissible(
+            state, layout, 0, &host_diagnostic);
+        std::string device_diagnostic;
+        const bool device_ok = admission.admissible(
+            state, 0, device_diagnostic);
+        EXPECT_EQ(host_ok, expected) << label << ": " << host_diagnostic;
+        EXPECT_EQ(device_ok, host_ok)
+            << label << ": device=" << device_diagnostic
+            << ", host=" << host_diagnostic;
+    };
+
+    compare_case("valid 1M/2M state with attached properties", true,
+                 [] (MultiFab&) {});
+    compare_case("global terminal upper edge is admitted", true,
+                 [=] (MultiFab& values) {
+        values.setVal(Real(1.0), two_number + 1, 1, 0);
+        values.setVal(Real(2.0), two_mass + 1, 1, 0);
+    });
+    compare_case("representable positive subnormal with no orphan material",
+                 true, [=] (MultiFab& values) {
+        values.setVal(std::numeric_limits<Real>::denorm_min(), one_mass, 1, 0);
+        values.setVal(Real(0.0), one_property, 1, 0);
+    });
+    compare_case("interior 2M half-open upper edge is rejected", false,
+                 [=] (MultiFab& values) {
+        values.setVal(Real(1.0), two_number, 1, 0);
+        values.setVal(Real(1.0), two_mass, 1, 0);
+    });
+    compare_case("finite negative 1M amount is rejected", false,
+                 [=] (MultiFab& values) {
+        values.setVal(Real(-1.0e-12), one_mass, 1, 0);
+    });
+    compare_case("NaN state is rejected", false, [=] (MultiFab& values) {
+        values.setVal(std::numeric_limits<Real>::quiet_NaN(), one_mass, 1, 0);
+    });
+    compare_case("infinite state is rejected", false, [=] (MultiFab& values) {
+        values.setVal(std::numeric_limits<Real>::infinity(), one_mass, 1, 0);
+    });
+    compare_case("1M attached material without carrier is rejected", false,
+                 [=] (MultiFab& values) {
+        values.setVal(Real(0.0), one_mass, 1, 0);
+        values.setVal(Real(0.1), one_property, 1, 0);
+    });
+    compare_case("2M attached material without number carrier is rejected",
+                 false, [=] (MultiFab& values) {
+        values.setVal(Real(0.0), two_mass + 1, 1, 0);
+        values.setVal(Real(0.0), two_number + 1, 1, 0);
+        values.setVal(Real(0.1), layout.property_offset(1) + 1, 1, 0);
+    });
+
+    auto counts = admission.counters();
+    EXPECT_EQ(counts.device_admissions, 9U);
+    EXPECT_EQ(counts.successful_admissions, 3U);
+    EXPECT_EQ(counts.host_scans, 6U);
+    EXPECT_GT(counts.host_scan_fab_bytes, 0U);
+#ifndef AMREX_USE_GPU
+    EXPECT_EQ(counts.host_d2h_bytes, 0U);
+#endif
 }
 
 void
@@ -791,6 +999,16 @@ void run_prolongation_uses_same_time_piecewise_constant_carrier_ratio ()
     MultiFab fine_omega(fine_ba, fine_dm, 1, 0);
     fill_carriers(coarse_rho, coarse_omega, true);
     fill_carriers(fine_rho, fine_omega, false, true);
+    coarse_omega.setVal(Real(1.0));
+    for (MFIter mfi(fine_omega, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box box = mfi.tilebox();
+        const auto omega = fine_omega.array(mfi);
+        amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+            const int parity = (i % 2 + j % 2 + k % 2) % 2;
+            const Real sign = parity == 0 ? Real(-1.0) : Real(1.0);
+            omega(i, j, k, 0) = Real(1.0) + Real(0.2) * sign;
+        });
+    }
     MultiFab coarse_state(coarse_ba, coarse_dm, layout.ncomp(), 0);
     MultiFab fine_storage(fine_ba, fine_dm, layout.ncomp(), 0);
     MultiFab candidate(fine_ba, fine_dm, layout.ncomp(), 0);
@@ -806,6 +1024,11 @@ void run_prolongation_uses_same_time_piecewise_constant_carrier_ratio ()
         candidate, diagnostic)) << diagnostic;
     ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
         candidate, layout, 1, &diagnostic)) << diagnostic;
+    MultiFab private_candidate(fine_ba, fine_dm, layout.ncomp(), 0);
+    ASSERT_TRUE(erf_sbm::ProlongCarrierRelativeSpectrumPrivate(
+        layout, coarse_view, fine_view, cgeom, fgeom, IntVect(2), 1,
+        private_candidate, diagnostic, 1, true)) << diagnostic;
+    expect_roundoff_equivalent(private_candidate, candidate);
 
     MultiFab expected(fine_ba, fine_dm, layout.ncomp(), 0);
     const ComponentOffsets offsets = offsets_for(layout);
@@ -971,6 +1194,46 @@ TEST(SBMAMRTransfer, ProlongationUsesSameTimePiecewiseConstantCarrierRatio)
     run_prolongation_uses_same_time_piecewise_constant_carrier_ratio();
 }
 
+TEST(SBMAMRTransfer, ProlongationRejectsMappedCarrierInventoryMismatchAtomically)
+{
+    const auto layout = make_transfer_layout();
+    const Box c_domain = coarse_domain();
+    Box f_domain = c_domain;
+    f_domain.refine(IntVect(2));
+    const Geometry cgeom = make_geometry(c_domain);
+    const Geometry fgeom = make_geometry(f_domain);
+    const BoxArray coarse_ba(c_domain);
+    const DistributionMapping coarse_dm(coarse_ba);
+    const BoxArray fine_ba(fine_coverage());
+    const DistributionMapping fine_dm(fine_ba);
+    MultiFab coarse_rho(coarse_ba, coarse_dm, 1, 0);
+    MultiFab coarse_omega(coarse_ba, coarse_dm, 1, 0);
+    MultiFab fine_rho(fine_ba, fine_dm, 1, 0);
+    MultiFab fine_omega(fine_ba, fine_dm, 1, 0);
+    MultiFab coarse_state(coarse_ba, coarse_dm, layout.ncomp(), 0);
+    MultiFab fine_storage(fine_ba, fine_dm, layout.ncomp(), 0);
+    MultiFab candidate(fine_ba, fine_dm, layout.ncomp(), 0);
+    coarse_rho.setVal(Real(1.0));
+    coarse_omega.setVal(Real(1.0));
+    fine_rho.setVal(Real(2.0));
+    fine_omega.setVal(Real(1.0));
+    fine_storage.setVal(Real(0.0));
+    fill_spectrum(coarse_state, coarse_rho, layout);
+    candidate.setVal(Real(-17.0));
+    MultiFab before(fine_ba, fine_dm, layout.ncomp(), 0);
+    MultiFab::Copy(before, candidate, 0, 0, layout.ncomp(), 0);
+    const auto coarse_view = timed_view(coarse_state, coarse_rho, coarse_omega, 0.5);
+    const auto fine_view = timed_view(fine_storage, fine_rho, fine_omega, 0.5);
+
+    std::string diagnostic;
+    EXPECT_FALSE(erf_sbm::ProlongCarrierRelativeSpectrum(
+        layout, coarse_view, fine_view, cgeom, fgeom, IntVect(2), 1,
+        candidate, diagnostic));
+    EXPECT_NE(diagnostic.find("inventory differs"), std::string::npos)
+        << diagnostic;
+    expect_same_values(candidate, before);
+}
+
 TEST(SBMAMRTransfer, ProlongationRejectsQuotientAndProductUnderflow)
 {
     const auto layout = make_transfer_layout();
@@ -1001,6 +1264,9 @@ TEST(SBMAMRTransfer, ProlongationRejectsQuotientAndProductUnderflow)
 
     coarse_state.mult(tiny_scale, 0, layout.ncomp(), 0);
     coarse_rho.setVal(std::numeric_limits<Real>::max());
+    fine_rho.setVal(std::numeric_limits<Real>::max());
+    coarse_omega.setVal(Real(1.0) / std::numeric_limits<Real>::max());
+    fine_omega.setVal(Real(1.0) / std::numeric_limits<Real>::max());
     auto coarse_view = timed_view(coarse_state, coarse_rho, coarse_omega, 0.5);
     auto fine_view = timed_view(fine_storage, fine_rho, fine_omega, 0.5);
     std::string diagnostic;
@@ -1010,10 +1276,11 @@ TEST(SBMAMRTransfer, ProlongationRejectsQuotientAndProductUnderflow)
     EXPECT_NE(diagnostic.find("underflowed"), std::string::npos);
 
     coarse_rho.setVal(Real(1.0));
+    coarse_omega.setVal(Real(1.0));
     fill_spectrum(coarse_state, coarse_rho, layout);
     coarse_state.mult(tiny_scale, 0, layout.ncomp(), 0);
-    fine_rho.setVal(tiny);
-    fine_omega.setVal(Real(1.0));
+    fine_rho.setVal(tiny_scale);
+    fine_omega.setVal(Real(1.0) / tiny_scale);
     candidate.setVal(Real(34.0));
     MultiFab candidate_before(fine_ba, fine_dm, layout.ncomp(), 0);
     MultiFab coarse_before(coarse_ba, coarse_dm, layout.ncomp(), 0);
@@ -1040,10 +1307,11 @@ TEST(SBMAMRTransfer, ProlongationRejectsQuotientAndProductUnderflow)
     // last reconstruction pass, after the old implementation had written the
     // public destination.
     coarse_rho.setVal(Real(1.0));
+    coarse_omega.setVal(Real(1.0));
     fill_spectrum(coarse_state, coarse_rho, layout);
     coarse_state.mult(Real(1.0e30), 0, layout.ncomp(), 0);
     fine_rho.setVal(std::numeric_limits<Real>::max());
-    fine_omega.setVal(Real(1.0));
+    fine_omega.setVal(Real(1.0) / std::numeric_limits<Real>::max());
     candidate.setVal(Real(35.0));
     MultiFab::Copy(candidate_before, candidate, 0, 0, layout.ncomp(), 0);
     MultiFab::Copy(coarse_state_before, coarse_state, 0, 0, layout.ncomp(), 0);
@@ -1213,8 +1481,27 @@ TEST(SBMAMRYA, SignedMappedCorrectionMatchesIndependentFaceAmounts)
 
     MultiFab coarse_cells(coarse_ba, coarse_dm, ncomp, 0);
     MultiFab fine_cells(fine_ba, fine_dm, ncomp, 0);
+    MultiFab mapped_measure(coarse_ba, coarse_dm, 1, 0);
+    MultiFab covered(coarse_ba, coarse_dm, 1, 1);
+    MultiFab fine_marker(fine_ba, fine_dm, 1, 0);
+    MultiFab mapped_correction(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab correction_invalid(coarse_ba, coarse_dm, 1, 0);
     for (int n = 0; n < ncomp; ++n) {
-        coarse_cells.setVal(Real(0.25) * (n + 1), n, 1, 0);
+        coarse_cells.setVal(Real(100.0) * (n + 1), n, 1, 0);
+    }
+    fine_marker.setVal(Real(1.0));
+    covered.setVal(Real(0.0));
+    amrex::average_down(fine_marker, covered, 0, 1, ratio);
+    covered.FillBoundary(coarse_geom.periodicity());
+    mapped_correction.setVal(Real(0.0));
+    correction_invalid.setVal(Real(0.0));
+    for (MFIter mfi(mapped_measure, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box box = mfi.tilebox();
+        const auto omega = mapped_measure.array(mfi);
+        ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+            omega(i,j,k,0) = Real(1.5) + Real(0.01) * i +
+                             Real(0.02) * j + Real(0.03) * k;
+        });
     }
 
     std::array<MultiFab, AMREX_SPACEDIM> coarse_flux;
@@ -1263,8 +1550,18 @@ TEST(SBMAMRYA, SignedMappedCorrectionMatchesIndependentFaceAmounts)
         register_for_sbm.FineAdd(mfi, fluxes, fine_dx.data(), Real(1.0),
                                  amrex::RunOn::Host);
     }
-    register_for_sbm.Reflux(coarse_cells, 0, 0, ncomp);
+    register_for_sbm.Reflux(mapped_correction, 0, 0, ncomp);
     amrex::Gpu::streamSynchronize();
+    std::vector<int> all_components(static_cast<std::size_t>(ncomp));
+    for (int component = 0; component < ncomp; ++component) {
+        all_components[static_cast<std::size_t>(component)] = component;
+    }
+    std::string diagnostic;
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        coarse_cells, mapped_correction, mapped_measure, covered,
+        all_components, correction_invalid, diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(
+        correction_invalid, diagnostic)) << diagnostic;
 
     const auto coarse_dx_product =
         coarse_dx[0] * coarse_dx[1] * coarse_dx[2];
@@ -1282,7 +1579,7 @@ TEST(SBMAMRYA, SignedMappedCorrectionMatchesIndependentFaceAmounts)
                     const Real omega = Real(1.5) + Real(0.01) * i +
                                        Real(0.02) * j + Real(0.03) * k;
                     for (int n = 0; n < ncomp; ++n) {
-                        const Real initial = Real(0.25) * (n + 1);
+                        const Real initial = Real(100.0) * (n + 1);
                         Real expected_delta_h = Real(0.0);
                         Real expected_delta_q = Real(0.0);
                         if (!covered) {
@@ -1337,11 +1634,11 @@ TEST(SBMAMRYA, SignedMappedCorrectionMatchesIndependentFaceAmounts)
                                 }
                             }
                         }
-                        const Real expected = initial + expected_delta_h;
+                        const Real expected = initial + expected_delta_h / omega;
                         EXPECT_NEAR(state(i,j,k,n), expected, Real(2.0e-11))
                             << "cell=" << i << ',' << j << ',' << k
                             << " component=" << n;
-                        const Real delta_u = (state(i,j,k,n) - initial) / omega;
+                        const Real delta_u = state(i,j,k,n) - initial;
                         const Real mapped_amount = coarse_dx_product * omega * delta_u;
                         EXPECT_NEAR(mapped_amount,
                                      expected_delta_q,
@@ -1357,6 +1654,117 @@ TEST(SBMAMRYA, SignedMappedCorrectionMatchesIndependentFaceAmounts)
             }
         }
     }
+}
+
+TEST(SBMAMRYA, LocalizedCorrectionPreservesCoveredAndFarfieldBits)
+{
+    const Box domain(IntVect(0), IntVect(3));
+    const IntVect ratio(2, 3, 2);
+    const Geometry geometry = make_geometry(domain);
+    BoxArray coarse_ba(domain);
+    coarse_ba.maxSize(2);
+    const DistributionMapping coarse_dm(coarse_ba);
+    const BoxArray fine_ba(amrex::refine(Box(IntVect(0), IntVect(0)), ratio));
+    const DistributionMapping fine_dm(fine_ba);
+    MultiFab marker(fine_ba, fine_dm, 1, 0);
+    MultiFab covered(coarse_ba, coarse_dm, 1, 1);
+    marker.setVal(Real(1.0));
+    covered.setVal(Real(0.0));
+    amrex::average_down(marker, covered, 0, 1, ratio);
+    covered.FillBoundary(geometry.periodicity());
+
+    MultiFab candidate(coarse_ba, coarse_dm, 2, 0);
+    MultiFab before(coarse_ba, coarse_dm, 2, 0);
+    MultiFab measure(coarse_ba, coarse_dm, 1, 0);
+    MultiFab correction(coarse_ba, coarse_dm, 2, 0);
+    MultiFab invalid(coarse_ba, coarse_dm, 1, 0);
+    candidate.setVal(Real(0.1));
+    measure.setVal(Real(0.1));
+    correction.setVal(Real(0.0));
+    invalid.setVal(Real(0.0));
+    for (MFIter mfi(candidate, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box box = mfi.tilebox();
+        const auto values = candidate.array(mfi);
+        const auto delta = correction.array(mfi);
+        ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+            if (i == 2 && j == 2 && k == 2) values(i,j,k,1) = -Real(0.0);
+            if (i == 0 && j == 0 && k == 0) values(i,j,k,1) = -Real(0.0);
+            if (i == 3 && j == 0 && k == 0) delta(i,j,k,0) = Real(0.005);
+            if (i == 0 && j == 3 && k == 0) delta(i,j,k,1) = -Real(0.002);
+        });
+    }
+    MultiFab::Copy(before, candidate, 0, 0, 2, 0);
+    std::string diagnostic;
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        candidate, correction, measure, covered, {0, 1}, invalid,
+        diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(invalid, diagnostic))
+        << diagnostic;
+    EXPECT_EQ(value_at(candidate, IntVect(3,0,0), 0),
+              (Real(0.1) * Real(0.1) + Real(0.005)) / Real(0.1));
+    EXPECT_EQ(value_at(candidate, IntVect(0,3,0), 1),
+              (Real(0.1) * Real(0.1) - Real(0.002)) / Real(0.1));
+    EXPECT_TRUE(std::signbit(value_at(candidate, IntVect(2,2,2), 1)));
+    EXPECT_TRUE(std::signbit(value_at(candidate, IntVect(0,0,0), 1)));
+    for (int k = 0; k <= 3; ++k) for (int j = 0; j <= 3; ++j)
+        for (int i = 0; i <= 3; ++i) for (int component = 0; component < 2; ++component) {
+            const bool corrected =
+                (i == 3 && j == 0 && k == 0 && component == 0) ||
+                (i == 0 && j == 3 && k == 0 && component == 1);
+            if (corrected) continue;
+            const Real actual = value_at(candidate, IntVect(i,j,k), component);
+            const Real original = value_at(before, IntVect(i,j,k), component);
+            EXPECT_EQ(std::memcmp(&actual, &original, sizeof(Real)), 0)
+                << "bitwise identity failed at " << i << ',' << j << ',' << k
+                << " component=" << component;
+        }
+
+    MultiFab zero_delta(coarse_ba, coarse_dm, 1, 0);
+    MultiFab zero_invalid(coarse_ba, coarse_dm, 1, 0);
+    MultiFab zero_candidate(coarse_ba, coarse_dm, 2, 0);
+    zero_delta.setVal(Real(0.0));
+    zero_invalid.setVal(Real(0.0));
+    MultiFab::Copy(zero_candidate, before, 0, 0, 2, 0);
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        zero_candidate, zero_delta, measure, covered, {0}, zero_invalid,
+        diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(
+        zero_invalid, diagnostic)) << diagnostic;
+    const Real zero_actual = value_at(zero_candidate, IntVect(2,2,2), 1);
+    const Real zero_original = value_at(before, IntVect(2,2,2), 1);
+    EXPECT_EQ(std::memcmp(&zero_actual, &zero_original, sizeof(Real)), 0);
+
+    MultiFab bad_delta(coarse_ba, coarse_dm, 1, 0);
+    MultiFab bad_invalid(coarse_ba, coarse_dm, 1, 0);
+    MultiFab bad_candidate(coarse_ba, coarse_dm, 2, 0);
+    bad_delta.setVal(Real(0.0));
+    bad_invalid.setVal(Real(0.0));
+    MultiFab::Copy(bad_candidate, before, 0, 0, 2, 0);
+    for (MFIter mfi(bad_delta, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const auto delta = bad_delta.array(mfi);
+        ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+            if (i == 2 && j == 2 && k == 2) delta(i,j,k,0) = Real(0.001);
+        });
+    }
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        bad_candidate, bad_delta, measure, covered, {0}, bad_invalid,
+        diagnostic)) << diagnostic;
+    EXPECT_FALSE(erf_sbm::MappedRefluxCorrectionMaskIsValid(
+        bad_invalid, diagnostic));
+    EXPECT_NE(diagnostic.find("outside"), std::string::npos) << diagnostic;
+
+    MultiFab global_roundtrip(coarse_ba, coarse_dm, 2, 0);
+    MultiFab::Copy(global_roundtrip, before, 0, 0, 2, 0);
+    for (MFIter mfi(global_roundtrip, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box box = mfi.tilebox();
+        const auto values = global_roundtrip.array(mfi);
+        const auto omega = measure.const_array(mfi);
+        ParallelFor(box, 2, [=] AMREX_GPU_DEVICE(int i, int j, int k, int n) noexcept {
+            values(i,j,k,n) = omega(i,j,k,0) * values(i,j,k,n) / omega(i,j,k,0);
+        });
+    }
+    MultiFab::Subtract(global_roundtrip, before, 0, 0, 2, 0);
+    EXPECT_GT(global_roundtrip.norm0(0), Real(0.0));
 }
 
 TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
@@ -1475,8 +1883,16 @@ TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
         reference_register.Reflux(reference_state, 0, 0, ncomp);
         amrex::Gpu::streamSynchronize();
 
-        ASSERT_TRUE(direct_register.reflux(direct_state, diagnostic))
-            << diagnostic;
+        MultiFab direct_correction(coarse_ba, coarse_dm, 5, 0);
+        for (int first = 0; first < ncomp; first += 5) {
+            std::vector<int> component_map{
+                first, first + 1, first + 2, first + 3, first + 4};
+            direct_correction.setVal(Real(0.0));
+            ASSERT_TRUE(direct_register.reflux_components(
+                direct_correction, component_map, diagnostic)) << diagnostic;
+            MultiFab::Add(direct_state, direct_correction, 0, first, 5, 0);
+        }
+        ASSERT_TRUE(direct_register.can_accept_reflux(diagnostic)) << diagnostic;
         expect_roundoff_equivalent(direct_state, reference_state);
         EXPECT_TRUE(direct_register.has_outstanding_amount());
         ASSERT_TRUE(direct_register.accept_reflux(diagnostic)) << diagnostic;
@@ -1485,6 +1901,327 @@ TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
         MultiFab::Copy(consumed_snapshot, direct_state, 0, 0, ncomp, 0);
         EXPECT_FALSE(direct_register.reflux(direct_state, diagnostic));
         expect_same_values(direct_state, consumed_snapshot);
+    }
+}
+
+TEST(SBMAMRTransfer, MeasuresRealTransferOperatorAndDenseYAAllocations)
+{
+    ASSERT_EQ(AMREX_SPACEDIM, 3);
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(15));
+    const Box fine_domain(IntVect(0), IntVect(31));
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+    const BoxArray coarse_ba(coarse_domain);
+    const BoxArray fine_ba(amrex::refine(Box(IntVect(4), IntVect(11)), ratio));
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    auto local_cells = [] (const BoxArray& boxes,
+                           const DistributionMapping& mapping) {
+        std::uint64_t count = 0;
+        for (int box = 0; box < boxes.size(); ++box) {
+            if (mapping[box] == amrex::ParallelDescriptor::MyProc()) {
+                count += static_cast<std::uint64_t>(boxes[box].numPts());
+            }
+        }
+        return count;
+    };
+    const std::uint64_t coarse_cells = local_cells(coarse_ba, coarse_dm);
+    const std::uint64_t fine_cells = local_cells(fine_ba, fine_dm);
+    constexpr std::uint64_t bytes_per_real = sizeof(Real);
+
+    for (const int ncomp : {32, 128, 256}) {
+        const auto layout = make_one_moment_layout(ncomp);
+        MultiFab coarse_rho(coarse_ba, coarse_dm, 1, 0);
+        MultiFab coarse_omega(coarse_ba, coarse_dm, 1, 0);
+        MultiFab fine_rho(fine_ba, fine_dm, 1, 0);
+        MultiFab fine_omega(fine_ba, fine_dm, 1, 0);
+        MultiFab coarse_state(coarse_ba, coarse_dm, ncomp, 0);
+        MultiFab fine_state(fine_ba, fine_dm, ncomp, 0);
+        MultiFab coarse_candidate(coarse_ba, coarse_dm, ncomp, 0);
+        MultiFab fine_candidate(fine_ba, fine_dm, ncomp, 0);
+        coarse_rho.setVal(Real(1.0));
+        coarse_omega.setVal(Real(1.0));
+        fine_rho.setVal(Real(1.0));
+        fine_omega.setVal(Real(1.0));
+        fill_positive_one_moment_state(coarse_state);
+        fill_positive_one_moment_state(fine_state);
+
+        erf_sbm::SBMStateAdmission admission(layout);
+        admission.define_level(0, coarse_ba, coarse_dm);
+        admission.define_level(1, fine_ba, fine_dm);
+        const auto chunks = erf_sbm::make_constraint_closure_chunks(layout, 16);
+        int max_chunk_components = 0;
+        for (const auto& chunk : chunks) {
+            max_chunk_components = std::max(
+                max_chunk_components, static_cast<int>(chunk.components.size()));
+        }
+        ASSERT_GT(max_chunk_components, 0);
+
+        const std::uint64_t ya_before = amrex::TotalBytesAllocatedInFabs();
+        erf_sbm::SBMAMRFluxRegister owner;
+        owner.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                     fine_geom, coarse_geom, ratio, 1, ncomp);
+        const std::uint64_t ya_total =
+            static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs()) - ya_before;
+        const std::uint64_t ya_dense_coarse =
+            coarse_cells * static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+        const std::uint64_t caller_coarse_candidate =
+            coarse_cells * static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+
+        const auto fine_view = timed_view(fine_state, fine_rho, fine_omega, 0.5);
+        const auto coarse_view = timed_view(coarse_state, coarse_rho, coarse_omega, 0.5);
+        std::string diagnostic;
+        erf_sbm::SBMTransferAllocationCensus restriction_census;
+        ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
+            layout, fine_view, coarse_view, ratio, 0, coarse_candidate,
+            diagnostic, 16, false, &admission, &restriction_census)) << diagnostic;
+        const std::uint64_t restriction_peak =
+            restriction_census.peak_extra_bytes();
+        EXPECT_EQ(restriction_census.support_loss_collective_votes, 1U)
+            << "restriction must make one global support-loss decision, independent of ncomp";
+        const std::uint64_t restriction_bound =
+            (2ULL * static_cast<std::uint64_t>(max_chunk_components) *
+                 (fine_cells + coarse_cells) +
+             2ULL * fine_cells + 3ULL * coarse_cells) * bytes_per_real;
+        EXPECT_LE(restriction_peak, restriction_bound + 64ULL * 1024ULL)
+            << "ncomp=" << ncomp << " K=" << max_chunk_components;
+
+        erf_sbm::SBMTransferAllocationCensus prolongation_census;
+        ASSERT_TRUE(erf_sbm::ProlongCarrierRelativeSpectrumPrivate(
+            layout, coarse_view, timed_view(fine_state, fine_rho, fine_omega, 0.5),
+            coarse_geom, fine_geom, ratio, 1, fine_candidate, diagnostic,
+            16, false, &admission, &prolongation_census)) << diagnostic;
+        const std::uint64_t prolongation_peak =
+            prolongation_census.peak_extra_bytes();
+        const std::uint64_t prolongation_bound = std::max(
+            3ULL * fine_cells + 5ULL * coarse_cells,
+            static_cast<std::uint64_t>(max_chunk_components) *
+                    (fine_cells + coarse_cells) + fine_cells + coarse_cells) *
+            bytes_per_real;
+        EXPECT_LE(prolongation_peak, prolongation_bound + 64ULL * 1024ULL)
+            << "ncomp=" << ncomp << " K=" << max_chunk_components;
+        EXPECT_EQ(admission.counters().host_scans, 0U);
+        EXPECT_EQ(admission.counters().successful_admissions, 5U);
+
+        const std::uint64_t full_fine_payload =
+            fine_cells * static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+        const std::uint64_t before_mutant =
+            static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs());
+        std::uint64_t observed_full_fine_payload = 0;
+        {
+            MultiFab artificial_full_fine(fine_ba, fine_dm, ncomp, 0);
+            amrex::Gpu::streamSynchronize();
+            observed_full_fine_payload =
+                static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs()) -
+                before_mutant;
+            EXPECT_GE(observed_full_fine_payload, full_fine_payload);
+        }
+
+        // Recreate the three full-component prolongation temporaries in the
+        // audited baseline source (coarse_z, fine_z, and its private candidate)
+        // to measure their actual FAB payload on this same layout.  This is a
+        // source-shaped allocation control, not a run of the old algorithm.
+        const auto before_legacy_prolongation =
+            static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs());
+        std::uint64_t legacy_prolongation_staging_bytes = 0;
+        {
+            MultiFab legacy_coarse_z(coarse_ba, coarse_dm, ncomp, 0);
+            MultiFab legacy_fine_z(fine_ba, fine_dm, ncomp, 0);
+            MultiFab legacy_fine_candidate(fine_ba, fine_dm, ncomp, 0);
+            amrex::Gpu::streamSynchronize();
+            legacy_prolongation_staging_bytes =
+                static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs()) -
+                before_legacy_prolongation;
+        }
+        const std::uint64_t expected_legacy_prolongation_staging =
+            (coarse_cells + 2ULL * fine_cells) *
+            static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+        EXPECT_GE(legacy_prolongation_staging_bytes,
+                  expected_legacy_prolongation_staging);
+        std::cout << "SBM_TRANSFER_CENSUS ncomp=" << ncomp
+                  << " K=" << max_chunk_components
+                  << " local_coarse_cells=" << coarse_cells
+                  << " local_fine_cells=" << fine_cells
+                  << " restriction_peak_scratch_bytes=" << restriction_peak
+                  << " prolongation_peak_scratch_bytes=" << prolongation_peak
+                  << " support_loss_collective_votes="
+                  << restriction_census.support_loss_collective_votes
+                  << " legacy_restriction_full_fine_staging_bytes="
+                  << observed_full_fine_payload
+                  << " legacy_prolongation_source_shaped_staging_bytes="
+                  << legacy_prolongation_staging_bytes
+                  << " caller_coarse_candidate_bytes=" << caller_coarse_candidate
+                  << " ya_dense_coarse_bytes=" << ya_dense_coarse
+                  << " ya_total_interface_payload_bytes=" << ya_total
+                  << " full_fine_spectrum_mutant_bytes=" << full_fine_payload
+                  << " host_scans=" << admission.counters().host_scans
+                  << " success_host_d2h_bytes=" << admission.counters().host_d2h_bytes
+                  << " admission_mpi_reductions=" << admission.counters().mpi_reductions
+                  << '\n';
+    }
+}
+
+TEST(SBMAMRTransfer, MeasuresRealProductionTransportAndLedgerAllocations)
+{
+    ASSERT_EQ(AMREX_SPACEDIM, 3);
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(15));
+    const Box fine_domain = amrex::refine(coarse_domain, ratio);
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+    BoxArray coarse_ba(coarse_domain);
+    BoxArray fine_ba(amrex::refine(Box(IntVect(4), IntVect(11)), ratio));
+    coarse_ba.maxSize(8);
+    fine_ba.maxSize(16);
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    const int local_rank = amrex::ParallelDescriptor::MyProc();
+    auto local_cells = [local_rank] (const BoxArray& boxes,
+                                     const DistributionMapping& dm) {
+        std::uint64_t cells = 0;
+        for (int box = 0; box < boxes.size(); ++box) {
+            if (dm[box] == local_rank) {
+                cells += static_cast<std::uint64_t>(boxes[box].numPts());
+            }
+        }
+        return cells;
+    };
+    const std::uint64_t coarse_cells = local_cells(coarse_ba, coarse_dm);
+    const std::uint64_t fine_cells = local_cells(fine_ba, fine_dm);
+    constexpr std::uint64_t bytes_per_real = sizeof(Real);
+
+    for (const int ncomp : {32, 128, 256}) {
+        const auto layout = make_one_moment_layout(ncomp);
+        const auto groups = erf_sbm::make_constraint_groups(layout);
+        const auto chunks = erf_sbm::make_constraint_closure_chunks(layout, 16);
+        int max_chunk_components = 0;
+        int cell_ratio_components = 0;
+        for (const auto& chunk : chunks) {
+            max_chunk_components = std::max(
+                max_chunk_components, static_cast<int>(chunk.components.size()));
+            int chunk_ratios = 0;
+            for (const int group_index : chunk.group_indices) {
+                const auto& group = groups[static_cast<std::size_t>(group_index)];
+                // Matches SBMTransport's ratio_count: linear constraints,
+                // two sides for every property support, plus any 2M reserve.
+                chunk_ratios += static_cast<int>(group.constraints.size()) +
+                    2 * static_cast<int>(group.attached_property_indices.size()) +
+                    (group.moment_mode == erf_sbm::MomentMode::TwoMoment &&
+                             group.bin < layout.populations()[static_cast<std::size_t>(
+                                 group.population_id)].grid.nbins() - 1
+                         ? 1 : 0);
+            }
+            cell_ratio_components = std::max(cell_ratio_components,
+                                             chunk_ratios);
+        }
+        ASSERT_EQ(max_chunk_components, 16);
+        ASSERT_GT(cell_ratio_components, 0);
+
+        std::uint64_t state_bytes = 0;
+        std::uint64_t production_transport_bytes = 0;
+        {
+            const auto state_before = amrex::TotalBytesAllocatedInFabs();
+            erf_sbm::SBMStateManager states(layout, 2);
+            states.define(0, coarse_ba, coarse_dm, 0.0);
+            states.define(1, fine_ba, fine_dm, 0.0);
+            state_bytes = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - state_before);
+            EXPECT_EQ(state_bytes,
+                2ULL * (coarse_cells + fine_cells) *
+                    static_cast<std::uint64_t>(ncomp) * bytes_per_real);
+
+            const auto transport_before = amrex::TotalBytesAllocatedInFabs();
+            erf_sbm::SBMTransport transport(layout, 2, 16, false);
+            transport.define(0, coarse_ba, coarse_dm);
+            transport.define(1, fine_ba, fine_dm);
+            amrex::Gpu::streamSynchronize();
+            production_transport_bytes = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - transport_before);
+        }
+        const std::uint64_t production_state_transport_bytes =
+            state_bytes + production_transport_bytes;
+
+        std::uint64_t reference_state_transport_bytes = 0;
+        {
+            const auto reference_before = amrex::TotalBytesAllocatedInFabs();
+            erf_sbm::SBMStateManager states(layout, 2);
+            states.define(0, coarse_ba, coarse_dm, 0.0);
+            states.define(1, fine_ba, fine_dm, 0.0);
+            erf_sbm::SBMTransport transport(layout, 2, 16, true);
+            transport.define(0, coarse_ba, coarse_dm);
+            transport.define(1, fine_ba, fine_dm);
+            amrex::Gpu::streamSynchronize();
+            reference_state_transport_bytes = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - reference_before);
+        }
+        ASSERT_GE(reference_state_transport_bytes,
+                  production_state_transport_bytes);
+        const std::uint64_t completed_ledger_extra_bytes =
+            reference_state_transport_bytes - production_state_transport_bytes;
+        EXPECT_GT(completed_ledger_extra_bytes, 0U);
+
+        std::uint64_t ghost_bytes = 0;
+        const auto accumulate_transport_ghosts = [&] (
+            const BoxArray& boxes, const DistributionMapping& dm) {
+            for (int box = 0; box < boxes.size(); ++box) {
+                if (dm[box] != local_rank) continue;
+                Box grow2 = boxes[box];
+                grow2.grow(2);
+                Box grow1 = boxes[box];
+                grow1.grow(1);
+                const auto valid = static_cast<std::uint64_t>(
+                    boxes[box].numPts());
+                const auto two_ghost = static_cast<std::uint64_t>(
+                    grow2.numPts()) - valid;
+                const auto one_ghost = static_cast<std::uint64_t>(
+                    grow1.numPts()) - valid;
+                ghost_bytes += 4ULL * two_ghost *
+                    static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+                ghost_bytes += one_ghost *
+                    static_cast<std::uint64_t>(cell_ratio_components) *
+                    bytes_per_real;
+            }
+        };
+        accumulate_transport_ghosts(coarse_ba, coarse_dm);
+        accumulate_transport_ghosts(fine_ba, fine_dm);
+
+        const auto ya_before = amrex::TotalBytesAllocatedInFabs();
+        std::uint64_t ya_bytes = 0;
+        {
+            erf_sbm::SBMAMRFluxRegister owner;
+            owner.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                         fine_geom, coarse_geom, ratio, 1, ncomp);
+            amrex::Gpu::streamSynchronize();
+            ya_bytes = static_cast<std::uint64_t>(
+                amrex::TotalBytesAllocatedInFabs() - ya_before);
+        }
+        const auto ya_dense_coarse = coarse_cells *
+            static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+
+        for (int rank = 0;
+             rank < amrex::ParallelDescriptor::NProcs(); ++rank) {
+            if (local_rank == rank) {
+                std::cout << "SBM_REAL_OBJECT_CENSUS ranks="
+                          << amrex::ParallelDescriptor::NProcs()
+                          << " rank=" << local_rank
+                          << " ncomp=" << ncomp
+                          << " K=" << max_chunk_components
+                          << " cell_ratio_components=" << cell_ratio_components
+                          << " coarse_cells_local=" << coarse_cells
+                          << " fine_cells_local=" << fine_cells
+                          << " old_new_state_bytes=" << state_bytes
+                          << " production_transport_bytes="
+                          << production_transport_bytes
+                          << " transport_ghost_region_bytes=" << ghost_bytes
+                          << " YA_dense_coarse_bytes=" << ya_dense_coarse
+                          << " YA_total_bytes=" << ya_bytes
+                          << " completed_integral_ledger_extra_bytes="
+                          << completed_ledger_extra_bytes
+                          << std::endl;
+            }
+            amrex::ParallelDescriptor::Barrier();
+        }
     }
 }
 

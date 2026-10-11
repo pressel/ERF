@@ -866,10 +866,11 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
             &vars_new[lev][Vars::cons], Rho_comp, fine_time,
             &fine_measure, 0, fine_time};
         MultiFab candidate(ba, dm, sbm_state_manager->layout().ncomp(), 0);
-        if (!erf_sbm::ProlongCarrierRelativeSpectrum(
+        if (!erf_sbm::ProlongCarrierRelativeSpectrumPrivate(
                 sbm_state_manager->layout(), coarse_view, fine_view,
                 geom[lev - 1], geom[lev], ref_ratio[lev - 1], lev,
-                candidate, diagnostic)) {
+                candidate, diagnostic, 16, false,
+                &sbm_transport->admission())) {
             Abort("SBM fine-level carrier-relative initialization: " + diagnostic);
         }
         if (!sbm_state_manager->accept_synchronized_state(

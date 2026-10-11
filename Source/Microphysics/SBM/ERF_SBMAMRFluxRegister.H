@@ -60,6 +60,13 @@ public:
     [[nodiscard]] bool has_outstanding_amount () const noexcept;
     bool reflux (amrex::MultiFab& mapped_candidate,
                  std::string& diagnostic);
+    /** Apply selected global components into matching local slots of a
+     * bounded correction MultiFab; all components must be covered before
+     * the pending amount can be consumed.
+     */
+    bool reflux_components (amrex::MultiFab& mapped_correction,
+                            const std::vector<int>& global_components,
+                            std::string& diagnostic);
     bool can_accept_reflux (std::string& diagnostic) const;
     /** Consume the pending amount only after the refluxed full candidate admits. */
     bool accept_reflux (std::string& diagnostic);
@@ -100,9 +107,11 @@ private:
     bool m_interval_active{false};
     bool m_coarse_step_accepted{false};
     bool m_reflux_applied{false};
+    std::vector<unsigned char> m_reflux_components_seen;
     bool m_consumed{true};
     double m_interval_begin{0.0};
     double m_interval_end{0.0};
+    double m_min_fine_dt{0.0};
     int m_expected_fine_steps{0};
     int m_accepted_fine_steps{0};
     SideState m_coarse;

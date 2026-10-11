@@ -15,6 +15,7 @@
 namespace erf_sbm {
 
 class SBMAMRFluxRegister;
+class SBMStateAdmission;
 
 /**
  * Bounded mapped advection for the authoritative SBM spectrum.
@@ -104,6 +105,7 @@ class SBMTransport
     { return static_cast<int>(m_levels.size()); }
     [[nodiscard]] bool is_defined (int level) const;
     [[nodiscard]] bool measure_is_ready (int level) const;
+    [[nodiscard]] SBMStateAdmission& admission () noexcept;
     [[nodiscard]] const amrex::MultiFab& static_measure (int level) const;
     [[nodiscard]] const erf_auxiliary::CompletedStepFluxLedger&
     projected_ledger (int level) const;
@@ -123,6 +125,7 @@ class SBMTransport
     std::vector<int> m_max_constraints_per_group;
     std::vector<std::unique_ptr<LevelStorage>> m_levels;
     std::unique_ptr<DeviceMetadata> m_device_metadata;
+    std::unique_ptr<SBMStateAdmission> m_admission;
     bool m_keep_spectral_ledger_reference{true};
 };
 
