@@ -4,6 +4,7 @@
 #include "ERF.H"
 #include "ERF_Utils.H"
 #include "ERF_SolverUtils.H"
+#include "ERF_ThinBody.H"
 #include <AMReX_MLMG.H>
 #include <AMReX_MLPoisson.H>
 
@@ -150,8 +151,18 @@ void ERF::project_velocity_tb (int lev, double l_dt_d, Vector<MultiFab>& vmf)
         // If all Neumann BCs, adjust RHS to make sure we can converge
         if (need_adjust_rhs) {
             bool local = false;
-            Real offset = volWgtSumMF(lev,rhs[0],0,*detJ_cc[lev],*mapfac[lev][MapFacType::m_x],*mapfac[lev][MapFacType::m_y],false,local);
-            // amrex::Print() << "Poisson solvability offset = " << offset << std::endl;
+            const Real rhs_integral = volWgtSumMF(
+                lev, rhs[0], 0, *detJ_cc[lev], *mapfac[lev][MapFacType::m_x],
+                *mapfac[lev][MapFacType::m_y], false, local);
+            MultiFab volume_weights(ba_tmp[0], dm_tmp[0], 1, 0);
+            volume_weights.setVal(one);
+            const Real total_volume = volWgtSumMF(
+                lev, volume_weights, 0, *detJ_cc[lev], *mapfac[lev][MapFacType::m_x],
+                *mapfac[lev][MapFacType::m_y], false, local);
+            if (!(std::isfinite(total_volume) && total_volume > zero)) {
+                amrex::Abort("Thin-body projection domain volume must be finite and positive");
+            }
+            const Real offset = ERFThinBody::volume_weighted_mean(rhs_integral, total_volume);
             rhs[0].plus(-offset, 0, 1);
         }
 

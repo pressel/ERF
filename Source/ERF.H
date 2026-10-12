@@ -2027,70 +2027,9 @@ private:
     int
     ComputeGhostCells (const SolverChoice& sc)
     {
-        // We never have fewer than 2 ghost cells
-        int ngrow = 2;
-
-        // This sets the minimum to 3 if using num_diff but we might still need more
-        if (sc.use_num_diff) {
-            ngrow = 3;
-        }
-
-        // With EB we always have 4 so no need to do further tests
-        if (sc.terrain_type == TerrainType::EB) {
-            ngrow = 4;
-            return ngrow;
-        }
-
-        if (
-             (sc.advChoice.dycore_horiz_adv_type    == AdvType::Centered_6th)
-          || (sc.advChoice.dycore_vert_adv_type     == AdvType::Centered_6th)
-          || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Centered_6th)
-          || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Centered_6th)
-          || (sc.advChoice.dryscal_horiz_adv_type   == AdvType::Centered_6th)
-          || (sc.advChoice.dryscal_vert_adv_type    == AdvType::Centered_6th) )
-        { ngrow = 3; }
-        else if (
-             (sc.advChoice.dycore_horiz_adv_type    == AdvType::Upwind_5th)
-          || (sc.advChoice.dycore_vert_adv_type     == AdvType::Upwind_5th)
-          || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Upwind_5th)
-          || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Upwind_5th)
-          || (sc.advChoice.dryscal_horiz_adv_type   == AdvType::Upwind_5th)
-          || (sc.advChoice.dryscal_vert_adv_type    == AdvType::Upwind_5th) )
-        { ngrow = 3; }
-        else if (
-              (sc.advChoice.dycore_horiz_adv_type    == AdvType::Weno_5)
-           || (sc.advChoice.dycore_vert_adv_type     == AdvType::Weno_5)
-           || (sc.advChoice.dryscal_horiz_adv_type   == AdvType::Weno_5)
-           || (sc.advChoice.dryscal_vert_adv_type    == AdvType::Weno_5)
-           || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Weno_5)
-           || (sc.advChoice.moistscal_vert_adv_type  == AdvType::Weno_5) )
-        { ngrow = 3; }
-        else if (
-              (sc.advChoice.dycore_horiz_adv_type    == AdvType::Weno_5Z)
-           || (sc.advChoice.dycore_vert_adv_type     == AdvType::Weno_5Z)
-           || (sc.advChoice.dryscal_horiz_adv_type   == AdvType::Weno_5Z)
-           || (sc.advChoice.dryscal_vert_adv_type    == AdvType::Weno_5Z)
-           || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Weno_5Z)
-           || (sc.advChoice.moistscal_vert_adv_type  == AdvType::Weno_5Z) )
-        { ngrow = 3; }
-        else if (
-              (sc.advChoice.dycore_horiz_adv_type    == AdvType::Weno_7)
-           || (sc.advChoice.dycore_vert_adv_type     == AdvType::Weno_7)
-           || (sc.advChoice.dryscal_horiz_adv_type   == AdvType::Weno_7)
-           || (sc.advChoice.dryscal_vert_adv_type    == AdvType::Weno_7)
-           || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Weno_7)
-           || (sc.advChoice.moistscal_vert_adv_type  == AdvType::Weno_7) )
-        { ngrow = 3; }
-        else if (
-              (sc.advChoice.dycore_horiz_adv_type    == AdvType::Weno_7Z)
-           || (sc.advChoice.dycore_vert_adv_type     == AdvType::Weno_7Z)
-           || (sc.advChoice.dryscal_horiz_adv_type   == AdvType::Weno_7Z)
-           || (sc.advChoice.dryscal_vert_adv_type    == AdvType::Weno_7Z)
-           || (sc.advChoice.moistscal_horiz_adv_type == AdvType::Weno_7Z)
-           || (sc.advChoice.moistscal_vert_adv_type  == AdvType::Weno_7Z) )
-        { ngrow = 4; }
-
-        return ngrow;
+        return AdvChoice::required_ghost_cells(
+            sc.advChoice, sc.use_num_diff, sc.terrain_type == TerrainType::EB,
+            sc.moisture_type != MoistureType::None);
     }
 
     AMREX_FORCE_INLINE

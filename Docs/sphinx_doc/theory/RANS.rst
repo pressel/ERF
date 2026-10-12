@@ -233,6 +233,56 @@ The distance is available as the plot variable ``walldist``. It is
 computed once at initialisation, also on a restart; it is not recomputed
 after a regrid.
 
+On a Cartesian, constant-vertical-spacing mesh with thin immersed-body
+faces configured through ``erf.zero_xflux_faces``, ``erf.zero_yflux_faces``, or
+``erf.zero_zflux_faces``, ERF additionally reduces the previously computed
+ground-wall distance by the Euclidean distance to the nearest finite body
+face. For example, the distance to an x-normal face at :math:`x=x_f`, with
+:math:`y\in[y_0,y_1]` and :math:`z\in[z_0,z_1]`, is
+
+.. math::
+
+   d_f^2 = (x-x_f)^2
+           + \max(y_0-y,0,y-y_1)^2
+           + \max(z_0-z,0,z-z_1)^2.
+
+The corrected cell-centre distance is the minimum of the original ground
+distance and the distances to all configured faces. The thin-body correction
+is separate from, and is not implemented inside, the Poisson wall-distance
+solver. The corrected distance retains units of metres. Thin-face distance
+correction on vertically stretched or terrain-fitted meshes is not supported
+by this Cartesian implementation and is rejected when requested with RANS.
+
+Periodic copies of each finite face are included when measuring this
+Cartesian distance. In direction :math:`d`, let :math:`p_d` be the cell
+centre, :math:`[a_d,b_d]` the face interval, and :math:`L_d` the physical
+periodic length. The gap in that direction is
+
+.. math::
+
+   \delta_d = \min_{n\in\mathcal{N}_d}
+       \max(a_d+nL_d-p_d,\ 0,\ p_d-b_d-nL_d),
+
+where :math:`\mathcal{N}_d=\mathbb{Z}` for a periodic direction and
+:math:`\mathcal{N}_d=\{0\}` otherwise. The distance to a face is
+:math:`(\delta_x^2+\delta_y^2+\delta_z^2)^{1/2}`. For a flat ConstantDz
+ground wall, distance is measured from the physical bottom boundary at
+``geometry.prob_lo_z``, not from the global height datum.
+
+Thin immersed-body faces are currently supported only with
+``amr.max_level = 0``. Configurations that permit refinement or regridding
+with any thin-body face are rejected, whether or not RANS wall-distance
+correction is enabled. Periodic seam faces are represented on both equivalent
+normal-face planes so that the face mask zeros both periodic copies.
+
+Anelastic pressure projection with internal thin-body faces has not been
+qualified for production use. These faces can cause the current Poisson
+projection to violate the discrete divergence constraint and may lead to
+solver nonconvergence. Cartesian RANS thin-face wall-distance computation is
+a separate, geometry-only capability and does not imply that anelastic time
+integration with internal walls is supported. The input restrictions are
+listed in :ref:`sec:Inputs`.
+
 Limitations
 -----------
 
@@ -240,7 +290,9 @@ Limitations
   liquid-water potential temperature.
 * All levels must use the closure; a hybrid RANS-LES set-up is refused.
 * Embedded and thin-body boundaries are not supported by the Poisson wall
-  distance.
+  distance itself. A separate thin-face correction is available for Cartesian
+  ConstantDz meshes; it does not extend Poisson wall-distance support to
+  embedded boundaries or terrain meshes.
 * Under the anelastic integrator all vertical diffusion is explicit, so
   the time step is bounded by :math:`\Delta z^2 / (2 K)`; with the eddy
   viscosities a convective boundary layer produces (tens of m\ :sup:`2`/s)

@@ -188,6 +188,18 @@ and
 Kessler Microphysics model
 ---------------------------
 The Kessler microphysics model is a simple version of cloud microphysics which has precipitation only in the form of rain. Hence :math:`q_p = q_r`.
+
+Precipitating ``Kessler`` is not supported with ``erf.terrain_type = EB``.
+Its rain-sedimentation discretization does not apply embedded-boundary
+cell-volume or open-face geometry and has no cut-surface precipitation flux
+law, so ERF rejects this combination during parameter validation. This does
+not restrict ``Kessler`` on Cartesian or terrain-fitted meshes, and does not
+establish support for every other moisture model with EB terrain.
+``Kessler_NoRain`` follows a separate covered-cell thermodynamics path and is
+not included in this rejection. A one-step smoke test does not qualify its
+covered-cell thermodynamics or conservation for every EB geometry or moisture
+initialization; assess that behavior separately.
+
 Governing equations for the microphysical quantities for Kessler microphysics from `gabervsek2012dry`_ are
 
 .. math::

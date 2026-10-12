@@ -137,6 +137,12 @@ target_sources(${erf_exe_name}
     # Motivation: reusable scalar advection must honor explicit source, flux, and
     # tendency components instead of inferring primitive storage from native cons layout.
     ${CMAKE_CURRENT_SOURCE_DIR}/Advection/ERF_GTestScalarAdvection.cpp
+    # Motivation: advection parsing, halo reach, and thin-body geometry must
+    # reject unsupported production configurations before entering kernels.
+    ${CMAKE_CURRENT_SOURCE_DIR}/DataStructs/ERF_GTestAdvChoice.cpp
+    # Motivation: the singular Poisson RHS correction must subtract a volume
+    # mean, not a volume integral.
+    ${CMAKE_CURRENT_SOURCE_DIR}/DataStructs/ERF_GTestThinBodyMean.cpp
     # Motivation: the z-momentum box must be shrunk only at the bottom and top of the
     # domain, so that a grid split in z leaves no w-face without a source term.
     ${CMAKE_CURRENT_SOURCE_DIR}/Advection/ERF_GTestZmomBoxDecomposition.cpp

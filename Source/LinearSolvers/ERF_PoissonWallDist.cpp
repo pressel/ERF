@@ -4,6 +4,7 @@
 #include "ERF.H"
 #include "ERF_Constants.H"
 #include "ERF_Utils.H"
+#include "ERF_ThinBody.H"
 #include "ERF_TerrainPoisson_3D_K.H"
 #include "ERF_TerrainMetrics.H"
 
@@ -49,13 +50,13 @@ void ERF::poisson_wall_dist (int lev)
 
         if (solverChoice.mesh_type == MeshType::ConstantDz) {
             Print() << "Directly calculating direct wall distance for constant dz" << std::endl;
-            const auto prob_lo = geomdata.ProbLoArray();
             const auto dx = geomdata.CellSizeArray();
+            const int klo = geomdata.Domain().smallEnd(2);
             for (MFIter mfi(*walldist[lev]); mfi.isValid(); ++mfi) {
                 const Box& bx = mfi.validbox();
                 auto dist_arr = walldist[lev]->array(mfi);
                 ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
-                    dist_arr(i, j, k) = prob_lo[2] + (k + myhalf) * dx[2];
+                    dist_arr(i, j, k) = ERFThinBody::constant_dz_ground_distance(k, klo, dx[2]);
                 });
             }
             fill_wall_dist_ghost_cells(*walldist[lev], geom[lev]);

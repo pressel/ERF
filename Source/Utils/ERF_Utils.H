@@ -723,7 +723,7 @@ ApplyInvertedMask (amrex::MultiFab& dst,
  * @param[in] yfaces Indices of y-faces forming walls.
  * @param[in] zfaces Indices of z-faces forming walls.
  * @param[in] geomdata Geometry used for physical distance.
- * @param[in] z_phys_cc Cell-centered physical height.
+ * @param[in] cartesian_constant_dz True only for supported Cartesian ConstantDz geometry.
  */
 void
 thinbody_wall_dist (std::unique_ptr<amrex::MultiFab>& wdist,
@@ -731,7 +731,7 @@ thinbody_wall_dist (std::unique_ptr<amrex::MultiFab>& wdist,
                     amrex::Vector<amrex::IntVect>& yfaces,
                     amrex::Vector<amrex::IntVect>& zfaces,
                     const amrex::Geometry& geomdata,
-                    std::unique_ptr<amrex::MultiFab>& z_phys_cc);
+                    bool cartesian_constant_dz);
 
 
 void WeatherDataInterpolation (const double time);

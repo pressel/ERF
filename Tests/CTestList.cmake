@@ -1804,10 +1804,9 @@ if(ERF_ENABLE_MPI AND NOT WIN32)
                                 CHECK_LEVELS 0 1)
 endif()
 
-# Start-up check: copy SOURCE_DIR, run INPUT_FILE on one rank with RUNTIME_OPTIONS
-# that break a start-up requirement, and pass when the run stops with
-# EXPECTED_MESSAGE in its output. The run is meant to abort, so its exit status is
-# dropped by the pipe into tee (a ';' here would split the CMake command list).
+# Start-up check: copy SOURCE_DIR, run INPUT_FILE with RUNTIME_OPTIONS that break
+# a start-up requirement, and require both a numeric nonzero process status and
+# EXPECTED_MESSAGE. The CMake runner captures output without a shell pipeline.
 #
 # amrex.call_addr2line = 0 because the abort is the point of the test: AMReX's
 # SIGABRT handler runs addr2line once per stack frame, and on a build with
@@ -1822,28 +1821,87 @@ function(add_test_abort TEST_NAME SOURCE_DIR INPUT_FILE EXPECTED_MESSAGE RUNTIME
     file(GLOB TEST_FILES "${SOURCE_DIR}/*")
     file(COPY ${TEST_FILES} DESTINATION "${CURRENT_TEST_BINARY_DIR}/")
 
-    if(ERF_ENABLE_MPI)
-        set(MPI_COMMANDS "${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS}")
-    else()
-        unset(MPI_COMMANDS)
-    endif()
-
     resolve_test_exe("" "erf_exec" TEST_EXE)
 
     set(test_log "${CURRENT_TEST_BINARY_DIR}/${TEST_NAME}.log")
-    set(test_command sh -c "${MPI_COMMANDS} ${TEST_EXE} ${CURRENT_TEST_BINARY_DIR}/${INPUT_FILE} max_step=1 erf.plot_int_1=-1 erf.plot_int_2=-1 erf.check_int=-1 amrex.call_addr2line=0 ${RUNTIME_OPTIONS} 2>&1 | tee ${test_log}")
-
-    add_test(${TEST_NAME} ${test_command})
+    add_test(NAME ${TEST_NAME}
+        COMMAND ${CMAKE_COMMAND}
+            "-DERF_EXECUTABLE=${TEST_EXE}"
+            "-DINPUT_FILE=${CURRENT_TEST_BINARY_DIR}/${INPUT_FILE}"
+            "-DTEST_ROOT=${CURRENT_TEST_BINARY_DIR}"
+            "-DTEST_NAME=${TEST_NAME}"
+            "-DEXPECTED_MESSAGE=${EXPECTED_MESSAGE}"
+            "-DRUNTIME_OPTIONS=${RUNTIME_OPTIONS}"
+            "-DCONFIG=$<CONFIG>"
+            "-DRUN_TIMEOUT=600"
+            -P ${PROJECT_SOURCE_DIR}/Tests/RunExpectedAbort.cmake)
     set_tests_properties(${TEST_NAME}
         PROPERTIES
         TIMEOUT 600
         PROCESSORS 1
         WORKING_DIRECTORY "${CURRENT_TEST_BINARY_DIR}/"
         LABELS "regression"
-        PASS_REGULAR_EXPRESSION "${EXPECTED_MESSAGE}"
         ATTACHED_FILES_ON_FAIL "${test_log}"
     )
 endfunction(add_test_abort)
+
+# Positive control for valid startup input ranges, using the same single-rank
+# execution mode as the expected-abort checks.
+function(add_test_startup_smoke TEST_NAME SOURCE_DIR INPUT_FILE RUNTIME_OPTIONS)
+    set(CURRENT_TEST_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/test_files/${TEST_NAME})
+    file(MAKE_DIRECTORY ${CURRENT_TEST_BINARY_DIR})
+    file(GLOB TEST_FILES "${SOURCE_DIR}/*")
+    file(COPY ${TEST_FILES} DESTINATION "${CURRENT_TEST_BINARY_DIR}/")
+
+    resolve_test_exe("" "erf_exec" TEST_EXE)
+    set(test_log "${CURRENT_TEST_BINARY_DIR}/${TEST_NAME}.log")
+    set(_expected_message_arguments)
+    if(ARGN)
+        list(JOIN ARGN " " _expected_message)
+        list(APPEND _expected_message_arguments "-DEXPECTED_MESSAGE=${_expected_message}")
+    endif()
+    add_test(NAME ${TEST_NAME}
+        COMMAND ${CMAKE_COMMAND}
+            "-DERF_EXECUTABLE=${TEST_EXE}"
+            "-DINPUT_FILE=${CURRENT_TEST_BINARY_DIR}/${INPUT_FILE}"
+            "-DTEST_ROOT=${CURRENT_TEST_BINARY_DIR}"
+            "-DTEST_NAME=${TEST_NAME}"
+            "-DRUNTIME_OPTIONS=${RUNTIME_OPTIONS}"
+            "-DCONFIG=$<CONFIG>"
+            "-DRUN_TIMEOUT=600"
+            ${_expected_message_arguments}
+            -P ${PROJECT_SOURCE_DIR}/Tests/RunExpectedSuccess.cmake)
+    set_tests_properties(${TEST_NAME}
+        PROPERTIES
+        TIMEOUT 600
+        PROCESSORS 1
+        WORKING_DIRECTORY "${CURRENT_TEST_BINARY_DIR}/"
+        LABELS "regression"
+        ATTACHED_FILES_ON_FAIL "${test_log}"
+    )
+endfunction(add_test_startup_smoke)
+
+# Reading and writing boundary planes in one folder would replace the planes being read; the
+# folder names differ only in spelling (_SameFolder) or reach it through a symbolic link
+# (_SameFolderLink, link made here at configure time). Not on Windows, whose path spelling and
+# links this does not cover.
+if(NOT WIN32)
+  add_test_abort(ABL_BndryPlanes_SameFolder
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_files/ABL_BndryPlanes_Restart
+                 ABL_BndryPlanes_Restart.i
+                 "name the same folder"
+                 "erf.input_bndry_planes=1 erf.bndry_file=./BndryFiles/ erf.bndry_input_var_names=velocity")
+  add_test_abort(ABL_BndryPlanes_SameFolderLink
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_files/ABL_BndryPlanes_Restart
+                 ABL_BndryPlanes_Restart.i
+                 "name the same folder"
+                 "erf.input_bndry_planes=1 erf.bndry_file=BndryIn erf.bndry_input_var_names=velocity")
+  set(_bp_link_dir "${CMAKE_CURRENT_BINARY_DIR}/test_files/ABL_BndryPlanes_SameFolderLink")
+  file(MAKE_DIRECTORY "${_bp_link_dir}/BndryFiles")
+  if(NOT EXISTS "${_bp_link_dir}/BndryIn")
+    file(CREATE_LINK "BndryFiles" "${_bp_link_dir}/BndryIn" SYMBOLIC)
+  endif()
+endif()
 
 if(ERF_ENABLE_MPI AND NOT WIN32)
   # A shallow nest -- a fine level that stops below the domain top -- has no complete
@@ -1968,11 +2026,11 @@ if(ERF_ENABLE_MPI AND NOT WIN32)
   # the surface layer wherever its flux field exists -- including an adiabatic surface layer,
   # whose flux is zero -- so a nonzero erf.radiation.seb_hfx_default in the deck is not used.
   # That must be said at start-up rather than happen silently. One step of the deck above.
-  add_test_abort(TwoStream_SEBDefaultReplacedWarning
+  add_test_startup_smoke(TwoStream_SEBDefaultReplacedWarning
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_files/TwoStream_SEBSurfaceLayerFluxes
                  TwoStream_SEBSurfaceLayerFluxes.i
-                 "seb_hfx_default = 10 is not used"
-                 "erf.radiation.seb_hfx_default=10")
+                 "erf.radiation.seb_hfx_default=10"
+                 "seb_hfx_default = 10 is not used")
 endif()
 add_test_plotfile_header(Plotfile3D_TwoStreamHeatingSelection "" "erf_exec" "plt00000")
 
@@ -2974,8 +3032,8 @@ add_test_smag2d_ridge(Smag2D_Ridge_DiffusiveLimit limit "plt00010"
     REF_DIFFUSIVE_DT_LO 3.6143
     REF_DIFFUSIVE_DT_HI 3.7619)
 
-# Each new input is checked at start-up and aborts naming itself.  add_test_abort runs through
-# `sh -c ... | tee`, so these sit under the same guard as its other use.
+# Each new input is checked at start-up and aborts naming itself. The strict
+# runner requires a nonzero application status as well as the diagnostic.
 if(ERF_ENABLE_MPI AND NOT WIN32)
 set(_smag2d_dir ${CMAKE_CURRENT_SOURCE_DIR}/test_files/Smag2D_Ridge)
 add_test_abort(Smag2D_Abort_SlopeWithout2D ${_smag2d_dir} Smag2D_Ridge.i
@@ -3005,6 +3063,71 @@ add_test_abort(DiffusiveDt_Abort_LimitFixedDt ${_smag2d_dir} Smag2D_Ridge.i
 add_test_abort(DiffusiveDt_Abort_LimitNoClosure ${_smag2d_dir} Smag2D_Ridge.i
                "erf.diffusive_dt_limit = true needs an eddy-diffusivity closure"
                "erf.diffusive_dt_limit=true erf.fixed_dt=-1 erf.les_type=None erf.pbl_type=None")
+
+# Production safety gates for thin-body and EB microphysics configurations.
+# The native start-up abort runner also verifies these guards with Release
+# builds where AMReX assertions are disabled.
+set(_production_guard_abl_dir ${CMAKE_CURRENT_SOURCE_DIR}/test_files/ABL_MOST)
+add_test_startup_smoke(NumDiff_Startup_ValidZero
+               ${_production_guard_abl_dir} ABL_MOST.i "erf.num_diff_coeff=0")
+add_test_startup_smoke(NumDiff_Startup_ValidMidpoint
+               ${_production_guard_abl_dir} ABL_MOST.i "erf.num_diff_coeff=0.5")
+add_test_startup_smoke(NumDiff_Startup_ValidOne
+               ${_production_guard_abl_dir} ABL_MOST.i "erf.num_diff_coeff=1")
+add_test_startup_smoke(PoissonTolerance_Startup_ValidPositive
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.poisson_abstol=1e-8 erf.poisson_reltol=1e-8")
+add_test_abort(ThinBody_Abort_RefinementNotPermitted
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "thin immersed bodies are currently supported on one mesh level only"
+               "amr.max_level=1 erf.zero_xflux_faces='(4,4,8)'")
+add_test_abort(ThinBody_Abort_NcorrZero
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.ncorr must be an integer >= 1" "erf.ncorr=0")
+add_test_abort(ThinBody_Abort_NcorrNegative
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.ncorr must be an integer >= 1" "erf.ncorr=-1")
+add_test_abort(AnelasticThinBody_Abort_CartesianUnqualified
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.anelastic = 1 with erf.zero_*flux_faces is currently unsupported"
+               "erf.anelastic=1 erf.zero_xflux_faces='(4,4,8)'")
+add_test_abort(AnelasticThinBody_Abort_UnsupportedGeometry
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "this geometry is not supported for anelastic thin bodies"
+               "erf.anelastic=1 erf.terrain_type=StaticFittedMesh erf.zero_xflux_faces='(4,4,8)'")
+add_test_abort(NumDiff_Abort_Negative
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.num_diff_coeff must be finite and lie in the closed interval [0,1]"
+               "erf.num_diff_coeff=-0.1")
+add_test_abort(NumDiff_Abort_AboveOne
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.num_diff_coeff must be finite and lie in the closed interval [0,1]"
+               "erf.num_diff_coeff=1.1")
+add_test_abort(NumDiff_Abort_NaN
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.num_diff_coeff must be finite and lie in the closed interval [0,1]"
+               "erf.num_diff_coeff=nan")
+add_test_abort(NumDiff_Abort_PositiveInfinity
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.num_diff_coeff must be finite and lie in the closed interval [0,1]"
+               "erf.num_diff_coeff=inf")
+add_test_abort(NumDiff_Abort_NegativeInfinity
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.num_diff_coeff must be finite and lie in the closed interval [0,1]"
+               "erf.num_diff_coeff=-inf")
+foreach(_tol_kind IN ITEMS poisson_abstol poisson_reltol)
+  foreach(_bad_value IN ITEMS 0 -1 nan inf)
+    string(REPLACE "." "_" _bad_name "${_bad_value}")
+    add_test_abort(${_tol_kind}_Abort_${_bad_name}
+                   ${_production_guard_abl_dir} ABL_MOST.i
+                   "erf.${_tol_kind} must be finite and greater than zero"
+                   "erf.${_tol_kind}=${_bad_value}")
+  endforeach()
+endforeach()
+add_test_abort(EBKessler_Abort_PrecipitationUnsupported
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_files/HillEB HillEB.i
+               "precipitating Kessler rain is not currently EB-aware"
+               "erf.moisture_model=Kessler erf.moistscal_horiz_adv_type=Upwind_3rd erf.moistscal_vert_adv_type=Upwind_3rd")
 endif()
 
 #=============================================================================
