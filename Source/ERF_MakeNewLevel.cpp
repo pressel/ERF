@@ -14,11 +14,13 @@
 
 #include "ERF.H"
 #include "ERF_Utils.H"
+#include "ERF_ThinBody.H"
 #include "ERF_ProbCommon.H"
 #include "ERF_SBMStateManager.H"
 #include "ERF_SBMTransport.H"
 
 using namespace amrex;
+
 
 // Make a new level from scratch using provided BoxArray and DistributionMapping.
 // This is called both for initialization and for restart
@@ -1717,112 +1719,71 @@ ERF::make_lsm_at_level (int lev, bool from_regrid,
 void
 ERF::init_thin_body (int lev, const BoxArray& ba, const DistributionMapping& dm)
 {
-    //********************************************************************************************
-    // Thin immersed body
-    // *******************************************************************************************
-#if 0
-    if ((solverChoice.advChoice.zero_xflux.size() > 0) ||
-        (solverChoice.advChoice.zero_yflux.size() > 0) ||
-        (solverChoice.advChoice.zero_zflux.size() > 0))
-    {
-        overset_imask[lev] = std::make_unique<iMultiFab>(ba,dm,1,0);
-        overset_imask[lev]->setVal(1); // == value is unknown (to be solved)
-    }
-#endif
+    auto& adv = solverChoice.advChoice;
+    const Box domain = geom[lev].Domain();
 
-    if (solverChoice.advChoice.zero_xflux.size() > 0) {
-        amrex::Print() << "Setting up thin immersed body for "
-            << solverChoice.advChoice.zero_xflux.size() << " xfaces" << std::endl;
+    // Validate all orientations before allocating any force or mask arrays.
+    ERFThinBody::validate_face_indices(adv.zero_xflux, domain, 0, "zero_xflux_faces");
+    ERFThinBody::validate_face_indices(adv.zero_yflux, domain, 1, "zero_yflux_faces");
+    ERFThinBody::validate_face_indices(adv.zero_zflux, domain, 2, "zero_zflux_faces");
+
+    Gpu::DeviceVector<IntVect> xfaces_d(adv.zero_xflux.size());
+    Gpu::DeviceVector<IntVect> yfaces_d(adv.zero_yflux.size());
+    Gpu::DeviceVector<IntVect> zfaces_d(adv.zero_zflux.size());
+    if (!adv.zero_xflux.empty()) {
+        Gpu::copyAsync(Gpu::hostToDevice, adv.zero_xflux.begin(), adv.zero_xflux.end(), xfaces_d.begin());
+    }
+    if (!adv.zero_yflux.empty()) {
+        Gpu::copyAsync(Gpu::hostToDevice, adv.zero_yflux.begin(), adv.zero_yflux.end(), yfaces_d.begin());
+    }
+    if (!adv.zero_zflux.empty()) {
+        Gpu::copyAsync(Gpu::hostToDevice, adv.zero_zflux.begin(), adv.zero_zflux.end(), zfaces_d.begin());
+    }
+
+    if (!adv.zero_xflux.empty()) {
+        amrex::Print() << "Setting up thin immersed body for " << adv.zero_xflux.size() << " xfaces" << std::endl;
         BoxArray ba_xf(ba);
         ba_xf.surroundingNodes(0);
-        thin_xforce[lev] = std::make_unique<MultiFab>(ba_xf,dm,1,0);
+        thin_xforce[lev] = std::make_unique<MultiFab>(ba_xf, dm, 1, 0);
         thin_xforce[lev]->setVal(0.0);
-        xflux_imask[lev] = std::make_unique<iMultiFab>(ba_xf,dm,1,0);
+        xflux_imask[lev] = std::make_unique<iMultiFab>(ba_xf, dm, 1, 0);
         xflux_imask[lev]->setVal(1);
-        for ( MFIter mfi(*xflux_imask[lev], TilingIfNotGPU()); mfi.isValid(); ++mfi )
-        {
-            Array4<int> const& imask_arr = xflux_imask[lev]->array(mfi);
-            //Array4<int> const& imask_cell_arr = overset_imask[lev]->array(mfi);
-            Box xbx = mfi.nodaltilebox(0);
-            for (int iv=0; iv < solverChoice.advChoice.zero_xflux.size(); ++iv) {
-                const auto& faceidx = solverChoice.advChoice.zero_xflux[iv];
-                if ((faceidx[0] >= xbx.smallEnd(0)) && (faceidx[0] <= xbx.bigEnd(0)) &&
-                    (faceidx[1] >= xbx.smallEnd(1)) && (faceidx[1] <= xbx.bigEnd(1)) &&
-                    (faceidx[2] >= xbx.smallEnd(2)) && (faceidx[2] <= xbx.bigEnd(2)))
-                {
-                    imask_arr(faceidx[0],faceidx[1],faceidx[2]) = 0;
-                    //imask_cell_arr(faceidx[0],faceidx[1],faceidx[2]) = 0;
-                    //imask_cell_arr(faceidx[0]-1,faceidx[1],faceidx[2]) = 0;
-                    amrex::AllPrint() << "  mask xface at " << faceidx << std::endl;
-                }
-            }
-        }
+        ERFThinBody::mask_faces(*xflux_imask[lev], xfaces_d, static_cast<int>(xfaces_d.size()));
     } else {
         thin_xforce[lev] = nullptr;
         xflux_imask[lev] = nullptr;
     }
 
-    if (solverChoice.advChoice.zero_yflux.size() > 0) {
-        amrex::Print() << "Setting up thin immersed body for "
-            << solverChoice.advChoice.zero_yflux.size() << " yfaces" << std::endl;
+    if (!adv.zero_yflux.empty()) {
+        amrex::Print() << "Setting up thin immersed body for " << adv.zero_yflux.size() << " yfaces" << std::endl;
         BoxArray ba_yf(ba);
         ba_yf.surroundingNodes(1);
-        thin_yforce[lev] = std::make_unique<MultiFab>(ba_yf,dm,1,0);
+        thin_yforce[lev] = std::make_unique<MultiFab>(ba_yf, dm, 1, 0);
         thin_yforce[lev]->setVal(0.0);
-        yflux_imask[lev] = std::make_unique<iMultiFab>(ba_yf,dm,1,0);
+        yflux_imask[lev] = std::make_unique<iMultiFab>(ba_yf, dm, 1, 0);
         yflux_imask[lev]->setVal(1);
-        for ( MFIter mfi(*yflux_imask[lev], TilingIfNotGPU()); mfi.isValid(); ++mfi )
-        {
-            Array4<int> const& imask_arr = yflux_imask[lev]->array(mfi);
-            //Array4<int> const& imask_cell_arr = overset_imask[lev]->array(mfi);
-            Box ybx = mfi.nodaltilebox(1);
-            for (int iv=0; iv < solverChoice.advChoice.zero_yflux.size(); ++iv) {
-                const auto& faceidx = solverChoice.advChoice.zero_yflux[iv];
-                if ((faceidx[0] >= ybx.smallEnd(0)) && (faceidx[0] <= ybx.bigEnd(0)) &&
-                    (faceidx[1] >= ybx.smallEnd(1)) && (faceidx[1] <= ybx.bigEnd(1)) &&
-                    (faceidx[2] >= ybx.smallEnd(2)) && (faceidx[2] <= ybx.bigEnd(2)))
-                {
-                    imask_arr(faceidx[0],faceidx[1],faceidx[2]) = 0;
-                    //imask_cell_arr(faceidx[0],faceidx[1],faceidx[2]) = 0;
-                    //imask_cell_arr(faceidx[0],faceidx[1]-1,faceidx[2]) = 0;
-                    amrex::AllPrint() << "  mask yface at " << faceidx << std::endl;
-                }
-            }
-        }
+        ERFThinBody::mask_faces(*yflux_imask[lev], yfaces_d, static_cast<int>(yfaces_d.size()));
     } else {
         thin_yforce[lev] = nullptr;
         yflux_imask[lev] = nullptr;
     }
 
-    if (solverChoice.advChoice.zero_zflux.size() > 0) {
-        amrex::Print() << "Setting up thin immersed body for "
-            << solverChoice.advChoice.zero_zflux.size() << " zfaces" << std::endl;
+    if (!adv.zero_zflux.empty()) {
+        amrex::Print() << "Setting up thin immersed body for " << adv.zero_zflux.size() << " zfaces" << std::endl;
         BoxArray ba_zf(ba);
         ba_zf.surroundingNodes(2);
-        thin_zforce[lev] = std::make_unique<MultiFab>(ba_zf,dm,1,0);
+        thin_zforce[lev] = std::make_unique<MultiFab>(ba_zf, dm, 1, 0);
         thin_zforce[lev]->setVal(0.0);
-        zflux_imask[lev] = std::make_unique<iMultiFab>(ba_zf,dm,1,0);
+        zflux_imask[lev] = std::make_unique<iMultiFab>(ba_zf, dm, 1, 0);
         zflux_imask[lev]->setVal(1);
-        for ( MFIter mfi(*zflux_imask[lev], TilingIfNotGPU()); mfi.isValid(); ++mfi )
-        {
-            Array4<int> const& imask_arr = zflux_imask[lev]->array(mfi);
-            //Array4<int> const& imask_cell_arr = overset_imask[lev]->array(mfi);
-            Box zbx = mfi.nodaltilebox(2);
-            for (int iv=0; iv < solverChoice.advChoice.zero_zflux.size(); ++iv) {
-                const auto& faceidx = solverChoice.advChoice.zero_zflux[iv];
-                if ((faceidx[0] >= zbx.smallEnd(0)) && (faceidx[0] <= zbx.bigEnd(0)) &&
-                    (faceidx[1] >= zbx.smallEnd(1)) && (faceidx[1] <= zbx.bigEnd(1)) &&
-                    (faceidx[2] >= zbx.smallEnd(2)) && (faceidx[2] <= zbx.bigEnd(2)))
-                {
-                    imask_arr(faceidx[0],faceidx[1],faceidx[2]) = 0;
-                    //imask_cell_arr(faceidx[0],faceidx[1],faceidx[2]) = 0;
-                    //imask_cell_arr(faceidx[0],faceidx[1],faceidx[2]-1) = 0;
-                    amrex::AllPrint() << "  mask zface at " << faceidx << std::endl;
-                }
-            }
-        }
+        ERFThinBody::mask_faces(*zflux_imask[lev], zfaces_d, static_cast<int>(zfaces_d.size()));
     } else {
         thin_zforce[lev] = nullptr;
         zflux_imask[lev] = nullptr;
+    }
+
+    // Face-list storage remains alive through all asynchronous mask kernels.
+    if (adv.have_zero_flux_faces) {
+        Gpu::streamSynchronize();
     }
 }

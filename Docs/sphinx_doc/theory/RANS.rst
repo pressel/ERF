@@ -233,6 +233,26 @@ The distance is available as the plot variable ``walldist``. It is
 computed once at initialisation, also on a restart; it is not recomputed
 after a regrid.
 
+On a Cartesian, constant-vertical-spacing mesh with thin immersed-body
+faces configured through ``erf.zero_xflux_faces``, ``erf.zero_yflux_faces``, or
+``erf.zero_zflux_faces``, ERF additionally reduces the previously computed
+ground-wall distance by the Euclidean distance to the nearest finite body
+face. For example, the distance to an x-normal face at :math:`x=x_f`, with
+:math:`y\in[y_0,y_1]` and :math:`z\in[z_0,z_1]`, is
+
+.. math::
+
+   d_f^2 = (x-x_f)^2
+           + \max(y_0-y,0,y-y_1)^2
+           + \max(z_0-z,0,z-z_1)^2.
+
+The corrected cell-centre distance is the minimum of the original ground
+distance and the distances to all configured faces. The thin-body correction
+is separate from, and is not implemented inside, the Poisson wall-distance
+solver. The corrected distance retains units of metres. Thin-face distance
+correction on vertically stretched or terrain-fitted meshes is not supported
+by this Cartesian implementation and is rejected when requested with RANS.
+
 Limitations
 -----------
 
@@ -240,7 +260,9 @@ Limitations
   liquid-water potential temperature.
 * All levels must use the closure; a hybrid RANS-LES set-up is refused.
 * Embedded and thin-body boundaries are not supported by the Poisson wall
-  distance.
+  distance itself. A separate thin-face correction is available for Cartesian
+  ConstantDz meshes; it does not extend Poisson wall-distance support to
+  embedded boundaries or terrain meshes.
 * Under the anelastic integrator all vertical diffusion is explicit, so
   the time step is bounded by :math:`\Delta z^2 / (2 K)`; with the eddy
   viscosities a convective boundary layer produces (tens of m\ :sup:`2`/s)

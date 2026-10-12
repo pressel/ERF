@@ -215,6 +215,18 @@ BuildScalarAdvectionFluxes (
     const amrex::Real horiz_upw_frac,
     const amrex::Real vert_upw_frac)
 {
+    const auto is_weno_scheme = [](AdvType scheme) {
+        return scheme == AdvType::Weno_3 || scheme == AdvType::Weno_3Z ||
+               scheme == AdvType::Weno_3MZQ || scheme == AdvType::Weno_5 ||
+               scheme == AdvType::Weno_5Z || scheme == AdvType::Weno_7 ||
+               scheme == AdvType::Weno_7Z;
+    };
+    if ((is_weno_scheme(horiz_adv_type) || is_weno_scheme(vert_adv_type)) &&
+        horiz_adv_type != vert_adv_type) {
+        amrex::Abort("Scalar WENO requires the same horizontal and vertical scheme; "
+                     "rejecting a mismatched direct flux-dispatch request");
+    }
+
     if (horiz_adv_type == AdvType::Centered_2nd &&
         vert_adv_type == AdvType::Centered_2nd) {
         BuildScalarAdvectionFluxesCentered2(

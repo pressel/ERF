@@ -40,6 +40,14 @@ Real scalar_value (const int i, const int j, const int k) noexcept
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+Real blending_scalar_value (const int i, const int j, const int k) noexcept
+{
+    return Real(0.7) + Real(0.07)*i*i + Real(0.05)*j*j + Real(0.03)*k*k
+         + Real(0.004)*i*i*i + Real(0.003)*j*j*j + Real(0.002)*k*k*k
+         + Real(0.001)*i*j*k;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 Real momentum_value (const int i, const int j, const int k, const int dir) noexcept
 {
     if (dir == 0) {
@@ -332,6 +340,106 @@ TEST(ScalarAdvectionPrimitives, HigherOrderFluxUsesRequestedScalarAndFluxCompone
     check_centered4(host_xflux, 0);
     check_centered4(host_yflux, 1);
     check_centered4(host_zflux, 2);
+}
+
+// Motivation: an explicit upwind fraction selects the blend weight for either
+// accepted input spelling, and each direction must use its own flux sign.
+TEST(ScalarAdvectionConfiguration, UpwindFractionChangesIndependentDirectionalFluxes)
+{
+    const Box bx = test_cell_box();
+    Box scalar_box = bx;
+    scalar_box.grow(2);
+    FArrayBox scalar(scalar_box, 1);
+    FArrayBox xmom(amrex::surroundingNodes(bx,0), 1);
+    FArrayBox ymom(amrex::surroundingNodes(bx,1), 1);
+    FArrayBox zmom(amrex::surroundingNodes(bx,2), 1);
+    FArrayBox xflux(amrex::surroundingNodes(bx,0), 1);
+    FArrayBox yflux(amrex::surroundingNodes(bx,1), 1);
+    FArrayBox zflux(amrex::surroundingNodes(bx,2), 1);
+    auto scalar_arr = scalar.array();
+    amrex::ParallelFor(scalar.box(), [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+    {
+        scalar_arr(i,j,k,0) = blending_scalar_value(i,j,k);
+    });
+    fill_momentum(xmom, 0);
+    fill_momentum(ymom, 1);
+    fill_momentum(zmom, 2);
+
+    FArrayBox centered_x(xflux.box(), 1, amrex::The_Pinned_Arena());
+    FArrayBox centered_y(yflux.box(), 1, amrex::The_Pinned_Arena());
+    FArrayBox centered_z(zflux.box(), 1, amrex::The_Pinned_Arena());
+    FArrayBox upwind_x(xflux.box(), 1, amrex::The_Pinned_Arena());
+    FArrayBox upwind_y(yflux.box(), 1, amrex::The_Pinned_Arena());
+    FArrayBox upwind_z(zflux.box(), 1, amrex::The_Pinned_Arena());
+    const auto run = [&](const Real fraction, FArrayBox& host_xflux,
+                         FArrayBox& host_yflux, FArrayBox& host_zflux) {
+        const auto flux_views = make_flux_views(xflux, yflux, zflux);
+        BuildScalarAdvectionFluxes(bx, scalar.const_array(), 0, flux_views, 0,
+                                   xmom.const_array(), ymom.const_array(), zmom.const_array(),
+                                   AdvType::Upwind_3rd, AdvType::Upwind_3rd,
+                                   fraction, fraction);
+        gpu_sync();
+        copy_to_host(xflux, host_xflux);
+        copy_to_host(yflux, host_yflux);
+        copy_to_host(zflux, host_zflux);
+    };
+
+    run(Real(0.0), centered_x, centered_y, centered_z);
+    run(Real(1.0), upwind_x, upwind_y, upwind_z);
+    const std::array<const FArrayBox*, 3> centered_flux{{
+        &centered_x, &centered_y, &centered_z}};
+    const std::array<const FArrayBox*, 3> upwind_flux{{
+        &upwind_x, &upwind_y, &upwind_z}};
+    constexpr int i = 1, j = 1, k = 1;
+
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        int ip = i, jp = j, kp = k;
+        int im = i, jm = j, km = k;
+        int imm = i, jmm = j, kmm = k;
+        if (dir == 0) { ++ip; --im; imm -= 2; }
+        if (dir == 1) { ++jp; --jm; jmm -= 2; }
+        if (dir == 2) { ++kp; --km; kmm -= 2; }
+        const Real sp1 = blending_scalar_value(ip,jp,kp);
+        const Real s = blending_scalar_value(i,j,k);
+        const Real sm1 = blending_scalar_value(im,jm,km);
+        const Real sm2 = blending_scalar_value(imm,jmm,kmm);
+        const Real mom = momentum_value(i,j,k,dir);
+        const Real high_order = (Real(7.0)/Real(12.0))*(s+sm1) -
+                                (Real(1.0)/Real(12.0))*(sp1+sm2);
+        const Real correction = (Real(1.0)/Real(12.0)) *
+                                ((sp1-sm2) - Real(3.0)*(s-sm1));
+        const Real upwind_sign = mom > Real(0.0) ? Real(1.0) : Real(-1.0);
+        const Real expected_centered = mom * high_order;
+        const Real expected_upwind = mom * (high_order + upwind_sign * correction);
+        const auto c = (*centered_flux[dir]).const_array();
+        const auto u = (*upwind_flux[dir]).const_array();
+        expect_close(c(i,j,k,0), expected_centered);
+        expect_close(u(i,j,k,0), expected_upwind);
+        EXPECT_NE(c(i,j,k,0), u(i,j,k,0));
+    }
+}
+
+// Motivation: callers that bypass SolverChoice initialization must still fail
+// before a mismatched WENO dispatch can leave any directional flux unwritten.
+TEST(ScalarAdvectionConfiguration, DirectFluxDispatchRejectsMismatchedWeno)
+{
+    const Box bx = test_cell_box();
+    Box scalar_box = bx;
+    scalar_box.grow(4);
+    FArrayBox scalar(scalar_box, 1);
+    FArrayBox xmom(amrex::surroundingNodes(bx,0), 1);
+    FArrayBox ymom(amrex::surroundingNodes(bx,1), 1);
+    FArrayBox zmom(amrex::surroundingNodes(bx,2), 1);
+    FArrayBox xflux(amrex::surroundingNodes(bx,0), 1);
+    FArrayBox yflux(amrex::surroundingNodes(bx,1), 1);
+    FArrayBox zflux(amrex::surroundingNodes(bx,2), 1);
+    const auto flux_views = make_flux_views(xflux, yflux, zflux);
+
+    EXPECT_DEATH(BuildScalarAdvectionFluxes(
+                     bx, scalar.const_array(), 0, flux_views, 0,
+                     xmom.const_array(), ymom.const_array(), zmom.const_array(),
+                     AdvType::Weno_5, AdvType::Centered_2nd, Real(1.0), Real(1.0)),
+                 "Scalar WENO requires the same horizontal and vertical scheme");
 }
 
 // Motivation: Native ERF stores primitive scalar n one component below its

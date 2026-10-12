@@ -1524,7 +1524,8 @@ ERF::InitData_post ()
                                    solverChoice.advChoice.zero_yflux,
                                    solverChoice.advChoice.zero_zflux,
                                    geom[lev],
-                                   z_phys_cc[lev]);
+                                   solverChoice.mesh_type == MeshType::ConstantDz &&
+                                   solverChoice.terrain_type == TerrainType::None);
 
                 // The correction is only applied on the valid region
                 fill_wall_dist_ghost_cells(*walldist[lev], geom[lev]);

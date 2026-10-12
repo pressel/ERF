@@ -2014,12 +2014,40 @@ In addition to the above advection schemes for dycore variables, dry and moist
 scalars also have the option of using "Upwind_3rd_SL" (slope-limited) and
 "WENOMZQ3."
 
-To use the blended schemes, ``erf.[vartype]_[horiz|vert]_upw_frac`` for the corresponding
-``erf.[vartype]_[horiz|vert]_adv_type`` should be set to a scalar between 0 and 1, where 1 is fully
-upwind and 0 is fully central.
+The ``erf.*_horiz_upw_frac`` and ``erf.*_vert_upw_frac`` inputs set the
+fraction :math:`\alpha` of the upwind correction for the corresponding
+third-/fourth-order or fifth-/sixth-order scheme. The value must be finite
+and satisfy :math:`0 \leq \alpha \leq 1`. A value of 1 selects the full
+third- or fifth-order upwind-biased reconstruction; 0 selects the associated
+fourth- or sixth-order centered reconstruction. Intermediate values blend
+the two. The default is 1.
 
-Note: if using WENO schemes, the horizontal and vertical advection types must be set to
-the same string.
+``Upwind_3rd`` and ``Blended_3rd4th`` use the same reconstruction family;
+``Upwind_5th`` and ``Blended_5th6th`` likewise share a family. An explicitly
+specified upwinding fraction applies to either name. With no fraction
+specified, ``Upwind_3rd`` and ``Upwind_5th`` retain their pure-upwind
+defaults. An explicitly supplied fraction for a scheme which cannot use it
+(e.g. a centered, WENO, or slope-limited scheme) is rejected at startup.
+Invalid or blank scheme selections and nonfinite/out-of-range fractions are
+also rejected at startup, including in optimized builds.
+
+For scalar advection, a WENO choice requires *the same WENO scheme* in both
+horizontal and vertical directions. For example, ``WENO5``/``WENO5`` is
+supported on the regular-grid scalar path, while ``WENO5``/``Centered_2nd``
+and ``WENO5``/``WENOZ5`` are not. Non-WENO horizontal and vertical scalar
+schemes may be chosen independently where implemented. The dycore horizontal
+and vertical WENO choices must also match because the thermodynamic state uses
+the same scalar-flux dispatcher.
+
+On embedded-boundary (``erf.terrain_type = EB``) cut cells, the scalar
+advection implementations currently support ``Centered_2nd``, ``Upwind_3rd``,
+``Centered_4th``, ``Upwind_5th`` and ``Centered_6th`` in supported horizontal
+and vertical combinations. WENO and ``Upwind_3rd_SL`` are not implemented for
+EB cut-cell scalar flux reconstruction. WENO momentum advection is also not
+supported with EB. Unsupported *active* combinations are rejected before the
+simulation begins; the moist scalar WENO3 defaults must be overridden when
+moisture is actually transported using EB, but a dry-only EB run is not
+restricted by its inactive moist default.
 
 The efficient advection schemes for dry and moist scalars exploit the substages of the
 time advancing RK3 scheme by using lower order schemes in the first two substages and the

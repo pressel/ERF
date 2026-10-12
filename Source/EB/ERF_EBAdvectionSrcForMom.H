@@ -666,6 +666,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 flx_u_arr, flx_v_arr, flx_w_arr,
                                 lo_z_face, hi_z_face);
     } else {
-        AMREX_ASSERT_WITH_MESSAGE(false, "Unknown advection scheme!");
+        amrex::Abort("Unsupported vertical advection scheme in EB momentum dispatch");
     }
 }
