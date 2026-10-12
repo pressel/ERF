@@ -3148,6 +3148,25 @@ add_test_abort(DiffusiveDt_Abort_LimitFixedDt ${_smag2d_dir} Smag2D_Ridge.i
 add_test_abort(DiffusiveDt_Abort_LimitNoClosure ${_smag2d_dir} Smag2D_Ridge.i
                "erf.diffusive_dt_limit = true needs an eddy-diffusivity closure"
                "erf.diffusive_dt_limit=true erf.fixed_dt=-1 erf.les_type=None erf.pbl_type=None")
+
+# Production safety gates for thin-body and EB microphysics configurations.
+# The native start-up abort runner also verifies these guards with Release
+# builds where AMReX assertions are disabled.
+set(_production_guard_abl_dir ${CMAKE_CURRENT_SOURCE_DIR}/test_files/ABL_MOST)
+add_test_abort(ThinBody_Abort_RefinementNotPermitted
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "thin immersed bodies are currently supported on one mesh level only"
+               "amr.max_level=1 erf.zero_xflux_faces='(4,4,8)'")
+add_test_abort(ThinBody_Abort_NcorrZero
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.ncorr must be an integer >= 1" "erf.ncorr=0")
+add_test_abort(ThinBody_Abort_NcorrNegative
+               ${_production_guard_abl_dir} ABL_MOST.i
+               "erf.ncorr must be an integer >= 1" "erf.ncorr=-1")
+add_test_abort(EBKessler_Abort_PrecipitationUnsupported
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_files/HillEB HillEB.i
+               "precipitating Kessler rain is not currently EB-aware"
+               "erf.moisture_model=Kessler erf.moistscal_horiz_adv_type=Upwind_3rd erf.moistscal_vert_adv_type=Upwind_3rd")
 endif()
 
 #=============================================================================

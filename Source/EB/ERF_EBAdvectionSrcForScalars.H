@@ -264,6 +264,6 @@ EBAdvectionSrcForScalarsVert (const amrex::Box& bx,
                                                             horiz_upw_frac, vert_upw_frac);
         break;
     default:
-        AMREX_ASSERT_WITH_MESSAGE(false, "Unknown vertical advection scheme!");
+        amrex::Abort("Unsupported vertical advection scheme in EB cut-cell scalar dispatch");
     }
 }

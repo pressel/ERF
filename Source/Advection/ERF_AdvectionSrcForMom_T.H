@@ -643,6 +643,6 @@ AdvectionSrcForMomVert (const amrex::Box& bxx, const amrex::Box& bxy, const amre
                                                                   upw_frac_h, upw_frac_v,
                                                                   vert_adv_type, lo_z_face, hi_z_face);
     } else {
-        AMREX_ASSERT_WITH_MESSAGE(false, "Unknown advection scheme!");
+        amrex::Abort("Unsupported vertical advection scheme in terrain momentum dispatch");
     }
 }

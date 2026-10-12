@@ -307,7 +307,7 @@ AdvectionSrcForMom_TF (const Box& bxx, const Box& bxy, const Box& bxz,
                                                 horiz_upw_frac, vert_upw_frac,
                                                 vert_adv_type, lo_z_face, hi_z_face);
         } else {
-            AMREX_ASSERT_WITH_MESSAGE(false, "Unknown advection scheme!");
+            amrex::Abort("Unsupported horizontal advection scheme in terrain-fitted momentum dispatch");
         }
     }
 }

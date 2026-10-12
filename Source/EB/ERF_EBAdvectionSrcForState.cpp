@@ -355,7 +355,8 @@ EBAdvectionSrcForScalars (const Box& bx,
                                                 horiz_upw_frac, vert_upw_frac, vert_adv_type);
             break;
         default:
-            AMREX_ASSERT_WITH_MESSAGE(false, "Unknown advection scheme! WENO is currently not supported for EB.");
+            amrex::Abort("Unsupported horizontal advection scheme in EB cut-cell scalar dispatch; "
+                         "WENO and Upwind_3rd_SL are not supported for EB");
         }
     }
 

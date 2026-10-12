@@ -1,6 +1,7 @@
 #ifndef ERF_DATA_STRUCT_H_
 #define ERF_DATA_STRUCT_H_
 
+#include <algorithm>
 #include <string>
 #include <iostream>
 #include <cmath>
@@ -1127,6 +1128,9 @@ struct SolverChoice {
         }
 
         pp.queryAdd("ncorr", ncorr);
+        if (ncorr < 1) {
+            amrex::Abort("erf.ncorr must be an integer >= 1");
+        }
         // Wall distance on a terrain-fitted mesh (RANS): "poisson" (Tucker 2003
         // differential-equation distance) or "terrain_height" (height above the
         // local surface projected on its normal, no linear solve)
@@ -1347,6 +1351,18 @@ struct SolverChoice {
         }
 
             advChoice.init_params(pp_prefix);
+        if (terrain_type == TerrainType::EB && moisture_type == MoistureType::Kessler) {
+            amrex::Abort("erf.moisture_model=Kessler with erf.terrain_type=EB is unsupported: "
+                         "precipitating Kessler rain is not currently EB-aware and requires "
+                         "a conservative cut-cell sedimentation treatment");
+        }
+        if (advChoice.have_zero_flux_faces && max_level > 0) {
+            amrex::Abort("erf.zero_*flux_faces require amr.max_level = 0; thin immersed bodies "
+                         "are currently supported on one mesh level only, without refinement "
+                         "or regridding");
+        }
+        advChoice.validate_active_configuration(terrain_type == TerrainType::EB,
+                                               moisture_type != MoistureType::None);
            diffChoice.init_params(pp_prefix);
         dampingChoice.init_params(pp_prefix);
          spongeChoice.init_params(pp_prefix);
@@ -1355,6 +1371,15 @@ struct SolverChoice {
         turbChoice.resize(max_level+1);
         for (int lev = 0; lev <= max_level; lev++) {
             turbChoice[lev].init_params(lev,max_level,pp_prefix);
+        }
+
+        const bool rans_active = std::any_of(turbChoice.begin(), turbChoice.end(),
+            [](const TurbChoice& choice) { return choice.rans_type != RANSType::None; });
+        if (rans_active && advChoice.have_zero_flux_faces &&
+            (mesh_type != MeshType::ConstantDz || terrain_type != TerrainType::None)) {
+            amrex::Abort("erf.zero_*flux_faces with an active erf.rans_type currently requires "
+                         "Cartesian geometry (erf.terrain_type=None and ConstantDz); thin-face "
+                         "wall-distance correction is not implemented for stretched or terrain meshes");
         }
 
         // WRF's Smagorinsky-2D slope limiter divides K_h by the terrain slope factor of the
