@@ -638,14 +638,32 @@ halos. Coarse/fine reflux uses the accepted, time-integrated, fully
 bin-resolved transport, followed by mapped restriction, strict full-spectrum
 admissibility checks, and regeneration of compact ``qc``/``qr``.
 
-The qualification has exercised 1M and 2M layouts with attached properties,
-nonzero fine transport, active FCT limiting, two fine substeps per coarse
-step, and composite leaf-inventory checks. This is an internal fixed-grid
-qualification, not a supported multilevel user option. Dynamic regridding and
-derefinement, exact-schema hierarchy restart, nonperiodic spectral boundary
-lifecycle, and the final CPU/GPU/MPI conservation and memory gates remain to
-be completed. Passing this fixed-grid test does not authorize removal of the
-single-level runtime guard.
+The fixed-grid tests exercise three real fine substeps per coarse interval,
+with 1M and 2M spectra that include an attached property, nonzero accepted
+interface transfer, active FCT limiting, and per-component composite
+leaf-inventory checks. Two-rank fixtures divide both coarse and fine grids
+across ranks and verify remote coarse-parent and same-level fine-fine donors;
+one-rank comparisons and a separate empty-fine-rank regression are included.
+The qualification also checks fresh two-cell parent halos, including 2M
+physical-to-endpoint ghost values at face, edge, and corner locations.
+
+The parent-fill profile compared componentwise copies with a bounded
+``2K+2``-component source pack for 32, 128, and 256 components on one, two,
+and four CPU ranks. Packing reduced the measured copy calls per parent role
+from 68/272/544 to 2/8/16, but complete fine-step time increased by 7--21%
+in this Debug CPU matrix and the pack added bounded FAB storage. The
+componentwise path therefore remains the production default; packed filling
+is retained only for comparison and profiling. These timings are not an
+optimized-build performance claim.
+
+These are fixed-grid internal qualification results, not a supported
+multilevel user option. The parent-fill communication profile measures
+32/128/256 components at one, two, and four ranks on a CPU Debug build; it
+does not qualify optimized production performance, GPU execution, or device
+memory. Dynamic regridding and derefinement, exact-schema hierarchy restart,
+and operational nonperiodic spectral boundaries remain unimplemented.
+Passing these tests does not authorize removal of the single-level runtime
+guard.
 
 The fixed-grid qualification covers only part of ERF's adaptive-mesh
 lifecycle. A production multilevel simulation must also preserve the full

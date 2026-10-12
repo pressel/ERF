@@ -8,6 +8,10 @@
 
 #include <memory>
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <sstream>
+#include <vector>
 #include "ERF_Constants.H"
 
 #include "ERF_EOS.H"
@@ -16,6 +20,8 @@
 #include "AMReX_FileSystem.H"
 #include "AMReX_Random.H"
 #include "AMReX_WriteEBSurface.H"
+#include <AMReX_BoxIterator.H>
+#include <AMReX_ParallelDescriptor.H>
 
 #include "ERF_EpochTime.H"
 #include "ERF_IntervalMeansCheckpoint.H"
@@ -49,6 +55,159 @@ void discard_sbm_sync_interval (erf_sbm::SBMAMRFluxRegister& flux_register,
               discard_diagnostic + "; original failure: " + reason);
     }
 }
+
+#ifdef ERF_SBM_AMR_QUALIFICATION
+void validate_split_sbm_qualification_layout (
+    const amrex::BoxArray& coarse_ba,
+    const amrex::DistributionMapping& coarse_dm,
+    const amrex::Geometry& coarse_geom,
+    const amrex::BoxArray& fine_ba,
+    const amrex::DistributionMapping& fine_dm,
+    const amrex::Geometry& fine_geom,
+    const amrex::IntVect& refinement_ratio)
+{
+    const int ranks = amrex::ParallelDescriptor::NProcs();
+    std::vector<int> coarse_boxes(static_cast<std::size_t>(ranks), 0);
+    std::vector<int> fine_boxes(static_cast<std::size_t>(ranks), 0);
+    std::vector<amrex::Long> coarse_cells(static_cast<std::size_t>(ranks), 0);
+    std::vector<amrex::Long> fine_cells(static_cast<std::size_t>(ranks), 0);
+    for (int box = 0; box < coarse_ba.size(); ++box) {
+        const int owner = coarse_dm[box];
+        ++coarse_boxes[static_cast<std::size_t>(owner)];
+        coarse_cells[static_cast<std::size_t>(owner)] += coarse_ba[box].numPts();
+    }
+    for (int box = 0; box < fine_ba.size(); ++box) {
+        const int owner = fine_dm[box];
+        ++fine_boxes[static_cast<std::size_t>(owner)];
+        fine_cells[static_cast<std::size_t>(owner)] += fine_ba[box].numPts();
+    }
+    int coarse_owner_count = 0;
+    int fine_owner_count = 0;
+    for (int rank = 0; rank < ranks; ++rank) {
+        coarse_owner_count += coarse_boxes[static_cast<std::size_t>(rank)] > 0;
+        fine_owner_count += fine_boxes[static_cast<std::size_t>(rank)] > 0;
+        std::ostringstream line;
+        line << "SBM_AMR_QUAL_OWNER rank=" << rank
+             << " coarse_boxes=" << coarse_boxes[static_cast<std::size_t>(rank)]
+             << " coarse_cells=" << coarse_cells[static_cast<std::size_t>(rank)]
+             << " fine_boxes=" << fine_boxes[static_cast<std::size_t>(rank)]
+             << " fine_cells=" << fine_cells[static_cast<std::size_t>(rank)];
+        amrex::AllPrint() << line.str() << '\n';
+    }
+
+    const auto fine_domain = fine_geom.Domain();
+    auto wrap_fine_cell = [&](amrex::IntVect cell) {
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            if (!fine_geom.isPeriodic(dir)) continue;
+            const int length = fine_domain.length(dir);
+            while (cell[dir] < fine_domain.smallEnd(dir)) cell[dir] += length;
+            while (cell[dir] > fine_domain.bigEnd(dir)) cell[dir] -= length;
+        }
+        return cell;
+    };
+    auto containing_box = [](const amrex::BoxArray& boxes,
+                             const amrex::IntVect& cell) {
+        for (int index = 0; index < boxes.size(); ++index) {
+            if (boxes[index].contains(cell)) return index;
+        }
+        return -1;
+    };
+
+    bool found_remote_parent = false;
+    bool found_remote_fine_donor = false;
+    std::ostringstream parent_sample;
+    std::ostringstream fine_sample;
+    for (int destination_box = 0;
+         destination_box < fine_ba.size() &&
+             (!found_remote_parent || !found_remote_fine_donor);
+         ++destination_box) {
+        const int destination_rank = fine_dm[destination_box];
+        const amrex::Box valid = fine_ba[destination_box];
+        amrex::Box grown = valid;
+        grown.grow(2);
+        for (amrex::BoxIterator bit(grown);
+             bit.ok() && (!found_remote_parent || !found_remote_fine_donor);
+             ++bit) {
+            const amrex::IntVect raw_ghost = bit();
+            if (valid.contains(raw_ghost)) continue;
+            const amrex::IntVect wrapped = wrap_fine_cell(raw_ghost);
+            const int fine_donor = containing_box(fine_ba, wrapped);
+            if (!found_remote_fine_donor && fine_donor >= 0 &&
+                fine_donor != destination_box &&
+                fine_dm[fine_donor] != destination_rank) {
+                found_remote_fine_donor = true;
+                fine_sample << "dest_fine_box=" << destination_box
+                            << " dest_rank=" << destination_rank
+                            << " ghost=" << raw_ghost
+                            << " donor_fine_box=" << fine_donor
+                            << " donor_rank=" << fine_dm[fine_donor]
+                            << " donor_cell=" << wrapped;
+            }
+            if (!found_remote_parent && fine_donor < 0) {
+                amrex::IntVect parent = wrapped;
+                parent.coarsen(refinement_ratio);
+                const int parent_box = containing_box(coarse_ba, parent);
+                if (parent_box >= 0 && coarse_dm[parent_box] != destination_rank) {
+                    found_remote_parent = true;
+                    parent_sample << "dest_fine_box=" << destination_box
+                                  << " dest_rank=" << destination_rank
+                                  << " ghost=" << raw_ghost
+                                  << " parent_cell=" << parent
+                                  << " source_coarse_box=" << parent_box
+                                  << " source_rank=" << coarse_dm[parent_box];
+                }
+            }
+        }
+    }
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        ranks >= 2 && coarse_owner_count >= 2 && fine_owner_count >= 2,
+        "split SBM qualification must place coarse and fine valid cells on "
+        "at least two ranks");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        found_remote_parent,
+        "split SBM qualification found no remote coarse parent ghost donor");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        found_remote_fine_donor,
+        "split SBM qualification found no remote same-level fine-fine ghost donor");
+    amrex::Print() << "SBM_AMR_QUAL_SPLIT_LAYOUT coarse_ranks="
+                   << coarse_owner_count << " fine_ranks=" << fine_owner_count
+                   << " remote_parent=true remote_fine=true\n"
+                   << "SBM_AMR_QUAL_GHOST_SAMPLE type=coarse_parent "
+                   << parent_sample.str() << '\n'
+                   << "SBM_AMR_QUAL_GHOST_SAMPLE type=fine_fine "
+                   << fine_sample.str() << '\n';
+    amrex::ignore_unused(coarse_geom);
+}
+
+void validate_empty_fine_rank_qualification_layout (
+    const amrex::BoxArray& fine_ba,
+    const amrex::DistributionMapping& fine_dm)
+{
+    const int ranks = amrex::ParallelDescriptor::NProcs();
+    std::vector<int> fine_boxes(static_cast<std::size_t>(ranks), 0);
+    std::vector<amrex::Long> fine_cells(static_cast<std::size_t>(ranks), 0);
+    for (int box = 0; box < fine_ba.size(); ++box) {
+        const int owner = fine_dm[box];
+        ++fine_boxes[static_cast<std::size_t>(owner)];
+        fine_cells[static_cast<std::size_t>(owner)] += fine_ba[box].numPts();
+    }
+    int empty_ranks = 0;
+    for (int rank = 0; rank < ranks; ++rank) {
+        if (fine_boxes[static_cast<std::size_t>(rank)] == 0) ++empty_ranks;
+        std::ostringstream line;
+        line << "SBM_AMR_QUAL_EMPTY_OWNER rank=" << rank
+             << " fine_boxes=" << fine_boxes[static_cast<std::size_t>(rank)]
+             << " fine_cells=" << fine_cells[static_cast<std::size_t>(rank)];
+        amrex::AllPrint() << line.str() << '\n';
+    }
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        ranks >= 2 && empty_ranks > 0,
+        "empty-fine-rank SBM qualification did not leave a rank without fine cells");
+    amrex::Print() << "SBM_AMR_QUAL_EMPTY_FINE_RANK empty_ranks="
+                   << empty_ranks << '\n';
+}
+#endif
 
 } // namespace
 
@@ -931,16 +1090,49 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
 
 #ifdef ERF_SBM_AMR_QUALIFICATION
     if (solverChoice.sbm_amr_qualification_test) {
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(finest_level == 1 && nsubsteps[1] >= 2,
-            "SBM AMR qualification did not run two fine substeps on a two-level hierarchy");
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(finest_level == 1 && nsubsteps[1] >= 3,
+            "SBM AMR qualification did not run three fine substeps on a two-level hierarchy");
+        if (solverChoice.sbm_amr_qualification_expect_split && nstep == 0) {
+            validate_split_sbm_qualification_layout(
+                grids[0], dmap[0], geom[0], grids[1], dmap[1], geom[1],
+                ref_ratio[0]);
+        } else if (solverChoice.sbm_amr_qualification_expect_empty_fine_rank &&
+                   nstep == 0) {
+            validate_empty_fine_rank_qualification_layout(grids[1], dmap[1]);
+        }
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
             sbm_qualification_reflux_calls > 0 &&
             sbm_qualification_reflux_syncs > 0,
             "SBM AMR qualification did not exercise and synchronize its YA register");
         const bool limiter_changed_rate =
             sbm_transport->interval_limiter_changed_rate();
-        const Real rounding_factor = Real(16384.0) *
-                                     std::numeric_limits<Real>::epsilon();
+        AMREX_ALWAYS_ASSERT(finest_level == 1);
+        std::uint64_t refinement_volume = 1U;
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            refinement_volume *= static_cast<std::uint64_t>(ref_ratio[0][dir]);
+        }
+        const auto coarse_cells = static_cast<std::uint64_t>(grids[0].numPts());
+        const auto fine_cells = static_cast<std::uint64_t>(grids[1].numPts());
+        AMREX_ALWAYS_ASSERT(refinement_volume > 0U &&
+                            fine_cells % refinement_volume == 0U &&
+                            coarse_cells >= fine_cells / refinement_volume);
+        const std::uint64_t leaf_cell_terms =
+            coarse_cells - fine_cells / refinement_volume + fine_cells;
+        int reduction_depth = 0;
+        for (int ranks = ParallelDescriptor::NProcs(); ranks > 1;
+             ranks = (ranks + 1) / 2) {
+            ++reduction_depth;
+        }
+        // Each positive leaf term uses up to three multiplies and one local
+        // accumulation. Bound both initial and final inventories, the final
+        // subtraction, and a pairwise MPI reduction with a conservative
+        // eight operations per leaf plus two reduction-tree levels per depth.
+        const std::uint64_t inventory_operation_count =
+            8U * leaf_cell_terms + 2U * static_cast<std::uint64_t>(reduction_depth) + 1U;
+        const Real q = static_cast<Real>(inventory_operation_count) *
+                       std::numeric_limits<Real>::epsilon();
+        AMREX_ALWAYS_ASSERT(q < Real(1.0));
+        const Real rounding_factor = q / (Real(1.0) - q);
         Real zero_flow_correction_tolerance = Real(0.0);
         if (solverChoice.sbm_amr_qualification_expect_zero_flow) {
             Real inventory_scale = std::numeric_limits<Real>::min();
@@ -949,11 +1141,18 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
             }
             zero_flow_correction_tolerance =
                 rounding_factor * inventory_scale;
+            amrex::Print() << "SBM_AMR_QUAL_ZERO_FLOW_CHECK correction_linf="
+                           << sbm_qualification_correction_linf
+                           << " tolerance=" << zero_flow_correction_tolerance
+                           << " limiter_changed_rate="
+                           << (limiter_changed_rate ? "true" : "false")
+                           << " operation_count=" << inventory_operation_count
+                           << " reduction_depth=" << reduction_depth << '\n';
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
                 sbm_qualification_correction_linf <=
-                    zero_flow_correction_tolerance && !limiter_changed_rate,
+                    zero_flow_correction_tolerance,
                 "zero-flow SBM AMR qualification produced a correction beyond "
-                "roundoff or changed an accepted rate");
+                "its operation-count roundoff bound");
         } else {
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
                 sbm_qualification_nonzero_correction,
@@ -988,12 +1187,19 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
             const Real initial = sbm_qualification_initial_inventory[component];
             const Real final = inventory[component];
             const Real tolerance = rounding_factor * std::max(
-                std::abs(initial), std::numeric_limits<Real>::min());
+                std::abs(initial) + std::abs(final),
+                std::numeric_limits<Real>::min());
             const Real error = std::abs(final - initial);
+            const Real scale = std::abs(initial) + std::abs(final);
             amrex::Print() << "SBM_AMR_QUAL_INVENTORY component=" << component
                            << " initial=" << initial << " final=" << final
                            << " abs_error=" << error
-                           << " tolerance=" << tolerance << '\n';
+                           << " magnitude_scale=" << scale
+                           << " relative_error="
+                           << (scale > Real(0.0) ? error / scale : Real(0.0))
+                           << " tolerance=" << tolerance
+                           << " operation_count=" << inventory_operation_count
+                           << " reduction_depth=" << reduction_depth << '\n';
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(error <= tolerance,
                 "SBM AMR qualification composite leaf inventory changed beyond its roundoff bound");
         }

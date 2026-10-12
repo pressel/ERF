@@ -583,6 +583,7 @@ TEST(SBMFoundation, BeginStepAcceptsOnlyBoundedERFFineSubstepRounding)
         manager.new_time(0), third_begin + fine_dt, fine_dt));
     ASSERT_TRUE(manager.begin_step(0, third_begin, diagnostic, fine_dt))
         << diagnostic;
+    EXPECT_DOUBLE_EQ(manager.old_time(0), third_begin);
 }
 
 TEST(SBMFoundation, RestartSchemaAndSpectrumRoundTripAreExact)

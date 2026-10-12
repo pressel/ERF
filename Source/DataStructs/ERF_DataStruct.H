@@ -727,6 +727,10 @@ struct SolverChoice {
         pp.queryAdd("sbm_amr_qualification_test", sbm_amr_qualification_test);
         pp.queryAdd("sbm_amr_qualification_expect_zero_flow",
                     sbm_amr_qualification_expect_zero_flow);
+        pp.queryAdd("sbm_amr_qualification_expect_split",
+                    sbm_amr_qualification_expect_split);
+        pp.queryAdd("sbm_amr_qualification_expect_empty_fine_rank",
+                    sbm_amr_qualification_expect_empty_fine_rank);
 #else
         if (pp.contains("sbm_amr_qualification_test")) {
             amrex::Error("erf.sbm_amr_qualification_test is available only in "
@@ -734,6 +738,16 @@ struct SolverChoice {
         }
         if (pp.contains("sbm_amr_qualification_expect_zero_flow")) {
             amrex::Error("erf.sbm_amr_qualification_expect_zero_flow is "
+                         "available only in the isolated "
+                         "ERF_ENABLE_SBM_AMR_QUALIFICATION build");
+        }
+        if (pp.contains("sbm_amr_qualification_expect_split")) {
+            amrex::Error("erf.sbm_amr_qualification_expect_split is available "
+                         "only in the isolated "
+                         "ERF_ENABLE_SBM_AMR_QUALIFICATION build");
+        }
+        if (pp.contains("sbm_amr_qualification_expect_empty_fine_rank")) {
+            amrex::Error("erf.sbm_amr_qualification_expect_empty_fine_rank is "
                          "available only in the isolated "
                          "ERF_ENABLE_SBM_AMR_QUALIFICATION build");
         }
@@ -2542,6 +2556,8 @@ struct SolverChoice {
     int sbm_cloud_rain_split{-1};
     bool sbm_amr_qualification_test{false};
     bool sbm_amr_qualification_expect_zero_flow{false};
+    bool sbm_amr_qualification_expect_split{false};
+    bool sbm_amr_qualification_expect_empty_fine_rank{false};
     bool sbm_test_native_qc_write_fault{false};
     bool sbm_test_donor_cfl_fault{false};
     amrex::Vector<amrex::Real> sbm_edges;

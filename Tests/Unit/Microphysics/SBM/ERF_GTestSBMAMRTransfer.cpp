@@ -1923,7 +1923,7 @@ TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
     const Geometry fine_geom = make_geometry(fine_domain);
     const double coarse_begin = 0.0;
     const double coarse_end = 0.3;
-    constexpr int fine_substeps = 2;
+    constexpr int fine_substeps = 3;
     const double fine_dt = (coarse_end - coarse_begin) / fine_substeps;
 
     for (const auto method : {erf_auxiliary::HostIntegrator::CompressibleRK3,
@@ -2035,6 +2035,86 @@ TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
         }
         ASSERT_TRUE(direct_register.can_accept_reflux(diagnostic)) << diagnostic;
         expect_roundoff_equivalent(direct_state, reference_state);
+        // Independent local finite-volume oracle at the uncovered coarse cell
+        // immediately left of the x-high refined interface.  The expected
+        // correction is assembled directly from the accepted, stage-weighted
+        // face integrals and an explicit outward-normal sign; it does not
+        // inspect the final candidate difference or reuse YA's sign formula.
+        const IntVect interface_cell(1, 3, 3);
+        const Box cell_region(interface_cell, interface_cell);
+        const Box coarse_face(IntVect(2, 3, 3), IntVect(2, 3, 3),
+                              IntVect::TheDimensionVector(0));
+        const Real inv_dx = Real(1.0) / coarse_geom.CellSize(0);
+        const ComponentOffsets semantic = offsets_for(layout);
+        const std::array<int, 3> sample_components{
+            semantic.two_mass, semantic.two_number, semantic.two_property};
+        const int operation_count = 2 * stages * (fine_substeps + 1) + 12;
+        const Real eps = std::numeric_limits<Real>::epsilon();
+        const Real q = static_cast<Real>(operation_count) * eps;
+        const Real gamma = q / (Real(1.0) - q);
+        for (const int component : sample_components) {
+            const Real coarse_amount =
+                coarse_integral.dir(0).sum(coarse_face, component, false);
+            Real fine_amount_sum = Real(0.0);
+            for (int y_subface = 0; y_subface < 2; ++y_subface) {
+                for (int z_subface = 0; z_subface < 2; ++z_subface) {
+                    const IntVect fine_face_cell(4, 6 + y_subface,
+                                                 6 + z_subface);
+                    const Box fine_face(fine_face_cell, fine_face_cell,
+                                        IntVect::TheDimensionVector(0));
+                    fine_amount_sum +=
+                        fine_integral.dir(0).sum(fine_face, component, false);
+                }
+            }
+            const Real fine_face_average = fine_amount_sum / Real(4.0);
+            const Real expected_delta_h =
+                (coarse_amount - fine_face_average) * inv_dx;
+            const Real initial_h = Real(0.25) * (component + 1);
+            const Real actual_delta_h =
+                direct_state.sum(cell_region, component, false) - initial_h;
+            const Real magnitude =
+                (std::abs(coarse_amount) +
+                 (std::abs(fine_amount_sum) / Real(4.0))) * inv_dx;
+            const Real oracle_tolerance =
+                (gamma + Real(2.0) * eps) * magnitude;
+            const Real wrong_sign_delta = -expected_delta_h;
+            const Real omit_fine_delta = coarse_amount * inv_dx;
+            const Real double_interval_delta =
+                expected_delta_h * static_cast<Real>(coarse_end - coarse_begin);
+            ASSERT_GT(std::abs(expected_delta_h), Real(100.0) * oracle_tolerance)
+                << "fixture lacks a discriminating local interface amount; component="
+                << component << " method=" << method_id;
+            EXPECT_LE(std::abs(actual_delta_h - expected_delta_h),
+                      oracle_tolerance)
+                << "component=" << component << " method=" << method_id
+                << " expected_delta_h=" << expected_delta_h
+                << " actual_delta_h=" << actual_delta_h
+                << " bound=" << oracle_tolerance;
+            EXPECT_GT(std::abs(actual_delta_h - wrong_sign_delta),
+                      oracle_tolerance)
+                << "local FV oracle failed to distinguish reversed face sign";
+            EXPECT_GT(std::abs(actual_delta_h - omit_fine_delta),
+                      oracle_tolerance)
+                << "local FV oracle failed to distinguish omitted fine integral";
+            EXPECT_GT(std::abs(actual_delta_h - double_interval_delta),
+                      oracle_tolerance)
+                << "local FV oracle failed to distinguish double interval weighting";
+            std::cout << "SBM_LOCAL_FV_ORACLE method=" << method_id
+                      << " component=" << component
+                      << " coarse_integral=" << coarse_amount
+                      << " fine_subface_sum=" << fine_amount_sum
+                      << " delta_h=" << expected_delta_h
+                      << " actual_delta_h=" << actual_delta_h
+                      << " bound=" << oracle_tolerance
+                      << " operation_count=" << operation_count
+                      << " wrong_sign_separation="
+                      << std::abs(actual_delta_h - wrong_sign_delta)
+                      << " omit_fine_separation="
+                      << std::abs(actual_delta_h - omit_fine_delta)
+                      << " double_interval_separation="
+                      << std::abs(actual_delta_h - double_interval_delta)
+                      << '\n';
+        }
         EXPECT_TRUE(direct_register.has_outstanding_amount());
         ASSERT_TRUE(direct_register.accept_reflux(diagnostic)) << diagnostic;
         EXPECT_FALSE(direct_register.has_outstanding_amount());
@@ -2851,18 +2931,33 @@ TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
             coarse_on_fine_ba.coarsen(ratio);
             const auto fill_scratch_before = amrex::TotalBytesAllocatedInFabs();
             std::uint64_t temporal_fill_stage_scratch_bytes = 0;
+            std::uint64_t parent_fill_source_pack_bytes = 0;
             {
+                MultiFab source_pack(coarse_ba, coarse_dm,
+                                     2 * chunk_components + 2, 0);
                 MultiFab fill_scratch(coarse_on_fine_ba, fine_dm,
                                       2 * chunk_components + 2,
                                       amrex::IntVect(2));
                 amrex::Gpu::streamSynchronize();
-                temporal_fill_stage_scratch_bytes =
-                    static_cast<std::uint64_t>(
-                        amrex::TotalBytesAllocatedInFabs() -
-                        fill_scratch_before);
+                for (amrex::MFIter mfi(source_pack, false);
+                     mfi.isValid(); ++mfi) {
+                    parent_fill_source_pack_bytes +=
+                        static_cast<std::uint64_t>(
+                            source_pack[mfi].nBytesOwned());
+                }
+                temporal_fill_stage_scratch_bytes = payload_bytes(fill_scratch);
+                EXPECT_EQ(static_cast<std::uint64_t>(
+                              amrex::TotalBytesAllocatedInFabs() -
+                              fill_scratch_before),
+                          temporal_fill_stage_scratch_bytes +
+                              parent_fill_source_pack_bytes);
             }
-            const auto direct_stage_peak_bytes = direct_allocated +
-                state_and_transport_bytes + temporal_fill_stage_scratch_bytes;
+            const auto direct_componentwise_stage_peak_bytes =
+                direct_allocated + state_and_transport_bytes +
+                temporal_fill_stage_scratch_bytes;
+            const auto packed_comparison_stage_peak_bytes =
+                direct_componentwise_stage_peak_bytes +
+                parent_fill_source_pack_bytes;
 
             // Keep the one private full-spectrum coarse candidate live while
             // measuring the two mutually exclusive sync phases. Restriction
@@ -2960,11 +3055,15 @@ TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
                               << state_and_transport_bytes
                               << " temporal_fill_stage_scratch_bytes="
                               << temporal_fill_stage_scratch_bytes
+                              << " parent_fill_source_pack_bytes="
+                              << parent_fill_source_pack_bytes
+                              << " packed_comparison_stage_peak_total_bytes="
+                              << packed_comparison_stage_peak_bytes
                               << " ghost_region_bytes=" << ghost_region_bytes
                               << " sync_candidate_peak_bytes=" << sync_scratch_bytes
                               << " direct_sync_peak_total_bytes=" << direct_peak_bytes
-                              << " direct_stage_peak_total_bytes="
-                              << direct_stage_peak_bytes
+                              << " direct_componentwise_stage_peak_total_bytes="
+                              << direct_componentwise_stage_peak_bytes
                               << " completed_integral_ledger_bytes=" << reference_extra
                               << " rate_chunk_components=" << chunk_components
                               << " cell_ratio_components="

@@ -1956,10 +1956,30 @@ void run_host_slow_copy_preserves_accepted_liquid_projection_test ()
     EXPECT_EQ(projection_error.norm0(1), Real(0.0));
 }
 
-void run_coarse_stage_g1_ghost_test ()
+struct G1GhostSample
+{
+    Real physical{Real(-1.0)};
+    Real endpoint{Real(-1.0)};
+    int physical_hit{0};
+    int endpoint_hit{0};
+};
+
+void run_coarse_stage_g1_ghost_test (const bool inject_stale_write_fault = false,
+                                    const bool rounded_three_substeps = false,
+                                    const int quotient_fault = 0,
+                                    const bool two_moment_attached = false,
+                                    const IntVect probe_cell = IntVect(1, 3, 3),
+                                    const int probe_component = 0,
+                                    G1GhostSample* sample_result = nullptr,
+                                    const int probe_stage = -1,
+                                    const int probe_role = 0,
+                                    const bool full_rk3_step = false,
+                                    const bool componentwise_parent_fill = true)
 {
     const erf_sbm::SBMLayout layout =
-        make_layout(erf_sbm::MomentMode::OneMoment);
+        make_layout(two_moment_attached ? erf_sbm::MomentMode::TwoMoment
+                                        : erf_sbm::MomentMode::OneMoment,
+                    two_moment_attached);
     const Box coarse_domain(IntVect(0, 0, 0), IntVect(3, 3, 3));
     const Box fine_domain = amrex::refine(coarse_domain, IntVect(2));
     const BoxArray coarse_ba(coarse_domain);
@@ -1972,22 +1992,84 @@ void run_coarse_stage_g1_ghost_test ()
     const int periodic[AMREX_SPACEDIM] = {1, 1, 1};
     const Geometry fine_geom(fine_domain, &fine_physical,
                              amrex::CoordSys::cartesian, periodic);
+    const double coarse_begin =
+        (rounded_three_substeps || two_moment_attached) ? 0.1 : 0.0;
+    const double coarse_end =
+        (rounded_three_substeps || two_moment_attached) ? 0.2 : 1.0;
+    const double fine_dt = rounded_three_substeps
+        ? (coarse_end - coarse_begin) / 3.0 : (coarse_end - coarse_begin);
 
     erf_sbm::SBMStateManager state_manager(layout, 2);
-    state_manager.define(0, coarse_ba, coarse_dm, 0.0);
-    state_manager.define(1, fine_ba, fine_dm, 0.0);
-    state_manager.new_state_for_initialization(0).setVal(Real(1.0));
-    state_manager.new_state_for_initialization(1).setVal(Real(1.0));
+    std::string diagnostic;
+    state_manager.define(0, coarse_ba, coarse_dm, coarse_begin);
+    state_manager.define(1, fine_ba, fine_dm, coarse_begin);
+    const auto set_two_moment_state = [&layout] (MultiFab& state,
+                                                  const bool future) {
+        state.setVal(Real(0.0));
+        const auto& population = layout.populations().front();
+        const int property = layout.property_offset(0);
+        const std::array<Real, 6> values = future
+            ? std::array<Real, 6>{Real(1.2), Real(1.4), Real(4.0),
+                                  Real(2.0), Real(0.8), Real(0.4)}
+            : std::array<Real, 6>{Real(0.3), Real(0.7), Real(2.0),
+                                  Real(1.0), Real(0.2), Real(0.1)};
+        state.setVal(values[0], population.mass_offset, 1, 0);
+        state.setVal(values[1], population.mass_offset + 1, 1, 0);
+        state.setVal(values[2], population.number_offset, 1, 0);
+        state.setVal(values[3], population.number_offset + 1, 1, 0);
+        state.setVal(values[4], property, 1, 0);
+        state.setVal(values[5], property + 1, 1, 0);
+    };
+    if (two_moment_attached) {
+        set_two_moment_state(state_manager.new_state_for_initialization(0), false);
+        set_two_moment_state(state_manager.new_state_for_initialization(1), false);
+        ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
+            state_manager.new_state(0), layout, 0, &diagnostic)) << diagnostic;
+        ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
+            state_manager.new_state(1), layout, 1, &diagnostic)) << diagnostic;
+    } else {
+        state_manager.new_state_for_initialization(0).setVal(Real(1.0));
+        state_manager.new_state_for_initialization(1).setVal(Real(1.0));
+    }
     MultiFab coarse_rho_old(coarse_ba, coarse_dm, 3, 0);
     MultiFab coarse_rho_new(coarse_ba, coarse_dm, 3, 0);
     coarse_rho_old.setVal(Real(0.0));
     coarse_rho_new.setVal(Real(0.0));
-    coarse_rho_old.setVal(Real(1.0), Rho_comp, 1, 0);
-    coarse_rho_new.setVal(Real(3.0), Rho_comp, 1, 0);
-    std::string diagnostic;
-    ASSERT_TRUE(state_manager.begin_step(0, 0.0, diagnostic)) << diagnostic;
-    state_manager.new_target_storage(0).setVal(Real(9.0));
-    ASSERT_TRUE(state_manager.accept_stage_target(0, 1.0, true, diagnostic))
+    Real rho_old_value = Real(1.0);
+    Real rho_new_value = Real(3.0);
+    if (quotient_fault == 1) {
+        rho_old_value = rho_new_value = std::numeric_limits<Real>::min();
+    } else if (quotient_fault == 2) {
+        rho_old_value = rho_new_value = std::numeric_limits<Real>::max();
+    } else if (quotient_fault == 3) {
+        rho_old_value = Real(0.0);
+    }
+    coarse_rho_old.setVal(rho_old_value, Rho_comp, 1, 0);
+    coarse_rho_new.setVal(rho_new_value, Rho_comp, 1, 0);
+    if (quotient_fault == 2) {
+        state_manager.new_state_for_initialization(0).setVal(
+            std::numeric_limits<Real>::denorm_min(), 0, 1, 0);
+    }
+    ASSERT_TRUE(state_manager.begin_step(0, coarse_begin, diagnostic)) << diagnostic;
+    if (two_moment_attached) {
+        set_two_moment_state(state_manager.new_target_storage(0), true);
+        ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
+            state_manager.new_target_storage(0), layout, 0, &diagnostic))
+            << diagnostic;
+    } else {
+        state_manager.new_target_storage(0).setVal(Real(9.0));
+    }
+    if (quotient_fault == 1) {
+        state_manager.new_target_storage(0).setVal(
+            std::numeric_limits<Real>::max(), 0, 1, 0);
+    } else if (quotient_fault == 2) {
+        state_manager.new_target_storage(0).setVal(
+            std::numeric_limits<Real>::denorm_min(), 0, 1, 0);
+    } else if (quotient_fault == 4) {
+        state_manager.new_target_storage(0).setVal(
+            std::numeric_limits<Real>::quiet_NaN(), 0, 1, 0);
+    }
+    ASSERT_TRUE(state_manager.accept_stage_target(0, coarse_end, true, diagnostic))
         << diagnostic;
 
     erf_sbm::SBMTransport transport(layout, 2, 16, false);
@@ -2033,33 +2115,106 @@ void run_coarse_stage_g1_ghost_test ()
     avg_zmom.setVal(Real(0.0));
 
     amrex::Gpu::DeviceVector<Real> sampled_intensive(1, Real(-1.0));
+    amrex::Gpu::DeviceVector<Real> sampled_endpoint(1, Real(-1.0));
     amrex::Gpu::DeviceVector<int> sample_hit(1, 0);
+    amrex::Gpu::DeviceVector<int> endpoint_hit(1, 0);
     erf_sbm::SBMAMRStageGhostProbe probe;
-    probe.fine_cell = IntVect(1, 3, 3);
-    probe.global_component = 0;
+    probe.fine_cell = probe_cell;
+    probe.global_component = probe_component;
+    probe.requested_stage = probe_stage >= 0 ? probe_stage
+        : (rounded_three_substeps ? 0 : -1);
+    probe.requested_role = probe_role;
     probe.sampled_intensive_device = sampled_intensive.data();
+    probe.sampled_endpoint_device = two_moment_attached && probe_role == 0
+        ? sampled_endpoint.data() : nullptr;
     probe.hit_device = sample_hit.data();
+    probe.endpoint_hit_device = two_moment_attached && probe_role == 0
+        ? endpoint_hit.data() : nullptr;
+    probe.seed_finite_stale_value = inject_stale_write_fault;
+    probe.skipped_global_component = inject_stale_write_fault
+        ? probe_component : -1;
     erf_sbm::SBMAMRStageParent parent;
     parent.conserved_old = &coarse_rho_old;
     parent.conserved_new = &coarse_rho_new;
-    parent.old_time = 0.0;
-    parent.new_time = 1.0;
-    parent.fine_step_dt = 1.0;
+    parent.old_time = coarse_begin;
+    parent.new_time = coarse_end;
+    parent.fine_step_dt = fine_dt;
     parent.refinement_ratio = IntVect(2);
     parent.ghost_probe = &probe;
+    parent.componentwise_parent_fill = componentwise_parent_fill;
 
-    ASSERT_TRUE(state_manager.begin_step(1, 0.0, diagnostic, 1.0))
-        << diagnostic;
-    transport.advance_stage_from_host(
-        1, erf_auxiliary::HostIntegrator::CompressibleRK3, 0,
-        0.0, 0.0, 0.5, 0.5, state_manager, fine_rho_anchor,
-        fine_rho_input, fine_rho_target, avg_xmom, avg_ymom, avg_zmom,
-        fine_geom, 1, 2, &parent);
-    transport.advance_stage_from_host(
-        1, erf_auxiliary::HostIntegrator::CompressibleRK3, 1,
-        0.0, 0.5, 1.0, 0.5, state_manager, fine_rho_anchor,
-        fine_rho_input, fine_rho_target, avg_xmom, avg_ymom, avg_zmom,
-        fine_geom, 1, 2, &parent);
+    if (rounded_three_substeps) {
+        for (int substep = 0; substep < 3; ++substep) {
+            const double step_old_time =
+                coarse_begin + static_cast<double>(substep) * fine_dt;
+            if (substep == 2) {
+                ASSERT_NE(state_manager.new_time(1), step_old_time)
+                    << "the fixture must reproduce ERF's non-bitwise third fine start";
+            }
+            ASSERT_TRUE(state_manager.begin_step(
+                1, step_old_time, diagnostic, fine_dt)) << diagnostic;
+            EXPECT_DOUBLE_EQ(state_manager.old_time(1), step_old_time);
+            const double stage0_time = step_old_time + fine_dt / 3.0;
+            const double stage1_time = step_old_time + fine_dt / 2.0;
+            const double step_end_time = step_old_time + fine_dt;
+            transport.advance_stage_from_host(
+                1, erf_auxiliary::HostIntegrator::CompressibleRK3, 0,
+                step_old_time, step_old_time, stage0_time, fine_dt / 3.0,
+                state_manager, fine_rho_anchor, fine_rho_input,
+                fine_rho_target, avg_xmom, avg_ymom, avg_zmom, fine_geom,
+                1, 2, &parent);
+            transport.advance_stage_from_host(
+                1, erf_auxiliary::HostIntegrator::CompressibleRK3, 1,
+                step_old_time, stage0_time, stage1_time, fine_dt / 2.0,
+                state_manager, fine_rho_anchor, fine_rho_input,
+                fine_rho_target, avg_xmom, avg_ymom, avg_zmom, fine_geom,
+                1, 2, &parent);
+            transport.advance_stage_from_host(
+                1, erf_auxiliary::HostIntegrator::CompressibleRK3, 2,
+                step_old_time, stage1_time, step_end_time, fine_dt,
+                state_manager, fine_rho_anchor, fine_rho_input,
+                fine_rho_target, avg_xmom, avg_ymom, avg_zmom, fine_geom,
+                1, 2, &parent);
+            EXPECT_TRUE(transport.projected_ledger(1).step_complete());
+        }
+    } else if (full_rk3_step) {
+        ASSERT_TRUE(state_manager.begin_step(1, coarse_begin, diagnostic,
+                                             fine_dt)) << diagnostic;
+        const double stage0_time = coarse_begin + fine_dt / 3.0;
+        const double stage1_time = coarse_begin + fine_dt / 2.0;
+        const double step_end_time = coarse_begin + fine_dt;
+        transport.advance_stage_from_host(
+            1, erf_auxiliary::HostIntegrator::CompressibleRK3, 0,
+            coarse_begin, coarse_begin, stage0_time, fine_dt / 3.0,
+            state_manager, fine_rho_anchor, fine_rho_input, fine_rho_target,
+            avg_xmom, avg_ymom, avg_zmom, fine_geom, 1, 2, &parent);
+        transport.advance_stage_from_host(
+            1, erf_auxiliary::HostIntegrator::CompressibleRK3, 1,
+            coarse_begin, stage0_time, stage1_time, fine_dt / 2.0,
+            state_manager, fine_rho_anchor, fine_rho_input, fine_rho_target,
+            avg_xmom, avg_ymom, avg_zmom, fine_geom, 1, 2, &parent);
+        transport.advance_stage_from_host(
+            1, erf_auxiliary::HostIntegrator::CompressibleRK3, 2,
+            coarse_begin, stage1_time, step_end_time, fine_dt,
+            state_manager, fine_rho_anchor, fine_rho_input, fine_rho_target,
+            avg_xmom, avg_ymom, avg_zmom, fine_geom, 1, 2, &parent);
+    } else {
+        ASSERT_TRUE(state_manager.begin_step(1, coarse_begin, diagnostic,
+                                             fine_dt)) << diagnostic;
+        const double stage_mid_time =
+            coarse_begin + 0.5 * (coarse_end - coarse_begin);
+        const double half_dt = 0.5 * (coarse_end - coarse_begin);
+        transport.advance_stage_from_host(
+            1, erf_auxiliary::HostIntegrator::CompressibleRK3, 0,
+            coarse_begin, coarse_begin, stage_mid_time, half_dt,
+            state_manager, fine_rho_anchor, fine_rho_input, fine_rho_target,
+            avg_xmom, avg_ymom, avg_zmom, fine_geom, 1, 2, &parent);
+        transport.advance_stage_from_host(
+            1, erf_auxiliary::HostIntegrator::CompressibleRK3, 1,
+            coarse_begin, stage_mid_time, coarse_end, half_dt,
+            state_manager, fine_rho_anchor, fine_rho_input, fine_rho_target,
+            avg_xmom, avg_ymom, avg_zmom, fine_geom, 1, 2, &parent);
+    }
 
     Real sampled_value = Real(-1.0);
     int sample_was_hit = 0;
@@ -2068,28 +2223,201 @@ void run_coarse_stage_g1_ghost_test ()
                      &sampled_value);
     amrex::Gpu::copy(amrex::Gpu::deviceToHost, sample_hit.begin(),
                      sample_hit.end(), &sample_was_hit);
+    Real sampled_endpoint_value = Real(-1.0);
+    int endpoint_was_hit = 0;
+    if (two_moment_attached) {
+        amrex::Gpu::copy(amrex::Gpu::deviceToHost,
+                         sampled_endpoint.begin(), sampled_endpoint.end(),
+                         &sampled_endpoint_value);
+        amrex::Gpu::copy(amrex::Gpu::deviceToHost, endpoint_hit.begin(),
+                         endpoint_hit.end(), &endpoint_was_hit);
+    }
     amrex::Gpu::streamSynchronize();
     EXPECT_EQ(sample_was_hit, 1)
         << "the probe cell must be a two-ghost coarse/fine donor cell";
-    EXPECT_NEAR(sampled_value, Real(2.5), Real(32.0) *
-                std::numeric_limits<Real>::epsilon());
-    const Real endpoint_ratio_interpolation =
-        Real(0.5) * (Real(1.0) / Real(1.0) + Real(9.0) / Real(3.0));
-    const Real future_density_substitution =
-        (Real(0.5) * Real(1.0) + Real(0.5) * Real(9.0)) / Real(3.0);
-    EXPECT_NE(sampled_value, endpoint_ratio_interpolation);
-    EXPECT_NE(sampled_value, future_density_substitution);
+    if (two_moment_attached && probe_role == 0) {
+        EXPECT_EQ(endpoint_was_hit, 1)
+            << "the probe cell must be transformed after physical G1 fill";
+    }
+    if (sample_result != nullptr) {
+        sample_result->physical = sampled_value;
+        sample_result->endpoint = sampled_endpoint_value;
+        sample_result->physical_hit = sample_was_hit;
+        sample_result->endpoint_hit = endpoint_was_hit;
+    }
+    if (two_moment_attached) {
+        double requested = coarse_begin;
+        if (probe_role == 0 && probe_stage == 1) {
+            requested = coarse_begin + fine_dt / 3.0;
+        } else if (probe_role == 0 && probe_stage == 2) {
+            requested = coarse_begin + fine_dt / 2.0;
+        }
+        const Real theta = static_cast<Real>((requested - coarse_begin) /
+                                             (coarse_end - coarse_begin));
+        Real old_value = Real(0.0);
+        Real new_value = Real(0.0);
+        switch (probe_component) {
+        case 0: old_value = Real(0.3); new_value = Real(1.2); break;
+        case 1: old_value = Real(0.7); new_value = Real(1.4); break;
+        case 2: old_value = Real(2.0); new_value = Real(4.0); break;
+        case 3: old_value = Real(1.0); new_value = Real(2.0); break;
+        case 4: old_value = Real(0.2); new_value = Real(0.8); break;
+        default: old_value = Real(0.1); new_value = Real(0.4); break;
+        }
+        const Real rho_t = (Real(1.0) - theta) * Real(1.0) +
+                           theta * Real(3.0);
+        const Real expected_physical =
+            ((Real(1.0) - theta) * old_value + theta * new_value) / rho_t;
+        EXPECT_NEAR(sampled_value, expected_physical, Real(64.0) *
+                    std::numeric_limits<Real>::epsilon());
+        Real expected_endpoint = Real(-1.0);
+        if (probe_role == 0) {
+            expected_endpoint = expected_physical;
+        }
+        if (probe_role == 0 && (probe_component == 0 || probe_component == 2)) {
+            const Real mass = probe_component == 0
+                ? expected_physical
+                : ((Real(1.0) - theta) * Real(0.3) +
+                   theta * Real(1.2)) / rho_t;
+            const Real number = probe_component == 2
+                ? expected_physical
+                : ((Real(1.0) - theta) * Real(2.0) +
+                   theta * Real(4.0)) / rho_t;
+            expected_endpoint = probe_component == 0
+                ? (Real(0.5) * number - mass) / Real(0.4)
+                : (mass - Real(0.1) * number) / Real(0.4);
+        }
+        if (probe_role == 0) {
+            EXPECT_NEAR(sampled_endpoint_value, expected_endpoint, Real(96.0) *
+                        std::numeric_limits<Real>::epsilon());
+        }
+        if (probe_component == 0 && probe_role == 0 && theta > Real(0.0)) {
+            const Real endpoint_ratio_interpolation =
+                (Real(1.0) - theta) * (Real(0.3) / Real(1.0)) +
+                theta * (Real(1.2) / Real(3.0));
+            const Real future_density_substitution =
+                ((Real(1.0) - theta) * Real(0.3) +
+                 theta * Real(1.2)) / Real(3.0);
+            EXPECT_GT(std::abs(sampled_value - endpoint_ratio_interpolation),
+                      Real(100.0) * std::numeric_limits<Real>::epsilon());
+            EXPECT_GT(std::abs(sampled_value - future_density_substitution),
+                      Real(100.0) * std::numeric_limits<Real>::epsilon());
+            EXPECT_GT(std::abs(sampled_endpoint_value - sampled_value),
+                      Real(100.0) * std::numeric_limits<Real>::epsilon())
+                << "the physical M,N ghost must be endpoint-transformed before WENO";
+        }
+    } else if (rounded_three_substeps) {
+        const double requested = coarse_begin + 2.0 * fine_dt;
+        const Real theta = static_cast<Real>((requested - coarse_begin) /
+                                             (coarse_end - coarse_begin));
+        const Real expected = (Real(1.0) + Real(8.0) * theta) /
+                              (Real(1.0) + Real(2.0) * theta);
+        EXPECT_NEAR(sampled_value, expected, Real(64.0) *
+                    std::numeric_limits<Real>::epsilon());
+    } else {
+        EXPECT_NEAR(sampled_value, Real(2.5), Real(32.0) *
+                    std::numeric_limits<Real>::epsilon());
+        const Real endpoint_ratio_interpolation =
+            Real(0.5) * (Real(1.0) / Real(1.0) + Real(9.0) / Real(3.0));
+        const Real future_density_substitution =
+            (Real(0.5) * Real(1.0) + Real(0.5) * Real(9.0)) / Real(3.0);
+        EXPECT_NE(sampled_value, endpoint_ratio_interpolation);
+        EXPECT_NE(sampled_value, future_density_substitution);
+    }
 
     const auto& fine_state = state_manager.new_state(1);
     for (int component = 0; component < layout.ncomp(); ++component) {
-        EXPECT_EQ(fine_state.min(component), Real(1.0));
-        EXPECT_EQ(fine_state.max(component), Real(1.0));
+        if (two_moment_attached) {
+            const std::array<Real, 6> initial{
+                Real(0.3), Real(0.7), Real(2.0), Real(1.0),
+                Real(0.2), Real(0.1)};
+            const Real expected = initial[static_cast<std::size_t>(component)];
+            EXPECT_EQ(fine_state.min(component), expected);
+            EXPECT_EQ(fine_state.max(component), expected);
+        } else {
+            EXPECT_EQ(fine_state.min(component), Real(1.0));
+            EXPECT_EQ(fine_state.max(component), Real(1.0));
+        }
     }
 }
 
 TEST(SBMTransport, FineStageCoarseGhostUsesG1PhysicalEndpointInterpolation)
 {
     run_coarse_stage_g1_ghost_test();
+}
+
+TEST(SBMTransport, RoundedThirdFineSubstepCompletesRealStageZeroAndRK3)
+{
+    run_coarse_stage_g1_ghost_test(false, true);
+}
+
+TEST(SBMTransport, TwoMomentAttachedG1AndEndpointGhostsCoverFaceEdgeCornerLayers)
+{
+    const std::array<IntVect, 6> ghost_cells{
+        IntVect(1, 3, 3), IntVect(0, 3, 3),
+        IntVect(1, 1, 3), IntVect(0, 0, 3),
+        IntVect(1, 1, 1), IntVect(0, 0, 0)};
+    for (const IntVect& cell : ghost_cells) {
+        for (const int component : {0, 2, 4}) {
+            SCOPED_TRACE(::testing::Message()
+                         << "ghost=" << cell << " component=" << component);
+            G1GhostSample sample;
+            for (int stage = 0; stage < 3; ++stage) {
+                for (int role = 0; role < 3; ++role) {
+                    SCOPED_TRACE(::testing::Message()
+                                 << "stage=" << stage << " role=" << role);
+                    G1GhostSample componentwise_reference;
+                    G1GhostSample packed_comparison;
+                    run_coarse_stage_g1_ghost_test(
+                        false, false, 0, true, cell, component,
+                        &componentwise_reference, stage, role, true, true);
+                    run_coarse_stage_g1_ghost_test(
+                        false, false, 0, true, cell, component,
+                        &packed_comparison, stage, role, true, false);
+                    EXPECT_EQ(componentwise_reference.physical_hit, 1);
+                    EXPECT_EQ(packed_comparison.physical_hit, 1);
+                    EXPECT_EQ(componentwise_reference.endpoint_hit,
+                              role == 0 ? 1 : 0);
+                    EXPECT_EQ(packed_comparison.endpoint_hit,
+                              role == 0 ? 1 : 0);
+                    EXPECT_EQ(packed_comparison.physical,
+                              componentwise_reference.physical);
+                    EXPECT_EQ(packed_comparison.endpoint,
+                              componentwise_reference.endpoint);
+                }
+            }
+        }
+    }
+}
+
+TEST(SBMTransport, MissingParentGhostWriteRejectsFiniteStaleSentinel)
+{
+    EXPECT_DEATH(run_coarse_stage_g1_ghost_test(true, false),
+                 "omitted a required parent ghost component write");
+}
+
+TEST(SBMTransport, ParentGhostRejectsOverflowingUOverRho)
+{
+    EXPECT_DEATH(run_coarse_stage_g1_ghost_test(false, false, 1),
+                 "unrepresentable U\\(t\\)/rho_d\\(t\\) quotient");
+}
+
+TEST(SBMTransport, ParentGhostRejectsPositiveSupportUnderflow)
+{
+    EXPECT_DEATH(run_coarse_stage_g1_ghost_test(false, false, 2),
+                 "unrepresentable U\\(t\\)/rho_d\\(t\\) quotient");
+}
+
+TEST(SBMTransport, ParentGhostRejectsZeroDensityEndpoint)
+{
+    EXPECT_DEATH(run_coarse_stage_g1_ghost_test(false, false, 3),
+                 "endpoint data are not finite with positive density");
+}
+
+TEST(SBMTransport, ParentGhostRejectsNonfiniteSpectrumEndpoint)
+{
+    EXPECT_DEATH(run_coarse_stage_g1_ghost_test(false, false, 4),
+                 "endpoint data are not finite with positive density");
 }
 
 struct SpectralLedgerResult {

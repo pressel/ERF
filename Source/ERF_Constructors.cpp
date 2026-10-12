@@ -116,7 +116,9 @@ void validate_sbm_m3_advection (const SolverChoice& choice,
     } else {
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
             !choice.sbm_amr_qualification_test &&
-            !choice.sbm_amr_qualification_expect_zero_flow,
+            !choice.sbm_amr_qualification_expect_zero_flow &&
+            !choice.sbm_amr_qualification_expect_split &&
+            !choice.sbm_amr_qualification_expect_empty_fine_rank,
             "the internal SBM AMR qualification flag requires amr.max_level=1");
     }
 #else

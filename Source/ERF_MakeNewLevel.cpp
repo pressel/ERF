@@ -146,7 +146,8 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba_in,
                 solverChoice.sbm_fixture_initial_state[static_cast<std::size_t>(comp)], comp, 1, 0);
         }
 #ifdef ERF_SBM_AMR_QUALIFICATION
-        if (lev == 0 && solverChoice.sbm_amr_qualification_test) {
+        if (lev == 0 && solverChoice.sbm_amr_qualification_test &&
+            !solverChoice.sbm_amr_qualification_expect_zero_flow) {
             // A canonical, component-wise common factor creates a sharp
             // periodic translation profile while preserving each 2M bin's
             // mass/number ratio and every attached-property support ratio.

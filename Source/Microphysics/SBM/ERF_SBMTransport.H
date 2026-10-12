@@ -22,8 +22,15 @@ class SBMStateAdmission;
 struct SBMAMRStageGhostProbe {
     amrex::IntVect fine_cell{0};
     int global_component{0};
+    int requested_stage{-1};
+    int requested_role{0}; // input=0, limiter-base=1, anchor=2
     amrex::Real* sampled_intensive_device{nullptr};
+    amrex::Real* sampled_endpoint_device{nullptr};
     int* hit_device{nullptr};
+    int* endpoint_hit_device{nullptr};
+    int skipped_global_component{-1};
+    bool seed_finite_stale_value{false};
+    amrex::Real stale_value{amrex::Real(-987654.0)};
 };
 
 /** Coarse host density endpoints paired with the state-manager's coarse SBM
@@ -38,6 +45,11 @@ struct SBMAMRStageParent {
     double fine_step_dt{0.0};
     amrex::IntVect refinement_ratio{1};
     SBMAMRStageGhostProbe* ghost_probe{nullptr};
+    bool profile_parent_fill{false};
+    // The bounded pack reduced the ParallelCopy call fanout but regressed
+    // measured fine-step time. Keep the lower-cost componentwise path as the
+    // production default and enable packing only in its equivalence oracle.
+    bool componentwise_parent_fill{true};
 };
 
 /**

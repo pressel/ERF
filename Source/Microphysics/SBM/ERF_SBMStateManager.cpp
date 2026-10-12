@@ -167,9 +167,14 @@ bool SBMStateManager::begin_step (const int lev, const double step_old_time,
     }
 
     // Match ERF::Advance: rotate storage by swapping ownership, never by
-    // copying the full spectral state.
+    // copying the full spectral state.  When the host scheduler's current
+    // step-start expression was admitted as the same endpoint within the
+    // bounded fine-step roundoff test above, the rotated old FAB now owns
+    // that step-start semantic label.  The spectrum values are unchanged;
+    // this only keeps the owner timestamp in lockstep with S_old/t_old at
+    // stage 0.  With no dt_min, the exact-time path above still applies.
     std::swap(state.old_state, state.new_state);
-    state.old_time = state.new_time;
+    state.old_time = step_old_time;
     state.old_valid = true;
     state.new_valid = false;
     state.step_active = true;

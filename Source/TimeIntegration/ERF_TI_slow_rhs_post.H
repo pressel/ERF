@@ -65,6 +65,8 @@
             sbm_parent_stage.new_time = t_new[level - 1];
             sbm_parent_stage.fine_step_dt = dt_advance;
             sbm_parent_stage.refinement_ratio = refRatio(level - 1);
+            sbm_parent_stage.profile_parent_fill =
+                solverChoice.sbm_amr_qualification_test;
             sbm_parent_stage_ptr = &sbm_parent_stage;
         }
 
