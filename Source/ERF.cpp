@@ -7,6 +7,7 @@
 */
 
 #include <memory>
+#include <algorithm>
 #include "ERF_Constants.H"
 
 #include "ERF_EOS.H"
@@ -618,6 +619,59 @@ ERF::fill_seb_from_coarse (int lev)
     fill_one(two_stream_rad.seb_q_sfc(lev), two_stream_rad.seb_q_sfc(lev-1));
 }
 
+#ifdef ERF_SBM_AMR_QUALIFICATION
+std::vector<Real>
+ERF::sbm_qualification_composite_inventory () const
+{
+    AMREX_ALWAYS_ASSERT(sbm_state_manager != nullptr && sbm_transport != nullptr);
+    const int ncomp = sbm_state_manager->layout().ncomp();
+    std::vector<Real> inventory(static_cast<std::size_t>(ncomp), Real(0.0));
+    for (int component = 0; component < ncomp; ++component) {
+        Real total = Real(0.0);
+        for (int lev = 0; lev <= finest_level; ++lev) {
+            MultiFab leaf_mask(grids[lev], dmap[lev], 1, 0);
+            leaf_mask.setVal(Real(1.0));
+            if (lev < finest_level) {
+                MultiFab fine_coverage(grids[lev + 1], dmap[lev + 1], 1, 0);
+                MultiFab covered(grids[lev], dmap[lev], 1, 0);
+                fine_coverage.setVal(Real(1.0));
+                covered.setVal(Real(0.0));
+                average_down(fine_coverage, covered, 0, 1, ref_ratio[lev]);
+                for (MFIter mfi(leaf_mask, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+                    const Box bx = mfi.tilebox();
+                    const auto leaf = leaf_mask.array(mfi);
+                    const auto mask = covered.const_array(mfi);
+                    ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                        leaf(i, j, k, 0) = Real(1.0) - mask(i, j, k, 0);
+                    });
+                }
+            }
+
+            MultiFab weighted(grids[lev], dmap[lev], 1, 0);
+            const MultiFab& spectrum = sbm_state_manager->new_state(lev);
+            const MultiFab& measure = sbm_transport->static_measure(lev);
+            const Real cell_volume = geom[lev].CellSize(0) *
+                                     geom[lev].CellSize(1) *
+                                     geom[lev].CellSize(2);
+            for (MFIter mfi(weighted, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+                const Box bx = mfi.tilebox();
+                const auto u = spectrum.const_array(mfi);
+                const auto omega = measure.const_array(mfi);
+                const auto leaf = leaf_mask.const_array(mfi);
+                const auto out = weighted.array(mfi);
+                ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                    out(i, j, k, 0) = cell_volume * omega(i, j, k, 0) *
+                                      u(i, j, k, component) * leaf(i, j, k, 0);
+                });
+            }
+            total += weighted.sum(0, false);
+        }
+        inventory[static_cast<std::size_t>(component)] = total;
+    }
+    return inventory;
+}
+#endif
+
 // Called after every coarse timestep
 void
 ERF::post_timestep (int nstep, double time, double dt_lev0)
@@ -749,6 +803,12 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
     // YA reflux, and full canonical admission all succeed. It remains in U
     // representation except at uncovered interface cells with a nonzero YA
     // correction. Direct stage-rate additions remain pending until admission.
+ #ifdef ERF_SBM_AMR_QUALIFICATION
+    bool sbm_qualification_nonzero_correction = false;
+    Real sbm_qualification_correction_linf = Real(0.0);
+    std::uint64_t sbm_qualification_reflux_calls = 0;
+    std::uint64_t sbm_qualification_reflux_syncs = 0;
+ #endif
     if (sbm_state_manager && solverChoice.moisture_type == MoistureType::SBM) {
         const auto& layout = sbm_state_manager->layout();
         for (int lev = finest_level - 1; lev >= 0; --lev) {
@@ -777,7 +837,8 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
             if (!erf_sbm::RestrictMappedSpectrumPrivate(
                     layout, fine_view, coarse_view, ref_ratio[lev], lev,
                     candidate, diagnostic, 16, false,
-                    &sbm_transport->admission())) {
+                    &sbm_transport->admission(), nullptr,
+                    flux_register.minimum_fine_dt())) {
                 discard_sbm_sync_interval(flux_register, diagnostic);
                 Abort("SBM mapped coarse restriction rejected: " + diagnostic);
             }
@@ -804,15 +865,29 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
             MultiFab correction_invalid(grids[lev], dmap[lev], 1, 0);
             correction_invalid.setVal(Real(0.0));
             for (const auto& chunk : chunks) {
+                // Sort only this complete semantic chunk. This preserves the
+                // group admission boundary while coalescing YA's contiguous
+                // global-component source runs.
+                std::vector<int> reflux_components = chunk.components;
+                std::sort(reflux_components.begin(), reflux_components.end());
                 correction.setVal(Real(0.0));
                 if (!flux_register.reflux_components(
-                        correction, chunk.components, diagnostic)) {
+                        correction, reflux_components, diagnostic)) {
                     discard_sbm_sync_interval(flux_register, diagnostic);
                     Abort("SBM YA mapped correction rejected: " + diagnostic);
                 }
+#ifdef ERF_SBM_AMR_QUALIFICATION
+                const Real correction_norm = correction.norm0(
+                    0, max_chunk_components, IntVect(0), false);
+                sbm_qualification_correction_linf =
+                    std::max(sbm_qualification_correction_linf, correction_norm);
+                sbm_qualification_nonzero_correction =
+                    sbm_qualification_nonzero_correction ||
+                    correction_norm > Real(0.0);
+#endif
                 if (!erf_sbm::ApplyMappedRefluxCorrectionChunk(
                     candidate, correction, coarse_measure, covered,
-                    chunk.components, correction_invalid, diagnostic)) {
+                    reflux_components, correction_invalid, diagnostic)) {
                     discard_sbm_sync_interval(flux_register, diagnostic);
                     Abort("SBM YA correction layout rejected: " + diagnostic);
                 }
@@ -838,6 +913,10 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
                 Abort("SBM refluxed coarse candidate could not consume its pending amount: " +
                       diagnostic);
             }
+#ifdef ERF_SBM_AMR_QUALIFICATION
+            sbm_qualification_reflux_calls += flux_register.reflux_call_count();
+            sbm_qualification_reflux_syncs += flux_register.reflux_sync_count();
+#endif
             if (!flux_register.accept_reflux(diagnostic)) {
                 discard_sbm_sync_interval(flux_register, diagnostic);
                 Abort("SBM admitted coarse candidate could not consume its pending amount: " +
@@ -849,6 +928,77 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
                 solverChoice.moisture_indices.qr);
         }
     }
+
+#ifdef ERF_SBM_AMR_QUALIFICATION
+    if (solverChoice.sbm_amr_qualification_test) {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(finest_level == 1 && nsubsteps[1] >= 2,
+            "SBM AMR qualification did not run two fine substeps on a two-level hierarchy");
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+            sbm_qualification_reflux_calls > 0 &&
+            sbm_qualification_reflux_syncs > 0,
+            "SBM AMR qualification did not exercise and synchronize its YA register");
+        const bool limiter_changed_rate =
+            sbm_transport->interval_limiter_changed_rate();
+        const Real rounding_factor = Real(16384.0) *
+                                     std::numeric_limits<Real>::epsilon();
+        Real zero_flow_correction_tolerance = Real(0.0);
+        if (solverChoice.sbm_amr_qualification_expect_zero_flow) {
+            Real inventory_scale = std::numeric_limits<Real>::min();
+            for (const Real value : sbm_qualification_initial_inventory) {
+                inventory_scale = std::max(inventory_scale, std::abs(value));
+            }
+            zero_flow_correction_tolerance =
+                rounding_factor * inventory_scale;
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                sbm_qualification_correction_linf <=
+                    zero_flow_correction_tolerance && !limiter_changed_rate,
+                "zero-flow SBM AMR qualification produced a correction beyond "
+                "roundoff or changed an accepted rate");
+        } else {
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                sbm_qualification_nonzero_correction,
+                "SBM AMR qualification saw no nonzero accepted YA correction");
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                sbm_transport->interval_limiter_active_groups() > 0 &&
+                limiter_changed_rate,
+                "SBM AMR qualification did not observe an active limiter changing an accepted rate");
+        }
+        const auto inventory = sbm_qualification_composite_inventory();
+        AMREX_ALWAYS_ASSERT(inventory.size() ==
+                            sbm_qualification_initial_inventory.size());
+        amrex::Print() << "SBM_AMR_QUAL step=" << nstep + 1
+                       << " fine_substeps=" << nsubsteps[1]
+                       << " reflux_calls=" << sbm_qualification_reflux_calls
+                       << " reflux_syncs=" << sbm_qualification_reflux_syncs
+                       << " nonzero_reflux_linf="
+                       << sbm_qualification_correction_linf
+                       << " limiter_active_groups="
+                       << sbm_transport->interval_limiter_active_groups()
+                       << " limiter_changed_rate="
+                       << (limiter_changed_rate ? "true" : "false")
+                       << " zero_flow="
+                       << (solverChoice.sbm_amr_qualification_expect_zero_flow
+                               ? "true" : "false");
+        if (solverChoice.sbm_amr_qualification_expect_zero_flow) {
+            amrex::Print() << " zero_flow_tolerance="
+                           << zero_flow_correction_tolerance;
+        }
+        amrex::Print() << '\n';
+        for (std::size_t component = 0; component < inventory.size(); ++component) {
+            const Real initial = sbm_qualification_initial_inventory[component];
+            const Real final = inventory[component];
+            const Real tolerance = rounding_factor * std::max(
+                std::abs(initial), std::numeric_limits<Real>::min());
+            const Real error = std::abs(final - initial);
+            amrex::Print() << "SBM_AMR_QUAL_INVENTORY component=" << component
+                           << " initial=" << initial << " final=" << final
+                           << " abs_error=" << error
+                           << " tolerance=" << tolerance << '\n';
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(error <= tolerance,
+                "SBM AMR qualification composite leaf inventory changed beyond its roundoff bound");
+        }
+    }
+#endif
 
     if (cloud_chamber_budget &&
         solverChoice.moisture_type == MoistureType::SBM) {
@@ -2460,6 +2610,25 @@ ERF::InitData_post ()
             WriteEBSurface(grids[finest_level],dmap[finest_level],Geom(finest_level),&EBFactory(finest_level));
         }
     }
+
+#ifdef ERF_SBM_AMR_QUALIFICATION
+    if (solverChoice.sbm_amr_qualification_test) {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(finest_level == 1,
+            "SBM AMR qualification did not create its fixed fine level");
+        sbm_qualification_initial_inventory =
+            sbm_qualification_composite_inventory();
+        amrex::Print() << "SBM_AMR_QUAL_INIT levels=" << finest_level + 1
+                       << " ncomp="
+                       << sbm_state_manager->layout().ncomp() << '\n';
+        for (std::size_t component = 0;
+             component < sbm_qualification_initial_inventory.size(); ++component) {
+            amrex::Print() << "SBM_AMR_QUAL_INITIAL_INVENTORY component="
+                           << component << " value="
+                           << sbm_qualification_initial_inventory[component]
+                           << '\n';
+        }
+    }
+#endif
 }
 
 //

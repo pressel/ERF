@@ -40,6 +40,18 @@ erf_sbm::SBMLayout make_sbm_layout (const SolverChoice& choice)
 
     erf_sbm::SBMLayoutSpec spec;
     spec.populations.push_back(std::move(population));
+    if (choice.sbm_amr_qualification_test &&
+        choice.sbm_moment_mode == 2) {
+        erf_sbm::AttachedPropertyDescriptor property;
+        property.name = "qualification_number_tracer";
+        property.semantic_id = "qualification_number_tracer";
+        property.units = "m^-3";
+        property.carrier_population = 0;
+        property.kind = erf_sbm::PropertyKind::NumberCarried;
+        property.support = erf_sbm::SupportRequirement::PositiveNumber;
+        property.support_min = amrex::Real(0.0);
+        spec.attached_properties.push_back(std::move(property));
+    }
     spec.liquid_projection = {0, choice.sbm_cloud_rain_split};
     const auto validation = erf_sbm::SBMLayout::validate(spec);
     if (!validation.valid) {
@@ -54,8 +66,63 @@ void validate_sbm_m3_advection (const SolverChoice& choice,
     if (choice.moisture_type != MoistureType::SBM) return;
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(AMREX_SPACEDIM == 3,
         "SBM M3 mapped advection requires three dimensions");
+#ifdef ERF_SBM_AMR_QUALIFICATION
+    if (max_level > 0) {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(max_level == 1 &&
+                                         choice.sbm_amr_qualification_test,
+            "the isolated SBM AMR qualification build permits only its "
+            "explicit fixed two-level test deck");
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+            choice.mesh_type == MeshType::ConstantDz &&
+            choice.terrain_type == TerrainType::None &&
+            choice.buildings_type == BuildingsType::None &&
+            choice.coupling_type == CouplingType::TwoWay,
+            "SBM AMR qualification requires static ConstantDz, no EB/terrain, "
+            "and TwoWay coupling");
+        amrex::ParmParse pp_erf("erf");
+        int regrid_interval = -1;
+        pp_erf.query("regrid_int", regrid_interval);
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(regrid_interval == 0,
+            "SBM AMR qualification requires erf.regrid_int=0 after initial refinement");
+        int check_interval = -1;
+        double check_period = -1.0;
+        pp_erf.query("check_int", check_interval);
+        pp_erf.query("check_per", check_period);
+        amrex::ParmParse pp_amr("amr");
+        int amr_check_interval = -1;
+        double amr_check_period = -1.0;
+        pp_amr.query("check_int", amr_check_interval);
+        pp_amr.query("check_per", amr_check_period);
+        std::string erf_restart, amr_restart;
+        pp_erf.query("restart", erf_restart);
+        pp_amr.query("restart", amr_restart);
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+            erf_restart.empty() && amr_restart.empty() &&
+            check_interval <= 0 && check_period <= 0.0 &&
+            amr_check_interval <= 0 && amr_check_period <= 0.0,
+            "SBM AMR qualification excludes checkpoint/restart");
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+            (choice.anelastic.empty() || choice.anelastic[0] == 0) &&
+            choice.diffChoice.molec_diff_type == MolecDiffType::None &&
+            !choice.turbChoice[0].use_kturb &&
+            choice.turbChoice[0].pbl_type == PBLType::None &&
+            !choice.use_num_diff &&
+            choice.spongeChoice.sponge_type == SpongeType::None &&
+            !choice.any_perturbation() && !choice.custom_w_subsidence &&
+            !choice.large_scale_forcing && !choice.nudging_from_input_sounding &&
+            !choice.custom_moisture_forcing && !choice.use_real_bcs,
+            "SBM AMR qualification excludes unqualified forcing, diffusion, "
+            "SHOC, and nonperiodic boundary physics");
+    } else {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+            !choice.sbm_amr_qualification_test &&
+            !choice.sbm_amr_qualification_expect_zero_flow,
+            "the internal SBM AMR qualification flag requires amr.max_level=1");
+    }
+#else
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(max_level == 0,
         "SBM M3 mapped advection supports one AMR level only");
+#endif
     const bool anelastic = !choice.anelastic.empty() && choice.anelastic[0] != 0;
     // Grid stretching may set StaticFittedMesh as a label while retaining
     // StretchedDz; only VariableDz selects the fitted-terrain projection.
@@ -79,8 +146,19 @@ void validate_sbm_m3_advection (const SolverChoice& choice,
         "SBM M3 supports ConstantDz, StretchedDz, or static fitted-mesh geometry");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.buildings_type == BuildingsType::None,
         "SBM M3 requires buildings_type=None");
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.substepping_type.size() == 1 &&
-                                     choice.substepping_type[0] == SubsteppingType::None,
+#ifdef ERF_SBM_AMR_QUALIFICATION
+    const bool no_acoustic_substepping =
+        choice.substepping_type.size() == static_cast<std::size_t>(max_level + 1) &&
+        std::all_of(choice.substepping_type.begin(), choice.substepping_type.end(),
+                    [](const SubsteppingType type) {
+                        return type == SubsteppingType::None;
+                    });
+#else
+    const bool no_acoustic_substepping =
+        choice.substepping_type.size() == 1 &&
+        choice.substepping_type[0] == SubsteppingType::None;
+#endif
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(no_acoustic_substepping,
         "SBM M3 requires acoustic substepping_type=None");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(choice.anelastic_type.empty() ||
                                      choice.anelastic[0] == 0 ||

@@ -29,7 +29,10 @@ ERF::Advance (int lev, double time, double dt_lev, int iteration, int /*ncycle*/
 
     if (sbm_state_manager) {
         std::string diagnostic;
-        if (!sbm_state_manager->begin_step(lev, time, diagnostic)) {
+        const bool began = lev > 0
+            ? sbm_state_manager->begin_step(lev, time, diagnostic, dt_lev)
+            : sbm_state_manager->begin_step(lev, time, diagnostic);
+        if (!began) {
             Abort("SBM state lifecycle at ERF::Advance: " + diagnostic);
         }
         if (!sbm_transport ||

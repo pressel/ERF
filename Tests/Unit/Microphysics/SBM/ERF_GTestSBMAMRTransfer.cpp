@@ -20,6 +20,7 @@
 #include "ERF_SBMTransport.H"
 
 #include <cmath>
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <array>
@@ -66,6 +67,69 @@ Real accepted_chunk_rate (int dir, int i, int j, int k, int global_component,
                       Real(0.02) * substep;
     const Real lambda = Real(0.35) + Real(0.01) * (global_component % 4);
     return low + lambda * (high - low);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+Real signed_mapping_oracle_rate (int dir, int i, int j, int k,
+                                 int global_component, bool fine_side) noexcept
+{
+    const Real sign = global_component % 2 == 0 ? Real(1.0) : Real(-1.0);
+    const Real level_offset = fine_side ? Real(0.0018) : Real(0.0008);
+    const Real magnitude = Real(0.001) + level_offset + Real(0.0003) * dir +
+        Real(0.00002) * i + Real(0.00003) * j + Real(0.00004) * k +
+        Real(0.00001) * global_component;
+    return sign * magnitude;
+}
+
+erf_auxiliary::MappedFaceFluxRate make_signed_mapped_rate (
+    const BoxArray& cell_ba, const DistributionMapping& mapping,
+    const std::vector<int>& global_components, const bool fine_side)
+{
+    erf_auxiliary::MappedFaceFluxRate rate;
+    rate.define(cell_ba, mapping, static_cast<int>(global_components.size()), 0);
+    amrex::Gpu::DeviceVector<int> device_components(global_components.size());
+    amrex::Gpu::copy(amrex::Gpu::hostToDevice, global_components.begin(),
+                     global_components.end(), device_components.begin());
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        auto& field = rate.dir(dir);
+        for (MFIter mfi(field, false); mfi.isValid(); ++mfi) {
+            const Box box = mfi.validbox();
+            const auto values = field.array(mfi);
+            const int* globals = device_components.data();
+            const int ncomp = static_cast<int>(global_components.size());
+            ParallelFor(box, ncomp,
+            [=] AMREX_GPU_DEVICE(int i, int j, int k, int local) noexcept {
+                values(i,j,k,local) = signed_mapping_oracle_rate(
+                    dir, i, j, k, globals[local], fine_side);
+            });
+        }
+    }
+    amrex::Gpu::streamSynchronize();
+    return rate;
+}
+
+void accumulate_mapped_reference_integral (
+    erf_auxiliary::IntegratedMappedFaceFlux& integral,
+    const erf_auxiliary::MappedFaceFluxRate& rate,
+    const std::vector<int>& global_components, const double weight)
+{
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+        for (int local = 0; local < rate.nComp(); ++local) {
+            MultiFab::Saxpy(integral.dir(dir), static_cast<Real>(weight),
+                            rate.dir(dir), local,
+                            global_components[static_cast<std::size_t>(local)],
+                            1, 0);
+        }
+    }
+}
+
+std::uint64_t contiguous_component_runs (const std::vector<int>& components)
+{
+    std::uint64_t runs = components.empty() ? 0U : 1U;
+    for (std::size_t index = 1; index < components.size(); ++index) {
+        if (components[index] != components[index - 1U] + 1) ++runs;
+    }
+    return runs;
 }
 
 erf_auxiliary::MappedFaceFluxRate make_rate_chunk (
@@ -513,11 +577,41 @@ void run_restriction_averages_mapped_amount_and_preserves_uncovered_state ()
     ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
         candidate, layout, 0, &diagnostic)) << diagnostic;
 
+    // Reproduce ERF::timeStep's last fine start (time + (i-1)*dt_fine)
+    // followed by Advance's target (fine_start + dt_fine), against the
+    // independently formed coarse endpoint (time + dt_coarse).
+    const double coarse_begin = 1000.0;
+    const double coarse_dt = 0.1;
+    const double fine_dt = coarse_dt / 2.0;
+    const double coarse_end = coarse_begin + coarse_dt;
+    const double final_fine_begin = coarse_begin + 1.0 * fine_dt;
+    const double final_fine_end = final_fine_begin + fine_dt;
+    ASSERT_NE(final_fine_end, coarse_end);
+    auto independently_timed_fine = fine_view;
+    independently_timed_fine.spectrum_time = final_fine_end;
+    independently_timed_fine.density_time = final_fine_end;
+    independently_timed_fine.measure_time = final_fine_end;
+    auto independently_timed_coarse = coarse_view;
+    independently_timed_coarse.spectrum_time = coarse_end;
+    independently_timed_coarse.density_time = coarse_end;
+    independently_timed_coarse.measure_time = coarse_end;
+    MultiFab exact_time_candidate(coarse_ba, coarse_dm, layout.ncomp(), 0);
+    EXPECT_FALSE(erf_sbm::RestrictMappedSpectrumPrivate(
+        layout, independently_timed_fine, independently_timed_coarse,
+        ratio, 0, exact_time_candidate, diagnostic));
+    MultiFab bounded_time_candidate(coarse_ba, coarse_dm, layout.ncomp(), 0);
+    ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
+        layout, independently_timed_fine, independently_timed_coarse,
+        ratio, 0, bounded_time_candidate, diagnostic, 16, false, nullptr,
+        nullptr, fine_dt)) << diagnostic;
+    expect_roundoff_equivalent(bounded_time_candidate, candidate);
+
     MultiFab private_candidate(coarse_ba, coarse_dm, layout.ncomp(), 0);
     private_candidate.setVal(Real(99.0));
+    erf_sbm::SBMTransferAllocationCensus forward_trace;
     ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
         layout, fine_view, coarse_view, ratio, 0, private_candidate,
-        diagnostic, 1, true)) << diagnostic;
+        diagnostic, 1, false, nullptr, &forward_trace)) << diagnostic;
     MultiFab private_difference(coarse_ba, coarse_dm, layout.ncomp(), 0);
     MultiFab::Copy(private_difference, private_candidate, 0, 0,
                    layout.ncomp(), 0);
@@ -529,10 +623,21 @@ void run_restriction_averages_mapped_amount_and_preserves_uncovered_state ()
             << "private synchronization candidate differs from the independent "
             << "transactional restriction oracle at component " << component;
     }
+    erf_sbm::SBMTransferAllocationCensus reverse_trace;
     MultiFab reverse_candidate(coarse_ba, coarse_dm, layout.ncomp(), 0);
     ASSERT_TRUE(erf_sbm::RestrictMappedSpectrumPrivate(
         layout, fine_view, coarse_view, ratio, 0, reverse_candidate,
-        diagnostic, 16, true)) << diagnostic;
+        diagnostic, 1, true, nullptr, &reverse_trace)) << diagnostic;
+    ASSERT_GE(forward_trace.processed_chunk_first_components.size(), 3U);
+    ASSERT_EQ(reverse_trace.processed_chunk_first_components.size(),
+              forward_trace.processed_chunk_first_components.size());
+    for (std::size_t index = 0;
+         index < forward_trace.processed_chunk_first_components.size(); ++index) {
+        EXPECT_EQ(reverse_trace.processed_chunk_first_components[index],
+                  forward_trace.processed_chunk_first_components[
+                      forward_trace.processed_chunk_first_components.size() - 1U - index])
+            << "reverse restriction must change actual complete-group visitation";
+    }
     expect_roundoff_equivalent(reverse_candidate, candidate);
 
     // Independently evaluate every child amount from its analytic fixture
@@ -677,6 +782,23 @@ TEST(SBMAMRTime, SemanticComparisonsRejectNonfiniteAndAdjacentSubsteps)
     EXPECT_NE(first_order, second_order);
     EXPECT_TRUE(erf_sbm::semantic_time_matches(first_order, second_order, 1.0));
     EXPECT_FALSE(erf_sbm::semantic_time_matches_exact(first_order, second_order));
+
+    // This is ERF's actual recursive fine-step expression at dt=0.1 with two
+    // substeps, followed by the coarse timeStep endpoint expression.
+    const double coarse_begin = 1000.0;
+    const double coarse_dt = 0.1;
+    const int fine_substeps = 2;
+    const double fine_dt = coarse_dt / static_cast<double>(fine_substeps);
+    const double coarse_end = coarse_begin + coarse_dt;
+    const double last_fine_begin = coarse_begin +
+        static_cast<double>(fine_substeps - 1) * fine_dt;
+    const double last_fine_end = last_fine_begin + fine_dt;
+    ASSERT_NE(last_fine_end, coarse_end);
+    EXPECT_TRUE(erf_sbm::semantic_time_matches(last_fine_end, coarse_end, fine_dt));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches_exact(last_fine_end, coarse_end));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(
+        last_fine_end, last_fine_end + fine_dt, fine_dt));
+    EXPECT_FALSE(erf_sbm::semantic_time_matches(last_fine_end, coarse_end, 0.0));
 }
 
 TEST(SBMAMRTime, FluxRegisterRejectsNonfiniteAndNeighboringCoarseTimes)
@@ -1025,10 +1147,29 @@ void run_prolongation_uses_same_time_piecewise_constant_carrier_ratio ()
     ASSERT_TRUE(erf_sbm::authoritative_state_admissible(
         candidate, layout, 1, &diagnostic)) << diagnostic;
     MultiFab private_candidate(fine_ba, fine_dm, layout.ncomp(), 0);
+    erf_sbm::SBMTransferAllocationCensus prolong_forward_trace;
     ASSERT_TRUE(erf_sbm::ProlongCarrierRelativeSpectrumPrivate(
         layout, coarse_view, fine_view, cgeom, fgeom, IntVect(2), 1,
-        private_candidate, diagnostic, 1, true)) << diagnostic;
+        private_candidate, diagnostic, 1, false, nullptr,
+        &prolong_forward_trace)) << diagnostic;
     expect_roundoff_equivalent(private_candidate, candidate);
+    MultiFab reverse_candidate(fine_ba, fine_dm, layout.ncomp(), 0);
+    erf_sbm::SBMTransferAllocationCensus prolong_reverse_trace;
+    ASSERT_TRUE(erf_sbm::ProlongCarrierRelativeSpectrumPrivate(
+        layout, coarse_view, fine_view, cgeom, fgeom, IntVect(2), 1,
+        reverse_candidate, diagnostic, 1, true, nullptr,
+        &prolong_reverse_trace)) << diagnostic;
+    ASSERT_GE(prolong_forward_trace.processed_chunk_first_components.size(), 3U);
+    ASSERT_EQ(prolong_reverse_trace.processed_chunk_first_components.size(),
+              prolong_forward_trace.processed_chunk_first_components.size());
+    for (std::size_t index = 0;
+         index < prolong_forward_trace.processed_chunk_first_components.size(); ++index) {
+        EXPECT_EQ(prolong_reverse_trace.processed_chunk_first_components[index],
+                  prolong_forward_trace.processed_chunk_first_components[
+                      prolong_forward_trace.processed_chunk_first_components.size() - 1U - index])
+            << "reverse prolongation must change actual complete-group visitation";
+    }
+    expect_roundoff_equivalent(reverse_candidate, candidate);
 
     MultiFab expected(fine_ba, fine_dm, layout.ncomp(), 0);
     const ComponentOffsets offsets = offsets_for(layout);
@@ -1904,6 +2045,293 @@ TEST(SBMAMRYA, DirectAcceptedStageRatesMatchCompletedIntegralReference)
     }
 }
 
+TEST(SBMAMRYA, InterleavedTwoMomentPropertiesMatchSignedOracleAndReduceRuns)
+{
+    ASSERT_EQ(AMREX_SPACEDIM, 3);
+    const auto layout = make_transfer_layout();
+    const int ncomp = layout.ncomp();
+    const IntVect ratio(2);
+    const Box coarse_domain(IntVect(0), IntVect(7));
+    const Box fine_domain(IntVect(0), IntVect(15));
+    const BoxArray coarse_ba(coarse_domain);
+    const BoxArray fine_ba(amrex::refine(Box(IntVect(2), IntVect(5)), ratio));
+    const DistributionMapping coarse_dm(coarse_ba);
+    const DistributionMapping fine_dm(fine_ba);
+    const Geometry coarse_geom = make_geometry(coarse_domain);
+    const Geometry fine_geom = make_geometry(fine_domain);
+    const auto chunks = erf_sbm::make_constraint_closure_chunks(layout, 16);
+    ASSERT_EQ(chunks.size(), 1U);
+    const std::vector<int> interleaved = chunks.front().components;
+    ASSERT_EQ(interleaved.size(), static_cast<std::size_t>(ncomp));
+    std::vector<int> sorted = interleaved;
+    std::sort(sorted.begin(), sorted.end());
+    ASSERT_NE(interleaved, sorted);
+    ASSERT_GT(contiguous_component_runs(interleaved),
+              contiguous_component_runs(sorted));
+    EXPECT_EQ(contiguous_component_runs(interleaved), 10U);
+    EXPECT_EQ(contiguous_component_runs(sorted), 1U);
+    for (int component = 0; component < ncomp; ++component) {
+        EXPECT_EQ(sorted[static_cast<std::size_t>(component)], component);
+    }
+
+    auto populate_accepted_interval = [&] (
+        erf_sbm::SBMAMRFluxRegister& flux_register,
+        erf_auxiliary::IntegratedMappedFaceFlux& coarse_integral,
+        erf_auxiliary::IntegratedMappedFaceFlux& fine_integral,
+        const std::vector<int>& component_map) {
+        std::string diagnostic;
+        ASSERT_TRUE(flux_register.begin_interval(0.0, 1.0, 1, diagnostic))
+            << diagnostic;
+        coarse_integral.define(coarse_ba, coarse_dm, ncomp, 0);
+        coarse_integral.setVal(Real(0.0));
+        fine_integral.define(fine_ba, fine_dm, ncomp, 0);
+        fine_integral.setVal(Real(0.0));
+        for (const bool coarse_side : {true, false}) {
+            const auto& ba = coarse_side ? coarse_ba : fine_ba;
+            const auto& dm = coarse_side ? coarse_dm : fine_dm;
+            auto& integral = coarse_side ? coarse_integral : fine_integral;
+            ASSERT_TRUE(flux_register.begin_level_step(
+                coarse_side, 0.0, 1.0, diagnostic)) << diagnostic;
+            for (int stage = 0; stage < 3; ++stage) {
+                ASSERT_TRUE(flux_register.begin_stage(
+                    coarse_side, erf_auxiliary::HostIntegrator::CompressibleRK3,
+                    stage, 0.0, diagnostic)) << diagnostic;
+                auto rate = make_signed_mapped_rate(
+                    ba, dm, component_map, !coarse_side);
+                const double completed_weight = stage == 2 ? 1.0 : 0.0;
+                ASSERT_TRUE(flux_register.add_stage_rates(
+                    coarse_side, rate, component_map, completed_weight,
+                    diagnostic)) << diagnostic;
+                accumulate_mapped_reference_integral(
+                    integral, rate, component_map, completed_weight);
+                ASSERT_TRUE(flux_register.finish_stage(coarse_side, diagnostic))
+                    << diagnostic;
+            }
+            ASSERT_TRUE(flux_register.accept_level_step(
+                coarse_side, 0.0, 1.0, diagnostic)) << diagnostic;
+        }
+        ASSERT_TRUE(flux_register.ready_to_reflux());
+    };
+
+    erf_sbm::SBMAMRFluxRegister interleaved_register;
+    interleaved_register.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                                fine_geom, coarse_geom, ratio, 1, ncomp);
+    erf_auxiliary::IntegratedMappedFaceFlux coarse_integral;
+    erf_auxiliary::IntegratedMappedFaceFlux fine_integral;
+    populate_accepted_interval(interleaved_register, coarse_integral,
+                               fine_integral, interleaved);
+
+    // Duplicate mapping is rejected before YA reads or writes the compact
+    // correction. Omitting a component leaves the interval unconsumable.
+    MultiFab duplicate_correction(coarse_ba, coarse_dm, ncomp, 0);
+    duplicate_correction.setVal(Real(77.0));
+    std::vector<int> duplicate_map = interleaved;
+    duplicate_map[1] = duplicate_map[0];
+    std::string diagnostic;
+    EXPECT_FALSE(interleaved_register.reflux_components(
+        duplicate_correction, duplicate_map, diagnostic));
+    EXPECT_DOUBLE_EQ(duplicate_correction.min(0), Real(77.0));
+    EXPECT_DOUBLE_EQ(duplicate_correction.max(ncomp - 1), Real(77.0));
+
+    MultiFab marker(fine_ba, fine_dm, 1, 0);
+    MultiFab covered(coarse_ba, coarse_dm, 1, 1);
+    marker.setVal(Real(1.0));
+    covered.setVal(Real(0.0));
+    amrex::average_down(marker, covered, 0, 1, ratio);
+    covered.FillBoundary(coarse_geom.periodicity());
+    MultiFab measure(coarse_ba, coarse_dm, 1, 0);
+    MultiFab initial(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab density(coarse_ba, coarse_dm, 1, 0);
+    fill_carriers(density, measure, true);
+    fill_spectrum(initial, density, layout);
+    MultiFab interleaved_state(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab sorted_state(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab::Copy(interleaved_state, initial, 0, 0, ncomp, 0);
+    MultiFab::Copy(sorted_state, initial, 0, 0, ncomp, 0);
+    MultiFab correction(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab invalid(coarse_ba, coarse_dm, 1, 0);
+    correction.setVal(Real(0.0));
+    invalid.setVal(Real(0.0));
+    ASSERT_TRUE(interleaved_register.reflux_components(
+        correction, interleaved, diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        interleaved_state, correction, measure, covered, interleaved,
+        invalid, diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(invalid, diagnostic))
+        << diagnostic;
+    ASSERT_TRUE(interleaved_register.can_accept_reflux(diagnostic)) << diagnostic;
+    EXPECT_EQ(interleaved_register.reflux_call_count(),
+              contiguous_component_runs(interleaved));
+    EXPECT_EQ(interleaved_register.reflux_sync_count(),
+              interleaved_register.reflux_call_count());
+
+    // Fault injection: swap one property/global slot with another member while
+    // reusing the same compact YA output. The independent reference must
+    // distinguish this map error.
+    std::vector<int> swapped_map = interleaved;
+    std::swap(swapped_map[1], swapped_map[2]);
+    MultiFab swapped_state(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab swapped_invalid(coarse_ba, coarse_dm, 1, 0);
+    MultiFab::Copy(swapped_state, initial, 0, 0, ncomp, 0);
+    swapped_invalid.setVal(Real(0.0));
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        swapped_state, correction, measure, covered, swapped_map,
+        swapped_invalid, diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(
+        swapped_invalid, diagnostic)) << diagnostic;
+    MultiFab swapped_difference(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab::Copy(swapped_difference, swapped_state, 0, 0, ncomp, 0);
+    MultiFab::Subtract(swapped_difference, interleaved_state, 0, 0, ncomp, 0);
+    Real swapped_mapping_error = Real(0.0);
+    for (int component = 0; component < ncomp; ++component) {
+        swapped_mapping_error = std::max(swapped_mapping_error,
+                                         swapped_difference.norm0(component));
+    }
+    EXPECT_GT(swapped_mapping_error, Real(0.0));
+
+    erf_sbm::SBMAMRFluxRegister sorted_register;
+    sorted_register.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                           fine_geom, coarse_geom, ratio, 1, ncomp);
+    erf_auxiliary::IntegratedMappedFaceFlux sorted_coarse_integral;
+    erf_auxiliary::IntegratedMappedFaceFlux sorted_fine_integral;
+    populate_accepted_interval(sorted_register, sorted_coarse_integral,
+                               sorted_fine_integral, sorted);
+    correction.setVal(Real(0.0));
+    invalid.setVal(Real(0.0));
+    ASSERT_TRUE(sorted_register.reflux_components(
+        correction, sorted, diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        sorted_state, correction, measure, covered, sorted, invalid,
+        diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(invalid, diagnostic))
+        << diagnostic;
+    ASSERT_TRUE(sorted_register.can_accept_reflux(diagnostic)) << diagnostic;
+    EXPECT_EQ(sorted_register.reflux_call_count(),
+              contiguous_component_runs(sorted));
+    EXPECT_EQ(sorted_register.reflux_sync_count(),
+              sorted_register.reflux_call_count());
+    EXPECT_LT(sorted_register.reflux_call_count(),
+              interleaved_register.reflux_call_count());
+
+    // Pinned YA consumes the same completed global integrated face fields.
+    MultiFab reference_state(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab::Copy(reference_state, initial, 0, 0, ncomp, 0);
+    amrex::YAFluxRegister reference_register(
+        fine_ba, coarse_ba, fine_dm, coarse_dm, fine_geom, coarse_geom,
+        ratio, 1, ncomp);
+    reference_register.reset();
+    add_integral_to_reference_register(reference_register, coarse_integral,
+                                       coarse_ba, coarse_dm, coarse_geom, true);
+    add_integral_to_reference_register(reference_register, fine_integral,
+                                       fine_ba, fine_dm, fine_geom, false);
+    MultiFab reference_correction(coarse_ba, coarse_dm, ncomp, 0);
+    reference_correction.setVal(Real(0.0));
+    reference_register.Reflux(reference_correction, 0, 0, ncomp);
+    amrex::Gpu::streamSynchronize();
+    MultiFab reference_invalid(coarse_ba, coarse_dm, 1, 0);
+    reference_invalid.setVal(Real(0.0));
+    std::vector<int> all_components(static_cast<std::size_t>(ncomp));
+    for (int component = 0; component < ncomp; ++component) {
+        all_components[static_cast<std::size_t>(component)] = component;
+    }
+    ASSERT_TRUE(erf_sbm::ApplyMappedRefluxCorrectionChunk(
+        reference_state, reference_correction, measure, covered,
+        all_components, reference_invalid, diagnostic)) << diagnostic;
+    ASSERT_TRUE(erf_sbm::MappedRefluxCorrectionMaskIsValid(
+        reference_invalid, diagnostic)) << diagnostic;
+    expect_roundoff_equivalent(interleaved_state, reference_state);
+    expect_roundoff_equivalent(sorted_state, reference_state);
+
+    // Independently sum signed coarse-minus-fine face amounts over each
+    // uncovered coarse cell adjacent to the covered fine patch.
+    const auto coarse_dx = coarse_geom.CellSizeArray();
+    const auto fine_dx = fine_geom.CellSizeArray();
+    const int tangential[3][2] = {{1, 2}, {0, 2}, {0, 1}};
+    MultiFab fv_expected(coarse_ba, coarse_dm, ncomp, 0);
+    MultiFab::Copy(fv_expected, initial, 0, 0, ncomp, 0);
+    for (MFIter mfi(fv_expected, false); mfi.isValid(); ++mfi) {
+        const Box box = mfi.validbox();
+        const auto expected = fv_expected.array(mfi);
+        for (int k = box.smallEnd(2); k <= box.bigEnd(2); ++k) {
+            for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+                for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                    const int cell[3] = {i, j, k};
+                    const bool is_covered = i >= 2 && i <= 5 &&
+                                            j >= 2 && j <= 5 &&
+                                            k >= 2 && k <= 5;
+                    const Real omega = coarse_measure(i, j, k);
+                    for (int component = 0; component < ncomp; ++component) {
+                        Real delta_h = Real(0.0);
+                        if (!is_covered) {
+                            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                                for (const int side : {-1, 1}) {
+                                    const int neighbor = cell[dir] + side;
+                                    const bool neighbor_covered = neighbor >= 2 &&
+                                        neighbor <= 5 &&
+                                        cell[(dir + 1) % 3] >= 2 &&
+                                        cell[(dir + 1) % 3] <= 5 &&
+                                        cell[(dir + 2) % 3] >= 2 &&
+                                        cell[(dir + 2) % 3] <= 5;
+                                    if (!neighbor_covered) continue;
+                                    const int face = cell[dir] + (side > 0 ? 1 : 0);
+                                    int coarse_face[3] = {i, j, k};
+                                    coarse_face[dir] = face;
+                                    const Real coarse_flux = signed_mapping_oracle_rate(
+                                        dir, coarse_face[0], coarse_face[1],
+                                        coarse_face[2], component, false);
+                                    int fine_face[3] = {2*i, 2*j, 2*k};
+                                    fine_face[dir] = 2 * face;
+                                    Real fine_sum = Real(0.0);
+                                    for (int a = 0; a < 2; ++a) {
+                                        for (int b = 0; b < 2; ++b) {
+                                            int subface[3] = {fine_face[0],
+                                                              fine_face[1],
+                                                              fine_face[2]};
+                                            subface[tangential[dir][0]] += a;
+                                            subface[tangential[dir][1]] += b;
+                                            fine_sum += signed_mapping_oracle_rate(
+                                                dir, subface[0], subface[1],
+                                                subface[2], component, true);
+                                        }
+                                    }
+                                    const Real sigma = side > 0
+                                        ? Real(1.0) : Real(-1.0);
+                                    delta_h += sigma / coarse_dx[dir] *
+                                        (coarse_flux - fine_sum / Real(4.0));
+                                }
+                            }
+                        }
+                        expected(i,j,k,component) += delta_h / omega;
+                    }
+                }
+            }
+        }
+    }
+    expect_roundoff_equivalent(interleaved_state, fv_expected);
+    expect_roundoff_equivalent(sorted_state, fv_expected);
+
+    // A missing global component cannot complete or consume the pending YA
+    // interval, even though its already formed compact correction is private.
+    erf_sbm::SBMAMRFluxRegister omitted_register;
+    omitted_register.define(fine_ba, coarse_ba, fine_dm, coarse_dm,
+                            fine_geom, coarse_geom, ratio, 1, ncomp);
+    erf_auxiliary::IntegratedMappedFaceFlux omitted_coarse;
+    erf_auxiliary::IntegratedMappedFaceFlux omitted_fine;
+    populate_accepted_interval(omitted_register, omitted_coarse,
+                              omitted_fine, interleaved);
+    std::vector<int> omitted_map = interleaved;
+    omitted_map.pop_back();
+    MultiFab omitted_correction(coarse_ba, coarse_dm, ncomp, 0);
+    omitted_correction.setVal(Real(0.0));
+    EXPECT_TRUE(omitted_register.reflux_components(
+        omitted_correction, omitted_map, diagnostic)) << diagnostic;
+    EXPECT_FALSE(omitted_register.can_accept_reflux(diagnostic));
+    EXPECT_FALSE(omitted_register.accept_reflux(diagnostic));
+    EXPECT_TRUE(omitted_register.has_outstanding_amount());
+    ASSERT_TRUE(omitted_register.discard_interval(diagnostic)) << diagnostic;
+    EXPECT_FALSE(omitted_register.has_outstanding_amount());
+}
+
 TEST(SBMAMRTransfer, MeasuresRealTransferOperatorAndDenseYAAllocations)
 {
     ASSERT_EQ(AMREX_SPACEDIM, 3);
@@ -1968,6 +2396,22 @@ TEST(SBMAMRTransfer, MeasuresRealTransferOperatorAndDenseYAAllocations)
             coarse_cells * static_cast<std::uint64_t>(ncomp) * bytes_per_real;
         const std::uint64_t caller_coarse_candidate =
             coarse_cells * static_cast<std::uint64_t>(ncomp) * bytes_per_real;
+        BoxArray coarse_on_fine_ba = fine_ba;
+        coarse_on_fine_ba.coarsen(ratio);
+        const std::uint64_t fill_scratch_before =
+            static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs());
+        std::uint64_t fill_stage_scratch_bytes = 0;
+        {
+            // Match fill_coarse_parent_ghosts: two coarse spectral endpoint
+            // chunks plus old/new density, with two coarse ghost cells.
+            MultiFab fill_scratch(coarse_on_fine_ba, fine_dm,
+                                  2 * max_chunk_components + 2,
+                                  IntVect(2));
+            amrex::Gpu::streamSynchronize();
+            fill_stage_scratch_bytes =
+                static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs()) -
+                fill_scratch_before;
+        }
 
         const auto fine_view = timed_view(fine_state, fine_rho, fine_omega, 0.5);
         const auto coarse_view = timed_view(coarse_state, coarse_rho, coarse_omega, 0.5);
@@ -2052,6 +2496,10 @@ TEST(SBMAMRTransfer, MeasuresRealTransferOperatorAndDenseYAAllocations)
                   << " legacy_prolongation_source_shaped_staging_bytes="
                   << legacy_prolongation_staging_bytes
                   << " caller_coarse_candidate_bytes=" << caller_coarse_candidate
+                  << " temporal_fill_stage_scratch_bytes="
+                  << fill_stage_scratch_bytes
+                  << " temporal_fill_stage_scratch_components="
+                  << 2 * max_chunk_components + 2
                   << " ya_dense_coarse_bytes=" << ya_dense_coarse
                   << " ya_total_interface_payload_bytes=" << ya_total
                   << " full_fine_spectrum_mutant_bytes=" << full_fine_payload
@@ -2259,6 +2707,30 @@ TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
     };
 
     for (const int ncomp : {32, 128, 256}) {
+        const auto layout = make_one_moment_layout(ncomp);
+        const auto groups = erf_sbm::make_constraint_groups(layout);
+        const auto chunks = erf_sbm::make_constraint_closure_chunks(layout, 16);
+        int cell_ratio_components = 0;
+        int max_chunk_components = 0;
+        for (const auto& chunk : chunks) {
+            max_chunk_components = std::max(
+                max_chunk_components, static_cast<int>(chunk.components.size()));
+            int chunk_ratios = 0;
+            for (const int group_index : chunk.group_indices) {
+                const auto& group = groups[static_cast<std::size_t>(group_index)];
+                chunk_ratios += static_cast<int>(group.constraints.size()) +
+                    2 * static_cast<int>(group.attached_property_indices.size()) +
+                    (group.moment_mode == erf_sbm::MomentMode::TwoMoment &&
+                             group.bin < layout.populations()[static_cast<std::size_t>(
+                                 group.population_id)].grid.nbins() - 1
+                         ? 1 : 0);
+            }
+            cell_ratio_components = std::max(cell_ratio_components,
+                                             chunk_ratios);
+        }
+        ASSERT_EQ(max_chunk_components, chunk_components);
+        ASSERT_GT(cell_ratio_components, 0);
+
         std::uint64_t local_coarse_cells = 0;
         std::uint64_t local_fine_cells = 0;
         for (int box = 0; box < coarse_ba.size(); ++box) {
@@ -2351,7 +2823,7 @@ TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
                 add_persistent_field(*level.first, *level.second,
                                      chunk_components, 0); // low_trial_h
                 add_persistent_field(*level.first, *level.second,
-                                     1, 1); // minimum cell_ratios storage
+                                     cell_ratio_components, 1);
                 for (int scalar_view = 0; scalar_view < 3; ++scalar_view) {
                     add_persistent_field(*level.first, *level.second, 1, 0);
                 }
@@ -2375,30 +2847,80 @@ TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
             }
             EXPECT_EQ(state_and_transport_bytes, persistent_payload);
 
-            // Peak synchronization scratch: the one full coarse candidate,
-            // one fine mapped-H field, and the scalar support/coverage masks.
+            BoxArray coarse_on_fine_ba = fine_ba;
+            coarse_on_fine_ba.coarsen(ratio);
+            const auto fill_scratch_before = amrex::TotalBytesAllocatedInFabs();
+            std::uint64_t temporal_fill_stage_scratch_bytes = 0;
+            {
+                MultiFab fill_scratch(coarse_on_fine_ba, fine_dm,
+                                      2 * chunk_components + 2,
+                                      amrex::IntVect(2));
+                amrex::Gpu::streamSynchronize();
+                temporal_fill_stage_scratch_bytes =
+                    static_cast<std::uint64_t>(
+                        amrex::TotalBytesAllocatedInFabs() -
+                        fill_scratch_before);
+            }
+            const auto direct_stage_peak_bytes = direct_allocated +
+                state_and_transport_bytes + temporal_fill_stage_scratch_bytes;
+
+            // Keep the one private full-spectrum coarse candidate live while
+            // measuring the two mutually exclusive sync phases. Restriction
+            // uses only complete-group K-sized H/support chunks; reflux uses
+            // one K-sized correction. Neither phase allocates a second full
+            // fine-spectrum staging field.
             const auto sync_before = amrex::TotalBytesAllocatedInFabs();
-            MultiFab coarse_candidate(coarse_ba, coarse_dm, ncomp, 0);
-            MultiFab fine_mapped(fine_ba, fine_dm, ncomp, 0);
-            MultiFab fine_support(fine_ba, fine_dm, 1, 0);
-            MultiFab fine_coverage(fine_ba, fine_dm, 1, 0);
-            MultiFab coarse_support(coarse_ba, coarse_dm, 1, 0);
-            MultiFab coarse_coverage(coarse_ba, coarse_dm, 1, 0);
-            MultiFab lost_support(coarse_ba, coarse_dm, 1, 0);
-            MultiFab fine_invalid(fine_ba, fine_dm, 1, 0);
-            MultiFab coarse_invalid(coarse_ba, coarse_dm, 1, 0);
-            coarse_candidate.setVal(Real(0.0));
-            fine_mapped.setVal(Real(0.0));
-            fine_support.setVal(Real(0.0));
-            fine_coverage.setVal(Real(0.0));
-            coarse_support.setVal(Real(0.0));
-            coarse_coverage.setVal(Real(0.0));
-            lost_support.setVal(Real(0.0));
-            fine_invalid.setVal(Real(0.0));
-            coarse_invalid.setVal(Real(0.0));
-            amrex::Gpu::streamSynchronize();
-            const auto sync_scratch_bytes = static_cast<std::uint64_t>(
-                amrex::TotalBytesAllocatedInFabs() - sync_before);
+            std::uint64_t sync_scratch_bytes = 0;
+            {
+                MultiFab coarse_candidate(coarse_ba, coarse_dm, ncomp, 0);
+                coarse_candidate.setVal(Real(0.0));
+                std::uint64_t restriction_phase_bytes = 0;
+                {
+                    MultiFab fine_h_chunk(fine_ba, fine_dm,
+                                          chunk_components, 0);
+                    MultiFab fine_support_chunk(fine_ba, fine_dm,
+                                                chunk_components, 0);
+                    MultiFab coarse_h_chunk(coarse_ba, coarse_dm,
+                                            chunk_components, 0);
+                    MultiFab coarse_support_chunk(coarse_ba, coarse_dm,
+                                                 chunk_components, 0);
+                    MultiFab fine_coverage(fine_ba, fine_dm, 1, 0);
+                    MultiFab coarse_coverage(coarse_ba, coarse_dm, 1, 0);
+                    MultiFab lost_support(coarse_ba, coarse_dm, 1, 0);
+                    MultiFab fine_invalid(fine_ba, fine_dm, 1, 0);
+                    MultiFab coarse_invalid(coarse_ba, coarse_dm, 1, 0);
+                    fine_h_chunk.setVal(Real(0.0));
+                    fine_support_chunk.setVal(Real(0.0));
+                    coarse_h_chunk.setVal(Real(0.0));
+                    coarse_support_chunk.setVal(Real(0.0));
+                    fine_coverage.setVal(Real(0.0));
+                    coarse_coverage.setVal(Real(0.0));
+                    lost_support.setVal(Real(0.0));
+                    fine_invalid.setVal(Real(0.0));
+                    coarse_invalid.setVal(Real(0.0));
+                    amrex::Gpu::streamSynchronize();
+                    restriction_phase_bytes = static_cast<std::uint64_t>(
+                        amrex::TotalBytesAllocatedInFabs() - sync_before);
+                }
+
+                std::uint64_t reflux_phase_bytes = 0;
+                {
+                    MultiFab fine_coverage(fine_ba, fine_dm, 1, 0);
+                    MultiFab covered(coarse_ba, coarse_dm, 1, 1);
+                    MultiFab correction(coarse_ba, coarse_dm,
+                                        chunk_components, 0);
+                    MultiFab correction_invalid(coarse_ba, coarse_dm, 1, 0);
+                    fine_coverage.setVal(Real(1.0));
+                    covered.setVal(Real(0.0));
+                    correction.setVal(Real(0.0));
+                    correction_invalid.setVal(Real(0.0));
+                    amrex::Gpu::streamSynchronize();
+                    reflux_phase_bytes = static_cast<std::uint64_t>(
+                        amrex::TotalBytesAllocatedInFabs() - sync_before);
+                }
+                sync_scratch_bytes = std::max(restriction_phase_bytes,
+                                              reflux_phase_bytes);
+            }
 
             {
                 const auto ledger_before = amrex::TotalBytesAllocatedInFabs();
@@ -2436,12 +2958,17 @@ TEST(SBMAMRYA, ReportsDirectAndReferenceAllocationCensus)
                               << " YA_plus_face_chunks_bytes=" << direct_allocated
                               << " old_new_transport_and_ghost_bytes="
                               << state_and_transport_bytes
+                              << " temporal_fill_stage_scratch_bytes="
+                              << temporal_fill_stage_scratch_bytes
                               << " ghost_region_bytes=" << ghost_region_bytes
                               << " sync_candidate_peak_bytes=" << sync_scratch_bytes
                               << " direct_sync_peak_total_bytes=" << direct_peak_bytes
+                              << " direct_stage_peak_total_bytes="
+                              << direct_stage_peak_bytes
                               << " completed_integral_ledger_bytes=" << reference_extra
                               << " rate_chunk_components=" << chunk_components
-                              << " cell_ratio_components_assumed=1_minimum"
+                              << " cell_ratio_components="
+                              << cell_ratio_components
                               << std::endl;
                 }
                 amrex::ParallelDescriptor::Barrier();

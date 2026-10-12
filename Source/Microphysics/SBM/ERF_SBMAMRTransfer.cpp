@@ -29,6 +29,7 @@ void SBMTransferAllocationCensus::begin () noexcept
     baseline_bytes = static_cast<std::uint64_t>(amrex::TotalBytesAllocatedInFabs());
     peak_bytes = baseline_bytes;
     support_loss_collective_votes = 0;
+    processed_chunk_first_components.clear();
 }
 
 void SBMTransferAllocationCensus::sample () noexcept
@@ -582,6 +583,7 @@ static bool restrict_mapped_spectrum_impl (
     const bool candidate_is_private, const int max_groups_per_chunk,
     const bool reverse_chunk_order, const SBMStateAdmission* admission,
     SBMTransferAllocationCensus* allocation_census,
+    const std::optional<double> cross_level_dt_min,
     std::string& diagnostic)
 {
     diagnostic.clear();
@@ -595,8 +597,11 @@ static bool restrict_mapped_spectrum_impl (
         fine, layout, "fine", fine_structure_diagnostic);
     const bool coarse_structure_ok = validate_view_structure(
         coarse, layout, "coarse", coarse_structure_diagnostic);
-    const bool same_time = semantic_time_matches_exact(fine.spectrum_time,
-                                                        coarse.spectrum_time);
+    const bool same_time = cross_level_dt_min.has_value()
+        ? semantic_time_matches(fine.spectrum_time, coarse.spectrum_time,
+                                *cross_level_dt_min)
+        : semantic_time_matches_exact(fine.spectrum_time,
+                                      coarse.spectrum_time);
     // average_down requires complete fine children. Do not query coarsenability
     // until the ratio is positive and the fine spectrum pointer is valid.
     const bool fine_boxes_coarsenable =
@@ -732,7 +737,14 @@ static bool restrict_mapped_spectrum_impl (
     amrex::average_down(fine_coverage, coarse_coverage, 0, 1, ratio);
     amrex::Gpu::DeviceVector<int> device_components(
         static_cast<std::size_t>(max_chunk_components));
-    for (const auto& chunk : chunks) {
+    for (std::size_t pass = 0; pass < chunks.size(); ++pass) {
+        const std::size_t chunk_index = reverse_chunk_order
+            ? chunks.size() - 1U - pass : pass;
+        const auto& chunk = chunks[chunk_index];
+        if (allocation_census != nullptr && !chunk.components.empty()) {
+            allocation_census->processed_chunk_first_components.push_back(
+                chunk.components.front());
+        }
         const int chunk_components = static_cast<int>(chunk.components.size());
         amrex::Gpu::copy(amrex::Gpu::hostToDevice, chunk.components.begin(),
                          chunk.components.end(), device_components.begin());
@@ -812,13 +824,15 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
                              const int max_groups_per_chunk,
                              const bool reverse_chunk_order,
                              const SBMStateAdmission* admission,
-                             SBMTransferAllocationCensus* allocation_census)
+                             SBMTransferAllocationCensus* allocation_census,
+                             const std::optional<double> cross_level_dt_min)
 {
     return restrict_mapped_spectrum_impl(layout, fine, coarse, ratio,
                                          coarse_level, coarse_candidate, false,
                                          max_groups_per_chunk,
                                          reverse_chunk_order, admission,
                                          allocation_census,
+                                         cross_level_dt_min,
                                          diagnostic);
 }
 
@@ -832,13 +846,15 @@ bool RestrictMappedSpectrumPrivate (const SBMLayout& layout,
                                     const int max_groups_per_chunk,
                                     const bool reverse_chunk_order,
                                     const SBMStateAdmission* admission,
-                                    SBMTransferAllocationCensus* allocation_census)
+                                    SBMTransferAllocationCensus* allocation_census,
+                                    const std::optional<double> cross_level_dt_min)
 {
     return restrict_mapped_spectrum_impl(layout, fine, coarse, ratio,
                                          coarse_level, private_candidate, true,
                                          max_groups_per_chunk,
                                          reverse_chunk_order, admission,
                                          allocation_census,
+                                         cross_level_dt_min,
                                          diagnostic);
 }
 
@@ -1003,7 +1019,14 @@ static bool prolong_carrier_relative_spectrum_impl (
     amrex::Gpu::DeviceVector<int> device_components(
         static_cast<std::size_t>(max_chunk_components));
     amrex::PhysBCFunctNoOp no_physical_boundary;
-    for (const auto& chunk : chunks) {
+    for (std::size_t pass = 0; pass < chunks.size(); ++pass) {
+        const std::size_t chunk_index = reverse_chunk_order
+            ? chunks.size() - 1U - pass : pass;
+        const auto& chunk = chunks[chunk_index];
+        if (allocation_census != nullptr && !chunk.components.empty()) {
+            allocation_census->processed_chunk_first_components.push_back(
+                chunk.components.front());
+        }
         const int chunk_components = static_cast<int>(chunk.components.size());
         amrex::Gpu::copy(amrex::Gpu::hostToDevice, chunk.components.begin(),
                          chunk.components.end(), device_components.begin());

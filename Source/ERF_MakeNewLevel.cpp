@@ -145,6 +145,27 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba_in,
             sbm_state_manager->new_state_for_initialization(lev).setVal(
                 solverChoice.sbm_fixture_initial_state[static_cast<std::size_t>(comp)], comp, 1, 0);
         }
+#ifdef ERF_SBM_AMR_QUALIFICATION
+        if (lev == 0 && solverChoice.sbm_amr_qualification_test) {
+            // A canonical, component-wise common factor creates a sharp
+            // periodic translation profile while preserving each 2M bin's
+            // mass/number ratio and every attached-property support ratio.
+            // The jump is placed at the left edge of the fixed refined box.
+            auto& spectrum = sbm_state_manager->new_state_for_initialization(lev);
+            const int jump_x = geom[lev].Domain().smallEnd(0) +
+                               geom[lev].Domain().length(0) / 4;
+            const int ncomp = spectrum.nComp();
+            for (MFIter mfi(spectrum, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+                const Box bx = mfi.tilebox();
+                const auto values = spectrum.array(mfi);
+                ParallelFor(bx, ncomp,
+                    [=] AMREX_GPU_DEVICE(int i, int j, int k, int n) noexcept {
+                        const Real factor = i < jump_x ? Real(0.1) : Real(1.0);
+                        values(i, j, k, n) *= factor;
+                    });
+            }
+        }
+#endif
         AMREX_ALWAYS_ASSERT(sbm_transport != nullptr);
         sbm_transport->define(lev, ba, dm);
         bind_sbm_amr_flux_registers(lev);

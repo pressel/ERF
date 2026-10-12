@@ -7,6 +7,7 @@
 #include "AuxiliaryState/ERF_AuxiliaryStage.H"
 
 #include <AMReX_Geometry.H>
+#include <AMReX_IntVect.H>
 
 #include <memory>
 #include <string>
@@ -16,6 +17,28 @@ namespace erf_sbm {
 
 class SBMAMRFluxRegister;
 class SBMStateAdmission;
+
+/** Optional device-side probe used by the small-grid G1 ghost oracle. */
+struct SBMAMRStageGhostProbe {
+    amrex::IntVect fine_cell{0};
+    int global_component{0};
+    amrex::Real* sampled_intensive_device{nullptr};
+    int* hit_device{nullptr};
+};
+
+/** Coarse host density endpoints paired with the state-manager's coarse SBM
+ * endpoints during a fine-level stage. The caller supplies the actual ERF
+ * owner times and the fine physical-step bound used for endpoint roundoff.
+ */
+struct SBMAMRStageParent {
+    const amrex::MultiFab* conserved_old{nullptr};
+    const amrex::MultiFab* conserved_new{nullptr};
+    double old_time{0.0};
+    double new_time{0.0};
+    double fine_step_dt{0.0};
+    amrex::IntVect refinement_ratio{1};
+    SBMAMRStageGhostProbe* ghost_probe{nullptr};
+};
 
 /**
  * Bounded mapped advection for the authoritative SBM spectrum.
@@ -80,7 +103,8 @@ class SBMTransport
                                   const amrex::MultiFab& avg_zmom,
                                   const amrex::Geometry& geometry,
                                   int qc_component,
-                                  int qr_component);
+                                  int qr_component,
+                                  const SBMAMRStageParent* parent = nullptr);
 
     void advance_stage (int level,
                         erf_auxiliary::HostIntegrator method,
@@ -98,7 +122,8 @@ class SBMTransport
                         const amrex::MultiFab& avg_zmom,
                         const amrex::Geometry& geometry,
                         int qc_component,
-                        int qr_component);
+                        int qr_component,
+                        const SBMAMRStageParent* parent = nullptr);
 
     void destroy (int level);
     [[nodiscard]] int nlevels () const noexcept
@@ -111,6 +136,12 @@ class SBMTransport
     projected_ledger (int level) const;
     /** Full all-component accepted-integral reference, present only when enabled. */
     [[nodiscard]] const erf_auxiliary::CompletedStepFluxLedger& completed_spectral_ledger (int level) const;
+#ifdef ERF_SBM_AMR_QUALIFICATION
+    [[nodiscard]] int interval_limiter_active_groups () const noexcept
+    { return m_interval_limiter_active_groups; }
+    [[nodiscard]] bool interval_limiter_changed_rate () const noexcept
+    { return m_interval_limiter_changed_rate; }
+#endif
 
   private:
     struct LevelStorage;
@@ -123,10 +154,15 @@ class SBMTransport
     std::vector<AttachedPropertySupportDescriptor> m_property_support;
     std::vector<ConstraintClosureChunk> m_chunks;
     std::vector<int> m_max_constraints_per_group;
+    int m_max_chunk_components{0};
     std::vector<std::unique_ptr<LevelStorage>> m_levels;
     std::unique_ptr<DeviceMetadata> m_device_metadata;
     std::unique_ptr<SBMStateAdmission> m_admission;
     bool m_keep_spectral_ledger_reference{true};
+#ifdef ERF_SBM_AMR_QUALIFICATION
+    int m_interval_limiter_active_groups{0};
+    bool m_interval_limiter_changed_rate{false};
+#endif
 };
 
 } // namespace erf_sbm

@@ -54,6 +54,20 @@
                                          solverChoice.buildings_type == BuildingsType::ImmersedForcing) ?
             terrain_blanking_zface[level].get() : nullptr;
 
+        erf_sbm::SBMAMRStageParent sbm_parent_stage;
+        const erf_sbm::SBMAMRStageParent* sbm_parent_stage_ptr = nullptr;
+        if (sbm_state_manager != nullptr && level > 0) {
+            sbm_parent_stage.conserved_old =
+                &vars_old[level - 1][Vars::cons];
+            sbm_parent_stage.conserved_new =
+                &vars_new[level - 1][Vars::cons];
+            sbm_parent_stage.old_time = t_old[level - 1];
+            sbm_parent_stage.new_time = t_new[level - 1];
+            sbm_parent_stage.fine_step_dt = dt_advance;
+            sbm_parent_stage.refinement_ratio = refRatio(level - 1);
+            sbm_parent_stage_ptr = &sbm_parent_stage;
+        }
+
         erf_slow_rhs_post(level, finest_level, nrk,
                           old_step_time, old_stage_time, new_stage_time, slow_dt,
                           micro->Get_Qstate_Moist_Size(),
@@ -74,7 +88,8 @@
                           m_r2d, &base_state[level],
                           cloud_chamber_config.active ? &cloud_chamber_config : nullptr,
                           cloud_chamber_budget.get(), auxiliary_inert_tracer.get(),
-                          sbm_state_manager.get(), sbm_transport.get());
+                          sbm_state_manager.get(), sbm_transport.get(),
+                          sbm_parent_stage_ptr);
 
         // Implicit diffusion of moisture
         #include "ERF_ImplicitPost.H"

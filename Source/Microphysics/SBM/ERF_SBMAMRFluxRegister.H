@@ -9,6 +9,7 @@
 #include <AMReX_YAFluxRegister.H>
 
 #include <memory>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,13 @@ public:
 
     [[nodiscard]] bool ready_to_reflux () const noexcept;
     [[nodiscard]] bool has_outstanding_amount () const noexcept;
+    /** Actual smallest physical timestep represented by the active interval. */
+    [[nodiscard]] double minimum_fine_dt () const noexcept
+    { return m_min_fine_dt; }
+    [[nodiscard]] std::uint64_t reflux_call_count () const noexcept
+    { return m_reflux_call_count; }
+    [[nodiscard]] std::uint64_t reflux_sync_count () const noexcept
+    { return m_reflux_sync_count; }
     bool reflux (amrex::MultiFab& mapped_candidate,
                  std::string& diagnostic);
     /** Apply selected global components into matching local slots of a
@@ -114,6 +122,8 @@ private:
     double m_min_fine_dt{0.0};
     int m_expected_fine_steps{0};
     int m_accepted_fine_steps{0};
+    std::uint64_t m_reflux_call_count{0};
+    std::uint64_t m_reflux_sync_count{0};
     SideState m_coarse;
     SideState m_fine;
 };

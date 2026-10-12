@@ -1,4 +1,5 @@
 #include "ERF_SBMStateManager.H"
+#include "ERF_SBMAMRTime.H"
 #include "AuxiliaryState/ERF_AuxiliaryMappedTransport.H"
 
 #include <AMReX_MFIter.H>
@@ -130,7 +131,8 @@ amrex::MultiFab& SBMStateManager::new_target_storage (const int lev)
 }
 
 bool SBMStateManager::begin_step (const int lev, const double step_old_time,
-                                  std::string& diagnostic)
+                                  std::string& diagnostic,
+                                  const std::optional<double> dt_min)
 {
     diagnostic.clear();
     auto& state = level(lev);
@@ -150,7 +152,10 @@ bool SBMStateManager::begin_step (const int lev, const double step_old_time,
         diagnostic = "SBM begin-step has no accepted current/new spectrum";
         return false;
     }
-    if (state.new_time != step_old_time) {
+    const bool same_time = dt_min.has_value()
+        ? semantic_time_matches(state.new_time, step_old_time, *dt_min)
+        : semantic_time_matches_exact(state.new_time, step_old_time);
+    if (!same_time) {
         std::ostringstream message;
         message.precision(17);
         message << "SBM begin-step time mismatch at level " << lev

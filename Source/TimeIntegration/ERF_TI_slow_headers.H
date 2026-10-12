@@ -25,7 +25,11 @@
 class CloudChamberBudget;
 
 namespace erf_auxiliary { class AuxiliaryInertTracer; }
-namespace erf_sbm { class SBMStateManager; class SBMTransport; }
+namespace erf_sbm {
+class SBMStateManager;
+class SBMTransport;
+struct SBMAMRStageParent;
+}
 
 /**
  * @brief Driver for the SHOC physics model.
@@ -185,6 +189,7 @@ void erf_slow_rhs_post (int level, int finest_level, int nrk,
                        CloudChamberBudget* cloud_budget,
                        erf_auxiliary::AuxiliaryInertTracer* auxiliary_inert_tracer,
                        erf_sbm::SBMStateManager* sbm_state_manager,
-                       erf_sbm::SBMTransport* sbm_transport);
+                       erf_sbm::SBMTransport* sbm_transport,
+                       const erf_sbm::SBMAMRStageParent* sbm_parent_stage);
 
 #endif

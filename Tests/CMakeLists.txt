@@ -152,6 +152,67 @@ if(ERF_ENABLE_TESTS)
   endif()
 
   include(${CMAKE_CURRENT_SOURCE_DIR}/CTestList.cmake)
+
+  # Keep the end-to-end two-level SBM trajectory reachable only from the
+  # separately compiled qualification executable. The production executable
+  # does not register or enable this internal AMR route.
+  if(ERF_ENABLE_SBM_AMR_QUALIFICATION AND ERF_DIM STREQUAL "3" AND
+     ERF_PRECISION STREQUAL "DOUBLE" AND ERF_ENABLE_MPI)
+    resolve_test_exe("" "erf_exec" SBM_AMR_QUALIFICATION_EXECUTABLE)
+    set(_sbm_amr_qualification_script
+        "${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/RunAMRQualification.cmake")
+    set(_sbm_amr_qualification_root
+        "${CMAKE_CURRENT_BINARY_DIR}/test_files/SBM_AMR_Qualification")
+
+    add_test(NAME SBM_AMR_Qualification_1M
+      COMMAND ${CMAKE_COMMAND}
+        -DERF_EXECUTABLE=${SBM_AMR_QUALIFICATION_EXECUTABLE}
+        -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/inputs_amr_qualification_1m
+        -DTEST_ROOT=${_sbm_amr_qualification_root}/1m
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPI_RANKS=1
+        -DEXPECTED_COMPONENTS=4
+        -P ${_sbm_amr_qualification_script})
+    set_tests_properties(SBM_AMR_Qualification_1M PROPERTIES
+      LABELS "integration;sbm;sbm_amr_qualification"
+      RUN_SERIAL TRUE
+      TIMEOUT 300)
+
+    add_test(NAME SBM_AMR_Qualification_ZeroFlow_1M
+      COMMAND ${CMAKE_COMMAND}
+        -DERF_EXECUTABLE=${SBM_AMR_QUALIFICATION_EXECUTABLE}
+        -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/inputs_amr_qualification_1m
+        -DTEST_ROOT=${_sbm_amr_qualification_root}/zero_flow_1m
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPI_RANKS=1
+        -DEXPECTED_COMPONENTS=4
+        -DEXPECTED_STEPS=1
+        -DMAX_STEPS=1
+        -DZERO_FLOW=ON
+        -P ${_sbm_amr_qualification_script})
+    set_tests_properties(SBM_AMR_Qualification_ZeroFlow_1M PROPERTIES
+      LABELS "integration;sbm;sbm_amr_qualification"
+      RUN_SERIAL TRUE
+      TIMEOUT 300)
+
+    add_test(NAME SBM_AMR_Qualification_2M_Attached_MPI
+      COMMAND ${CMAKE_COMMAND}
+        -DERF_EXECUTABLE=${SBM_AMR_QUALIFICATION_EXECUTABLE}
+        -DINPUT_FILE=${PROJECT_SOURCE_DIR}/Tests/test_files/SBM/inputs_amr_qualification_2m_attached
+        -DTEST_ROOT=${_sbm_amr_qualification_root}/2m_attached
+        -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+        -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+        -DMPI_RANKS=2
+        -DEXPECTED_COMPONENTS=12
+        -P ${_sbm_amr_qualification_script})
+    set_tests_properties(SBM_AMR_Qualification_2M_Attached_MPI PROPERTIES
+      LABELS "integration;sbm;sbm_amr_qualification;parallel"
+      RUN_SERIAL TRUE
+      PROCESSORS 2
+      TIMEOUT 300)
+  endif()
 endif()
 
 if(ERF_ENABLE_UNIT_TESTS)

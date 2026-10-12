@@ -76,6 +76,8 @@ SBMAMRFluxRegister::clear ()
     m_min_fine_dt = 0.0;
     m_expected_fine_steps = 0;
     m_accepted_fine_steps = 0;
+    m_reflux_call_count = 0;
+    m_reflux_sync_count = 0;
     m_coarse = {};
     m_fine = {};
 }
@@ -137,6 +139,8 @@ SBMAMRFluxRegister::begin_interval (const double coarse_begin,
     m_expected_fine_steps = expected_fine_steps;
     m_min_fine_dt = (coarse_end - coarse_begin) /
                     static_cast<double>(expected_fine_steps);
+    m_reflux_call_count = 0;
+    m_reflux_sync_count = 0;
     m_accepted_fine_steps = 0;
     m_coarse_step_accepted = false;
     m_reflux_applied = false;
@@ -491,7 +495,9 @@ bool SBMAMRFluxRegister::reflux_components (
         const int count = static_cast<int>(end - first);
         m_register->Reflux(mapped_correction, source_component,
                            destination_component, count);
+        ++m_reflux_call_count;
         amrex::Gpu::streamSynchronize();
+        ++m_reflux_sync_count;
         for (std::size_t index = first; index < end; ++index) {
             m_reflux_components_seen[static_cast<std::size_t>(
                 global_components[index])] = 1;

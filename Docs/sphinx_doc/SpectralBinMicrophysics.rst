@@ -623,24 +623,49 @@ What is still needed for multilevel simulations
 -----------------------------------------------
 
 The present SBM runtime advects the liquid-water spectrum on one atmospheric
-grid level. The conservative grid-transfer operators described above have
-been tested separately, but they are not yet connected to ERF's complete
-adaptive-mesh lifecycle.
+grid level.
 
-A future multilevel simulation must interpolate coarse-grid spectral state
-and dry-air density to the same fine-grid time; reconcile the accepted
+Periodic AMR qualification status
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The production SBM runtime remains restricted to ``amr.max_level = 0``. An
+internal qualification configuration exercises a fixed, two-level,
+three-dimensional periodic mesh using ERF's coarse and fine timesteps and
+accepted spectral transport rates. Coarse old/new spectral concentrations
+and dry-air density are evaluated at the requested fine-stage time before
+forming the carrier-relative intensive state used to fill fine stencil
+halos. Coarse/fine reflux uses the accepted, time-integrated, fully
+bin-resolved transport, followed by mapped restriction, strict full-spectrum
+admissibility checks, and regeneration of compact ``qc``/``qr``.
+
+The qualification has exercised 1M and 2M layouts with attached properties,
+nonzero fine transport, active FCT limiting, two fine substeps per coarse
+step, and composite leaf-inventory checks. This is an internal fixed-grid
+qualification, not a supported multilevel user option. Dynamic regridding and
+derefinement, exact-schema hierarchy restart, nonperiodic spectral boundary
+lifecycle, and the final CPU/GPU/MPI conservation and memory gates remain to
+be completed. Passing this fixed-grid test does not authorize removal of the
+single-level runtime guard.
+
+The fixed-grid qualification covers only part of ERF's adaptive-mesh
+lifecycle. A production multilevel simulation must also preserve the full
+spectral state through grid remake, derefinement, restart, and physical
+boundary handling.
+
+A production multilevel simulation must interpolate coarse-grid spectral
+state and dry-air density to the same fine-grid time; reconcile accepted
 bin-resolved transport across coarse/fine interfaces by conservative flux
-correction (reflux); and verify that the synchronized droplet-mass,
-number, and attached-property inventories remain physically admissible.
-Grid creation, regridding, restart, and physical boundary conditions must
-also preserve the full spectral state, rather than reconstructing a size
-distribution from bulk cloud-water and rain-water mixing ratios.
+correction (reflux); and verify that synchronized droplet-mass, number, and
+attached-property inventories remain physically admissible. Grid creation,
+regridding, restart, and physical boundary conditions must preserve the full
+spectral state, rather than reconstructing a size distribution from bulk
+cloud-water and rain-water mixing ratios.
 
 A conservation budget for a refined simulation must count each atmospheric
 region only once, using fine-grid values where refinement is present and
-excluding the underlying coarse-grid cells. Multilevel spectral transport
-will remain unavailable until these coupled operations have been tested in
-ERF, including their failure behavior.
+excluding the underlying coarse-grid cells. Production multilevel spectral
+transport remains unavailable until these coupled operations and their
+failure behavior are fully qualified in ERF.
 
 Numerical reconstruction for resolved spectral advection
 --------------------------------------------------------

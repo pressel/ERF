@@ -8,6 +8,7 @@
 
 #include <string>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace erf_sbm {
@@ -22,6 +23,9 @@ struct SBMTransferAllocationCensus {
     std::uint64_t baseline_bytes{0};
     std::uint64_t peak_bytes{0};
     std::uint64_t support_loss_collective_votes{0};
+    // Optional test trace: first global component of each processed complete
+    // semantic chunk. Empty in production unless explicitly supplied by a test.
+    std::vector<int> processed_chunk_first_components;
     void begin () noexcept;
     void sample () noexcept;
     [[nodiscard]] std::uint64_t peak_extra_bytes () const noexcept
@@ -42,6 +46,9 @@ struct SBMAMRStateView {
 
 /**
  * Form an H-conservative coarse candidate from matching-time spectral views.
+ * Cross-level endpoint labels may use a timestep-bounded comparison when the
+ * caller supplies the interval's actual minimum physical timestep; each input
+ * tuple's spectrum/density/measure labels remain exactly identical.
  * On success, overwrite the destination's valid cells with the complete,
  * admitted result. On failure (including a rejection on another MPI rank),
  * leave every destination valid cell and all source views unchanged. This
@@ -57,7 +64,8 @@ bool RestrictMappedSpectrum (const SBMLayout& layout,
                              int max_groups_per_chunk = 16,
                              bool reverse_chunk_order = false,
                              const SBMStateAdmission* admission = nullptr,
-                             SBMTransferAllocationCensus* allocation_census = nullptr);
+                             SBMTransferAllocationCensus* allocation_census = nullptr,
+                             std::optional<double> cross_level_dt_min = std::nullopt);
 
 /**
  * Private-candidate variant for coarse synchronization. The caller supplies
@@ -74,7 +82,8 @@ bool RestrictMappedSpectrumPrivate (const SBMLayout& layout,
                                     int max_groups_per_chunk = 16,
                                     bool reverse_chunk_order = false,
                                     const SBMStateAdmission* admission = nullptr,
-                                    SBMTransferAllocationCensus* allocation_census = nullptr);
+                                    SBMTransferAllocationCensus* allocation_census = nullptr,
+                                    std::optional<double> cross_level_dt_min = std::nullopt);
 
 /**
  * Form a same-time piecewise-constant carrier-relative fine candidate. On
